@@ -74,6 +74,31 @@ public class Config {
         .comment("每个速度升级额外增加的每 tick 销毁数量。")
         .defineInRange("quantityKeeperDestroyRatePerSpeed", 16, 0, 1000000);
 
+    // ========== 高级远程多功能终端 ==========
+    private static final ModConfigSpec.IntValue ADVANCED_REMOTE_TERMINAL_ENERGY_CAPACITY = BUILDER
+        .comment("高级远程多功能终端的电量容量（FE）。")
+        .defineInRange("advancedRemoteTerminalEnergyCapacity", 10000000, 1000, Integer.MAX_VALUE);
+
+    private static final ModConfigSpec.BooleanValue ADVANCED_REMOTE_TERMINAL_GRID = BUILDER
+        .comment("启用高级远程多功能终端的合成终端界面。")
+        .define("advancedRemoteTerminalEnableGrid", true);
+
+    private static final ModConfigSpec.BooleanValue ADVANCED_REMOTE_TERMINAL_PATTERNS = BUILDER
+        .comment("启用高级远程多功能终端的样板终端界面。")
+        .define("advancedRemoteTerminalEnablePatterns", true);
+
+    private static final ModConfigSpec.BooleanValue ADVANCED_REMOTE_TERMINAL_MANAGER = BUILDER
+        .comment("启用高级远程多功能终端的自动合成仓管理器界面。")
+        .define("advancedRemoteTerminalEnableManager", true);
+
+    private static final ModConfigSpec.BooleanValue ADVANCED_REMOTE_TERMINAL_MONITOR = BUILDER
+        .comment("启用高级远程多功能终端的自动合成仓监视器界面。")
+        .define("advancedRemoteTerminalEnableMonitor", true);
+
+    private static final ModConfigSpec.BooleanValue ADVANCED_REMOTE_TERMINAL_SEQUENCE = BUILDER
+        .comment("启用高级远程多功能终端的序列装配样板终端界面。")
+        .define("advancedRemoteTerminalEnableSequence", true);
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean logDirtBlock;
@@ -92,6 +117,12 @@ public class Config {
     public static int quantityKeeperDefaultTarget;
     public static int quantityKeeperDestroyRate;
     public static int quantityKeeperDestroyRatePerSpeed;
+    public static int advancedRemoteTerminalEnergyCapacity;
+    public static boolean advancedRemoteTerminalEnableGrid;
+    public static boolean advancedRemoteTerminalEnablePatterns;
+    public static boolean advancedRemoteTerminalEnableManager;
+    public static boolean advancedRemoteTerminalEnableMonitor;
+    public static boolean advancedRemoteTerminalEnableSequence;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
@@ -116,6 +147,13 @@ public class Config {
         quantityKeeperDefaultTarget = QUANTITY_KEEPER_DEFAULT_TARGET.get();
         quantityKeeperDestroyRate = QUANTITY_KEEPER_DESTROY_RATE.get();
         quantityKeeperDestroyRatePerSpeed = QUANTITY_KEEPER_DESTROY_RATE_PER_SPEED.get();
+
+        advancedRemoteTerminalEnergyCapacity = ADVANCED_REMOTE_TERMINAL_ENERGY_CAPACITY.get();
+        advancedRemoteTerminalEnableGrid = ADVANCED_REMOTE_TERMINAL_GRID.get();
+        advancedRemoteTerminalEnablePatterns = ADVANCED_REMOTE_TERMINAL_PATTERNS.get();
+        advancedRemoteTerminalEnableManager = ADVANCED_REMOTE_TERMINAL_MANAGER.get();
+        advancedRemoteTerminalEnableMonitor = ADVANCED_REMOTE_TERMINAL_MONITOR.get();
+        advancedRemoteTerminalEnableSequence = ADVANCED_REMOTE_TERMINAL_SEQUENCE.get();
 
         // convert the list of strings into a set of items
         items = ITEM_STRINGS.get().stream().map(itemName -> BuiltInRegistries.ITEM.get(ResourceLocation.parse(itemName))).collect(Collectors.toSet());

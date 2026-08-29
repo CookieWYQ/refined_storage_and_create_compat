@@ -10,7 +10,9 @@ import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedSchematicLoaderBlo
 import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
+import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
+import cretae.cookiewyq.rs_create_compat.menu.AdvancedRemoteTerminalMenu;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
@@ -66,6 +68,14 @@ public class RS_Create_Compat {
     // 通用储存磁盘：可同时存入物品、流体、气体任意类型
     public static final DeferredItem<UniversalStorageDiskItem> UNIVERSAL_STORAGE_DISK =
         ITEMS.register("universal_storage_disk", UniversalStorageDiskItem::new);
+
+    // 高级远程多功能终端：带能量，可切换多种界面
+    public static final DeferredItem<AdvancedRemoteTerminalItem> ADVANCED_REMOTE_TERMINAL =
+        ITEMS.register("advanced_remote_terminal", AdvancedRemoteTerminalItem::new);
+    public static final DeferredHolder<MenuType<?>, MenuType<AdvancedRemoteTerminalMenu>> ADVANCED_REMOTE_TERMINAL_MENU =
+        MENUS.register("advanced_remote_terminal",
+            () -> new MenuType<>((id, inventory) -> new AdvancedRemoteTerminalMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
 
     // ========== 方块 ==========
     // 范围充电器
@@ -136,6 +146,7 @@ public class RS_Create_Compat {
             .icon(() -> new ItemStack(UNIVERSAL_STORAGE_DISK.get()))
             .displayItems((parameters, output) -> {
                 output.accept(UNIVERSAL_STORAGE_DISK.get());
+                output.accept(ADVANCED_REMOTE_TERMINAL.get());
                 output.accept(RANGE_CHARGER_ITEM.get());
                 output.accept(QUANTITY_KEEPER_ITEM.get());
                 output.accept(SCHEMATIC_LOADER_ITEM.get());

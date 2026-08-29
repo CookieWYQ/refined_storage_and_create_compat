@@ -33,5 +33,20 @@
   "container.rs_create_compat.advanced_schematic_loader": "Advanced Schematic Cannon Loader",
   "gui.rs_create_compat.advanced_schematic_loader.queue": "Blueprint queue",
   "gui.rs_create_compat.advanced_schematic_loader.storage": "Storage",
-  "gui.rs_create_compat.advanced_schematic_loader.start": "Start/Stop"
+  "gui.rs_create_compat.advanced_schematic_loader.start": "Start/Stop",
+  "item.rs_create_compat.advanced_remote_terminal": "Advanced Remote Terminal",
+  "item.rs_create_compat.advanced_remote_terminal.no_energy": "Not enough energy!",
+  "item.rs_create_compat.advanced_remote_terminal.not_bound": "Not bound to a network! Right-click an RS network block to bind.",
+  "container.rs_create_compat.advanced_remote_terminal": "Advanced Remote Terminal",
+  "gui.rs_create_compat.advanced_remote_terminal.energy": "Energy: %s / %s FE",
+  "gui.rs_create_compat.advanced_remote_terminal.online": "Network: %s",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.grid": "Crafting Grid",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.patterns": "Pattern Grid",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.manager": "Autocrafter Manager",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.monitor": "Autocrafting Monitor",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.sequence": "Sequence Assembly",
+  "gui.rs_create_compat.advanced_remote_terminal.grid.stored": "Stored in network: %s units",
+  "gui.rs_create_compat.advanced_remote_terminal.patterns.count": "Patterns: %s",
+  "gui.rs_create_compat.advanced_remote_terminal.tasks.count": "Autocrafting tasks: %s",
+  "gui.rs_create_compat.advanced_remote_terminal.sequence.pending": "Sequence terminal is under development"
 }

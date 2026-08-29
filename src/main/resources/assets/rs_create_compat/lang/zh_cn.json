@@ -33,5 +33,20 @@
   "container.rs_create_compat.advanced_schematic_loader": "高级蓝图加农炮装填器",
   "gui.rs_create_compat.advanced_schematic_loader.queue": "蓝图队列",
   "gui.rs_create_compat.advanced_schematic_loader.storage": "资源存储",
-  "gui.rs_create_compat.advanced_schematic_loader.start": "开始/停止"
+  "gui.rs_create_compat.advanced_schematic_loader.start": "开始/停止",
+  "item.rs_create_compat.advanced_remote_terminal": "高级远程多功能终端",
+  "item.rs_create_compat.advanced_remote_terminal.no_energy": "能量不足！",
+  "item.rs_create_compat.advanced_remote_terminal.not_bound": "未绑定网络！请对准 RS 网络方块右键绑定。",
+  "container.rs_create_compat.advanced_remote_terminal": "高级远程多功能终端",
+  "gui.rs_create_compat.advanced_remote_terminal.energy": "电量：%s / %s FE",
+  "gui.rs_create_compat.advanced_remote_terminal.online": "网络：%s",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.grid": "合成终端",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.patterns": "样板终端",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.manager": "合成仓管理",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.monitor": "合成仓监视",
+  "gui.rs_create_compat.advanced_remote_terminal.mode.sequence": "序列装配",
+  "gui.rs_create_compat.advanced_remote_terminal.grid.stored": "网络已存储：%s 单位",
+  "gui.rs_create_compat.advanced_remote_terminal.patterns.count": "样板数量：%s",
+  "gui.rs_create_compat.advanced_remote_terminal.tasks.count": "自动合成任务：%s",
+  "gui.rs_create_compat.advanced_remote_terminal.sequence.pending": "序列装配终端功能开发中"
 }
