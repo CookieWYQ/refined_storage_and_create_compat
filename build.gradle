@@ -26,6 +26,11 @@ base {
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+// 统一 UTF-8 编译与资源处理，避免 Windows 平台默认 GBK 导致中文源码报错
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
 neoForge {
     // Specify the version of NeoForge to use.
     version = project.neo_version
@@ -117,6 +122,9 @@ dependencies {
     // JEI（开发环境与运行时，可选）
     compileOnly("mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}")
     runtimeOnly("mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}")
+
+    // RS 的 API 类标注使用 apiguardian 注解，编译期需要该库
+    compileOnly("org.apiguardian:apiguardian-api:1.1.2")
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

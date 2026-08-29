@@ -69,7 +69,8 @@ public class RS_Create_Compat {
         BLOCK_ENTITIES.register("range_charger",
             () -> BlockEntityType.Builder.of(RangeChargerBlockEntity::new, RANGE_CHARGER_BLOCK.get()).build(null));
     public static final DeferredHolder<MenuType<?>, MenuType<RangeChargerMenu>> RANGE_CHARGER_MENU =
-        MENUS.register("range_charger", () -> new MenuType<>(RangeChargerMenu::new));
+        MENUS.register("range_charger",
+            () -> new MenuType<>((id, inventory) -> new RangeChargerMenu(id, inventory)));
 
     // 创造模式标签页
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
