@@ -16,5 +16,15 @@
   "gui.rs_create_compat.quantity_keeper.target": "Target amount: %s",
   "gui.rs_create_compat.quantity_keeper.speed": "Speed upgrades x%s",
   "gui.rs_create_compat.quantity_keeper.autocrafting": "Autocrafting: %s",
-  "gui.rs_create_compat.quantity_keeper.destroy": "Destroy overflow"
+  "gui.rs_create_compat.quantity_keeper.destroy": "Destroy overflow",
+  "block.rs_create_compat.schematic_loader": "Schematic Cannon Loader",
+  "block.rs_create_compat.schematic_loader.tooltip.1": "Place next to a Create Schematicannon. Automatically supplies its required resources from the RS network.",
+  "block.rs_create_compat.schematic_loader.tooltip.2": "Multiple loaders connected to each other share supply without duplicates.",
+  "container.rs_create_compat.schematic_loader": "Schematic Cannon Loader",
+  "gui.rs_create_compat.schematic_loader.blueprint": "Blueprint",
+  "gui.rs_create_compat.schematic_loader.upgrades": "Upgrades",
+  "gui.rs_create_compat.schematic_loader.print": "Print",
+  "gui.rs_create_compat.schematic_loader.deploy": "Deploy",
+  "gui.rs_create_compat.schematic_loader.recycle": "Recycle",
+  "gui.rs_create_compat.schematic_loader.gunpowder": "Gunpowder"
 }

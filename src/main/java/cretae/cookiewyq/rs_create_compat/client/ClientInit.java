@@ -4,6 +4,7 @@ import com.refinedmods.refinedstorage.common.api.RefinedStorageClientApi;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.screen.QuantityKeeperScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.RangeChargerScreen;
+import cretae.cookiewyq.rs_create_compat.client.screen.SchematicLoaderScreen;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -30,6 +31,7 @@ public class ClientInit {
     public static void onRegisterMenuScreens(final RegisterMenuScreensEvent event) {
         event.register(RS_Create_Compat.RANGE_CHARGER_MENU.get(), RangeChargerScreen::new);
         event.register(RS_Create_Compat.QUANTITY_KEEPER_MENU.get(), QuantityKeeperScreen::new);
+        event.register(RS_Create_Compat.SCHEMATIC_LOADER_MENU.get(), SchematicLoaderScreen::new);
     }
 
     private ClientInit() {

@@ -1,0 +1,22 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " P ",
+    " H ",
+    " C "
+  ],
+  "key": {
+    "P": {
+      "item": "refinedstorage:basic_processor"
+    },
+    "H": {
+      "item": "minecraft:hopper"
+    },
+    "C": {
+      "item": "minecraft:chest"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:schematic_loader"
+  }
+}

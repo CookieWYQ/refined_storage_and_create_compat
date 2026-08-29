@@ -4,11 +4,14 @@ import com.mojang.logging.LogUtils;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import cretae.cookiewyq.rs_create_compat.block.QuantityKeeperBlock;
 import cretae.cookiewyq.rs_create_compat.block.RangeChargerBlock;
+import cretae.cookiewyq.rs_create_compat.block.SchematicLoaderBlock;
 import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
+import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
 import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
+import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -92,6 +95,21 @@ public class RS_Create_Compat {
             () -> new MenuType<>((id, inventory) -> new QuantityKeeperMenu(id, inventory),
                 FeatureFlags.DEFAULT_FLAGS));
 
+    // 蓝图加农炮装填器（基础版）
+    public static final DeferredBlock<SchematicLoaderBlock> SCHEMATIC_LOADER_BLOCK =
+        BLOCKS.register("schematic_loader", () -> new SchematicLoaderBlock(
+            BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
+        ));
+    public static final DeferredItem<BlockItem> SCHEMATIC_LOADER_ITEM =
+        ITEMS.registerSimpleBlockItem("schematic_loader", SCHEMATIC_LOADER_BLOCK);
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<SchematicLoaderBlockEntity>> SCHEMATIC_LOADER_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("schematic_loader",
+            () -> BlockEntityType.Builder.of(SchematicLoaderBlockEntity::new, SCHEMATIC_LOADER_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<SchematicLoaderMenu>> SCHEMATIC_LOADER_MENU =
+        MENUS.register("schematic_loader",
+            () -> new MenuType<>((id, inventory) -> new SchematicLoaderMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
     // 创造模式标签页
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
         CREATIVE_MODE_TABS.register("rs_create_compat", () -> CreativeModeTab.builder()
@@ -101,6 +119,7 @@ public class RS_Create_Compat {
                 output.accept(UNIVERSAL_STORAGE_DISK.get());
                 output.accept(RANGE_CHARGER_ITEM.get());
                 output.accept(QUANTITY_KEEPER_ITEM.get());
+                output.accept(SCHEMATIC_LOADER_ITEM.get());
             })
             .build());
 
@@ -117,9 +136,10 @@ public class RS_Create_Compat {
         MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
-        // 注册方块能力（能量输出 / 网络节点容器）
+        // 注册方块能力（能量输出 / 物品处理器 / 网络节点容器）
         modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
         modEventBus.addListener(QuantityKeeperBlockEntity::registerCapabilities);
+        modEventBus.addListener(SchematicLoaderBlockEntity::registerCapabilities);
 
         // 配置加载
         modEventBus.addListener(Config::onLoad);

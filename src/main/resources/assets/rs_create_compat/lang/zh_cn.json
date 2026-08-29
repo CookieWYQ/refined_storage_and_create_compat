@@ -16,5 +16,15 @@
   "gui.rs_create_compat.quantity_keeper.target": "目标数量：%s",
   "gui.rs_create_compat.quantity_keeper.speed": "速度升级 ×%s",
   "gui.rs_create_compat.quantity_keeper.autocrafting": "自动合成：%s",
-  "gui.rs_create_compat.quantity_keeper.destroy": "销毁过量"
+  "gui.rs_create_compat.quantity_keeper.destroy": "销毁过量",
+  "block.rs_create_compat.schematic_loader": "蓝图加农炮装填器",
+  "block.rs_create_compat.schematic_loader.tooltip.1": "紧贴 Create 蓝图加农炮放置，自动从 RS 网络补充其所需资源",
+  "block.rs_create_compat.schematic_loader.tooltip.2": "多个装填器紧贴连接可协同供物，不会重复获取",
+  "container.rs_create_compat.schematic_loader": "蓝图加农炮装填器",
+  "gui.rs_create_compat.schematic_loader.blueprint": "蓝图",
+  "gui.rs_create_compat.schematic_loader.upgrades": "插件",
+  "gui.rs_create_compat.schematic_loader.print": "打印",
+  "gui.rs_create_compat.schematic_loader.deploy": "部署",
+  "gui.rs_create_compat.schematic_loader.recycle": "回收",
+  "gui.rs_create_compat.schematic_loader.gunpowder": "火药"
 }
