@@ -11,6 +11,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
@@ -70,7 +71,8 @@ public class RS_Create_Compat {
             () -> BlockEntityType.Builder.of(RangeChargerBlockEntity::new, RANGE_CHARGER_BLOCK.get()).build(null));
     public static final DeferredHolder<MenuType<?>, MenuType<RangeChargerMenu>> RANGE_CHARGER_MENU =
         MENUS.register("range_charger",
-            () -> new MenuType<>((id, inventory) -> new RangeChargerMenu(id, inventory)));
+            () -> new MenuType<>((id, inventory) -> new RangeChargerMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
 
     // 创造模式标签页
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
@@ -98,6 +100,9 @@ public class RS_Create_Compat {
 
         // 注册方块能力（能量输出）
         modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
+
+        // 配置加载
+        modEventBus.addListener(Config::onLoad);
 
         // Register ourselves for server and other game events we are interested in.
         NeoForge.EVENT_BUS.register(this);
