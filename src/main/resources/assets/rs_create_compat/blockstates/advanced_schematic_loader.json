@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "rs_create_compat:block/advanced_schematic_loader"
+    }
+  }
+}

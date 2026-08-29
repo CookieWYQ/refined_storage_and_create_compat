@@ -2,6 +2,7 @@ package cretae.cookiewyq.rs_create_compat.client;
 
 import com.refinedmods.refinedstorage.common.api.RefinedStorageClientApi;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.client.screen.AdvancedSchematicLoaderScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.QuantityKeeperScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.RangeChargerScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.SchematicLoaderScreen;
@@ -32,6 +33,7 @@ public class ClientInit {
         event.register(RS_Create_Compat.RANGE_CHARGER_MENU.get(), RangeChargerScreen::new);
         event.register(RS_Create_Compat.QUANTITY_KEEPER_MENU.get(), QuantityKeeperScreen::new);
         event.register(RS_Create_Compat.SCHEMATIC_LOADER_MENU.get(), SchematicLoaderScreen::new);
+        event.register(RS_Create_Compat.ADVANCED_SCHEMATIC_LOADER_MENU.get(), AdvancedSchematicLoaderScreen::new);
     }
 
     private ClientInit() {

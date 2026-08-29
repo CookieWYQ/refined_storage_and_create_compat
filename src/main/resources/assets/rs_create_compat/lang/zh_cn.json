@@ -26,5 +26,12 @@
   "gui.rs_create_compat.schematic_loader.print": "打印",
   "gui.rs_create_compat.schematic_loader.deploy": "部署",
   "gui.rs_create_compat.schematic_loader.recycle": "回收",
-  "gui.rs_create_compat.schematic_loader.gunpowder": "火药"
+  "gui.rs_create_compat.schematic_loader.gunpowder": "火药",
+  "block.rs_create_compat.advanced_schematic_loader": "高级蓝图加农炮装填器",
+  "block.rs_create_compat.advanced_schematic_loader.tooltip.1": "容量 108 格，内置蓝图队列，按顺序自动打印全部蓝图",
+  "block.rs_create_compat.advanced_schematic_loader.tooltip.2": "流程：自动触发加农炮→获取资源→打印→回收空白蓝图→下一张",
+  "container.rs_create_compat.advanced_schematic_loader": "高级蓝图加农炮装填器",
+  "gui.rs_create_compat.advanced_schematic_loader.queue": "蓝图队列",
+  "gui.rs_create_compat.advanced_schematic_loader.storage": "资源存储",
+  "gui.rs_create_compat.advanced_schematic_loader.start": "开始/停止"
 }

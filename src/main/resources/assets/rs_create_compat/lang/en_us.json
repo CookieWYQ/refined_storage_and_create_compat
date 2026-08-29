@@ -26,5 +26,12 @@
   "gui.rs_create_compat.schematic_loader.print": "Print",
   "gui.rs_create_compat.schematic_loader.deploy": "Deploy",
   "gui.rs_create_compat.schematic_loader.recycle": "Recycle",
-  "gui.rs_create_compat.schematic_loader.gunpowder": "Gunpowder"
+  "gui.rs_create_compat.schematic_loader.gunpowder": "Gunpowder",
+  "block.rs_create_compat.advanced_schematic_loader": "Advanced Schematic Cannon Loader",
+  "block.rs_create_compat.advanced_schematic_loader.tooltip.1": "108-slot storage with a blueprint queue. Prints all queued blueprints in order.",
+  "block.rs_create_compat.advanced_schematic_loader.tooltip.2": "Flow: trigger cannon -> gather resources -> print -> recycle blueprint -> next.",
+  "container.rs_create_compat.advanced_schematic_loader": "Advanced Schematic Cannon Loader",
+  "gui.rs_create_compat.advanced_schematic_loader.queue": "Blueprint queue",
+  "gui.rs_create_compat.advanced_schematic_loader.storage": "Storage",
+  "gui.rs_create_compat.advanced_schematic_loader.start": "Start/Stop"
 }
