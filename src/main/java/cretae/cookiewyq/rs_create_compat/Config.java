@@ -27,12 +27,23 @@ public class Config {
     // a list of strings that are treated as resource locations for items
     private static final ModConfigSpec.ConfigValue<List<? extends String>> ITEM_STRINGS = BUILDER.comment("A list of items to log on common setup.").defineListAllowEmpty("items", List.of("minecraft:iron_ingot"), Config::validateItemName);
 
+    // ========== 通用储存磁盘 ==========
+    private static final ModConfigSpec.IntValue UNIVERSAL_DISK_BASE_CAPACITY = BUILDER
+        .comment("通用储存磁盘的基础容量（以物品位为单位）。换算：1 个物品 = 1 物品位，1 桶（1000 mB）流体/气体 = 1 物品位。")
+        .defineInRange("universalDiskBaseCapacity", 1024, 1, Integer.MAX_VALUE);
+
+    private static final ModConfigSpec.BooleanValue UNIVERSAL_DISK_ALLOW_MIXED_TYPES = BUILDER
+        .comment("是否允许通用储存磁盘同时混存不同类型（物品/流体/气体）。关闭后每个磁盘只能存放一种类型。")
+        .define("universalDiskAllowMixedTypes", true);
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean logDirtBlock;
     public static int magicNumber;
     public static String magicNumberIntroduction;
     public static Set<Item> items;
+    public static int universalDiskBaseCapacity;
+    public static boolean universalDiskAllowMixedTypes;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
@@ -43,6 +54,9 @@ public class Config {
         logDirtBlock = LOG_DIRT_BLOCK.get();
         magicNumber = MAGIC_NUMBER.get();
         magicNumberIntroduction = MAGIC_NUMBER_INTRODUCTION.get();
+
+        universalDiskBaseCapacity = UNIVERSAL_DISK_BASE_CAPACITY.get();
+        universalDiskAllowMixedTypes = UNIVERSAL_DISK_ALLOW_MIXED_TYPES.get();
 
         // convert the list of strings into a set of items
         items = ITEM_STRINGS.get().stream().map(itemName -> BuiltInRegistries.ITEM.get(ResourceLocation.parse(itemName))).collect(Collectors.toSet());
