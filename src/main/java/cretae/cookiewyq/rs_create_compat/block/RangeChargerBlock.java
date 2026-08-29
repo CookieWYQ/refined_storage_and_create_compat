@@ -8,6 +8,9 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
@@ -17,11 +20,17 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
+import com.refinedmods.refinedstorage.common.support.network.NetworkNodeBlockEntityTicker;
+
+import java.util.List;
 
 /**
- * 范围充电器方块：右键打开 GUI 调整充电范围。
+ * 范围充电器方块：接入 RS 网络供能，右键打开 GUI 调整充电范围。
  */
 public class RangeChargerBlock extends Block implements EntityBlock {
+    private static final BlockEntityTicker<RangeChargerBlockEntity> TICKER =
+        new NetworkNodeBlockEntityTicker<>(() -> RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get());
+
     public RangeChargerBlock(final Properties properties) {
         super(properties);
     }
@@ -40,11 +49,7 @@ public class RangeChargerBlock extends Block implements EntityBlock {
         if (level.isClientSide()) {
             return null;
         }
-        return (entityLevel, pos, blockState, blockEntity) -> {
-            if (blockEntity instanceof RangeChargerBlockEntity charger) {
-                RangeChargerBlockEntity.serverTick(entityLevel, pos, blockState, charger);
-            }
-        };
+        return (BlockEntityTicker<T>) TICKER;
     }
 
     @Override
@@ -74,5 +79,14 @@ public class RangeChargerBlock extends Block implements EntityBlock {
             ),
             Component.translatable("block.rs_create_compat.range_charger")
         );
+    }
+
+    @Override
+    public void appendHoverText(final ItemStack stack,
+                                final Item.TooltipContext context,
+                                final List<Component> tooltip,
+                                final TooltipFlag flag) {
+        tooltip.add(Component.translatable("block.rs_create_compat.range_charger.tooltip.1"));
+        tooltip.add(Component.translatable("block.rs_create_compat.range_charger.tooltip.2"));
     }
 }

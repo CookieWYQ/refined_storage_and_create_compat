@@ -2,6 +2,7 @@ package cretae.cookiewyq.rs_create_compat.block.entity;
 
 import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.network.RangeChargerNetworkNode;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -14,16 +15,19 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.energy.EnergyStorage;
 import net.neoforged.neoforge.energy.IEnergyStorage;
+import com.refinedmods.refinedstorage.neoforge.api.RefinedStorageNeoForgeApi;
+import com.refinedmods.refinedstorage.common.support.network.AbstractBaseNetworkNodeContainerBlockEntity;
 
 import java.util.List;
 
 /**
- * 范围充电器：为周围指定范围内的可充电方块与掉落物物品充电。
+ * 范围充电器：接入 RS 网络（能量线缆/控制器供能），
+ * 为周围指定范围内的可充电方块与掉落物物品充电。
  * <p>
  * 范围在 GUI 中调整（三轴独立，默认 50×50×50，最小 1、最大 100）。
  * 为控制性能，范围方块按"分片"逐步扫描，每 tick 只检查一部分。
  */
-public class RangeChargerBlockEntity extends BlockEntity {
+public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlockEntity<RangeChargerNetworkNode> {
     /** 每 tick 最多检查的方块数量（分片大小）。 */
     private static final int SCAN_SLICE_SIZE = 512;
 
@@ -35,7 +39,8 @@ public class RangeChargerBlockEntity extends BlockEntity {
     private int scanOffset;
 
     public RangeChargerBlockEntity(final BlockPos pos, final BlockState state) {
-        super(RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(), pos, state);
+        super(RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(), pos, state, new RangeChargerNetworkNode());
+        this.mainNetworkNode.setBlockEntity(this);
         this.energyStorage = new EnergyStorage(
             Config.rangeChargerEnergyCapacity,
             Config.rangeChargerMaxTransfer
@@ -102,23 +107,31 @@ public class RangeChargerBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    public static void serverTick(final Level level,
-                                  final BlockPos pos,
-                                  final BlockState state,
-                                  final RangeChargerBlockEntity blockEntity) {
-        blockEntity.tick(level);
+    /** 范围充电器不使用红石模式。 */
+    @Override
+    protected boolean hasRedstoneMode() {
+        return false;
     }
 
-    private void tick(final Level level) {
+    /**
+     * 由网络节点 ticker 每 tick 调用：先抽取网络能量，再执行充电扫描。
+     */
+    @Override
+    public void doWork() {
+        super.doWork(); // 节点 doWork：从 RS 网络抽取能量到缓存
+        if (level != null && !level.isClientSide()) {
+            doCharging(level);
+        }
+    }
+
+    private void doCharging(final Level level) {
         if (energyStorage.getEnergyStored() <= 0) {
             return;
         }
         // 待机扫描耗电：随范围增大而较快上升（默认 50^3 时约 25 FE/tick）
         final long volume = (long) (rangeX + 1) * (rangeY + 1) * (rangeZ + 1);
         final int scanCost = (int) Math.min(1000, volume / 5000);
-        final int energyBefore = energyStorage.getEnergyStored();
-        // 扫描耗电（若本次缓存充足则扣除）
-        if (energyBefore <= scanCost) {
+        if (energyStorage.getEnergyStored() <= scanCost) {
             return;
         }
         energyStorage.extractEnergy(scanCost, false);
@@ -240,12 +253,18 @@ public class RangeChargerBlockEntity extends BlockEntity {
         energyStorage.receiveEnergy(tag.getInt("Energy"), false);
     }
 
-    /** 向 NeoForge 注册能量 capability（MOD 总线事件）。 */
+    /** 向 NeoForge 注册能量与网络节点容器能力（MOD 总线事件）。 */
     public static void registerCapabilities(final RegisterCapabilitiesEvent event) {
         event.registerBlockEntity(
             Capabilities.EnergyStorage.BLOCK,
             RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(),
             (blockEntity, direction) -> blockEntity.getEnergyStorage()
+        );
+        // 注册为 RS 网络节点容器，使 RS 线缆/控制器可以连接并为节点供能
+        event.registerBlockEntity(
+            RefinedStorageNeoForgeApi.INSTANCE.getNetworkNodeContainerProviderCapability(),
+            RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(),
+            (blockEntity, direction) -> blockEntity.getContainerProvider()
         );
     }
 }

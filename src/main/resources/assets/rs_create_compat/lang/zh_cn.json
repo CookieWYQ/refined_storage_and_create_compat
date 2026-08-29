@@ -3,5 +3,8 @@
   "item.rs_create_compat.universal_storage_disk": "通用储存磁盘",
   "item.rs_create_compat.universal_storage_disk.help": "可同时存入物品、流体与气体的通用储存磁盘。",
   "block.rs_create_compat.range_charger": "范围充电器",
-  "container.rs_create_compat.range_charger": "范围充电器"
+  "block.rs_create_compat.range_charger.tooltip.1": "接入 RS 网络或 FE 能量，为范围内方块/掉落物物品充电",
+  "block.rs_create_compat.range_charger.tooltip.2": "右键打开界面调整充电范围（默认 50×50×50）",
+  "container.rs_create_compat.range_charger": "范围充电器",
+  "gui.rs_create_compat.range_charger.hint": "为范围内方块/物品充电"
 }

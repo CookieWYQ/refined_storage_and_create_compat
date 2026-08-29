@@ -3,5 +3,8 @@
   "item.rs_create_compat.universal_storage_disk": "Universal Storage Disk",
   "item.rs_create_compat.universal_storage_disk.help": "A universal storage disk that can store items, fluids and gases at the same time.",
   "block.rs_create_compat.range_charger": "Range Charger",
-  "container.rs_create_compat.range_charger": "Range Charger"
+  "block.rs_create_compat.range_charger.tooltip.1": "Powered by the RS network or any FE source. Charges blocks and dropped items in range.",
+  "block.rs_create_compat.range_charger.tooltip.2": "Right-click to open the GUI and adjust the range (default 50x50x50).",
+  "container.rs_create_compat.range_charger": "Range Charger",
+  "gui.rs_create_compat.range_charger.hint": "Charges blocks/items in range"
 }

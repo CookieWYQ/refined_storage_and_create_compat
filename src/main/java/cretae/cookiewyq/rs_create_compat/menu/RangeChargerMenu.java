@@ -7,17 +7,15 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
-import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 范围充电器菜单：通过 ContainerData 同步范围与能量，按钮消息走原版 clickMenuButton。
+ * 范围充电器菜单：无物品槽（不显示玩家背包），通过 ContainerData 同步范围与能量，
+ * 按钮消息走原版 clickMenuButton。
  */
 public class RangeChargerMenu extends AbstractContainerMenu {
     /** 按钮 id：0/1 = X 减/增，2/3 = Y 减/增，4/5 = Z 减/增。 */
-    private static final int SLOT_COUNT_PLAYER = 36;
-
     private final RangeChargerBlockEntity charger;
     private final ContainerData data;
 
@@ -31,17 +29,7 @@ public class RangeChargerMenu extends AbstractContainerMenu {
         this.charger = charger;
         this.data = charger != null ? charger.getContainerData() : new SimpleContainerData(5);
         addDataSlots(data);
-
-        // 玩家主物品栏（3 行 9 列）
-        for (int row = 0; row < 3; row++) {
-            for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 8 + col * 18, 84 + row * 18));
-            }
-        }
-        // 快捷栏
-        for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 8 + col * 18, 142));
-        }
+        // 范围充电器不需要存放任何物品，因此不添加玩家背包槽位
     }
 
     public static RangeChargerMenu create(final int id, final Inventory inventory, final RangeChargerBlockEntity charger) {
@@ -92,7 +80,8 @@ public class RangeChargerMenu extends AbstractContainerMenu {
 
     @Override
     public boolean stillValid(final Player player) {
-        return charger.getLevel().getBlockEntity(charger.getBlockPos()) == charger
+        return charger != null
+            && charger.getLevel().getBlockEntity(charger.getBlockPos()) == charger
             && player.distanceToSqr(charger.getBlockPos().getX() + 0.5,
             charger.getBlockPos().getY() + 0.5,
             charger.getBlockPos().getZ() + 0.5) <= 64.0;
