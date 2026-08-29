@@ -1,5 +1,7 @@
 {
   "itemGroup.rs_create_compat": "精致存储&机械动力：兼容与改善",
   "item.rs_create_compat.universal_storage_disk": "通用储存磁盘",
-  "item.rs_create_compat.universal_storage_disk.help": "可同时存入物品、流体与气体的通用储存磁盘。"
+  "item.rs_create_compat.universal_storage_disk.help": "可同时存入物品、流体与气体的通用储存磁盘。",
+  "block.rs_create_compat.range_charger": "范围充电器",
+  "container.rs_create_compat.range_charger": "范围充电器"
 }

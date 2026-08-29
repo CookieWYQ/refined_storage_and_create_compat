@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "ARA",
+    "GBG",
+    " I "
+  ],
+  "key": {
+    "A": {
+      "item": "refinedstorage:controller"
+    },
+    "R": {
+      "item": "minecraft:redstone_block"
+    },
+    "G": {
+      "item": "create:large_cogwheel"
+    },
+    "B": {
+      "item": "minecraft:iron_block"
+    },
+    "I": {
+      "item": "minecraft:iron_block"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:range_charger"
+  }
+}

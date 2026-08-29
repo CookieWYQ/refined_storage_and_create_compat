@@ -2,13 +2,22 @@ package cretae.cookiewyq.rs_create_compat;
 
 import com.mojang.logging.LogUtils;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
+import cretae.cookiewyq.rs_create_compat.block.RangeChargerBlock;
+import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
+import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
@@ -17,6 +26,7 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -29,15 +39,37 @@ public class RS_Create_Compat {
     public static final String MODID = "rs_create_compat";
     // Directly reference a slf4j logger
     private static final Logger LOGGER = LogUtils.getLogger();
+    // Create a Deferred Register to hold Blocks which will all be registered under the "rs_create_compat" namespace
+    public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
     // Create a Deferred Register to hold Items which will all be registered under the "rs_create_compat" namespace
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
-    // Create a Deferred Register to hold CreativeModeTabs which will all be registered under the "rs_create_compat" namespace
-    public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
+    // Create a Deferred Register to hold BlockEntityTypes
+    public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
+        DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, MODID);
+    // Create a Deferred Register to hold MenuTypes
+    public static final DeferredRegister<MenuType<?>> MENUS = DeferredRegister.create(Registries.MENU, MODID);
+    // Create a Deferred Register to hold CreativeModeTabs
+    public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
+        DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
     // ========== 物品 ==========
     // 通用储存磁盘：可同时存入物品、流体、气体任意类型
     public static final DeferredItem<UniversalStorageDiskItem> UNIVERSAL_STORAGE_DISK =
         ITEMS.register("universal_storage_disk", UniversalStorageDiskItem::new);
+
+    // ========== 方块 ==========
+    // 范围充电器
+    public static final DeferredBlock<RangeChargerBlock> RANGE_CHARGER_BLOCK =
+        BLOCKS.register("range_charger", () -> new RangeChargerBlock(
+            BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
+        ));
+    public static final DeferredItem<BlockItem> RANGE_CHARGER_ITEM =
+        ITEMS.registerSimpleBlockItem("range_charger", RANGE_CHARGER_BLOCK);
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<RangeChargerBlockEntity>> RANGE_CHARGER_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("range_charger",
+            () -> BlockEntityType.Builder.of(RangeChargerBlockEntity::new, RANGE_CHARGER_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<RangeChargerMenu>> RANGE_CHARGER_MENU =
+        MENUS.register("range_charger", () -> new MenuType<>(RangeChargerMenu::new));
 
     // 创造模式标签页
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
@@ -46,6 +78,7 @@ public class RS_Create_Compat {
             .icon(() -> new ItemStack(UNIVERSAL_STORAGE_DISK.get()))
             .displayItems((parameters, output) -> {
                 output.accept(UNIVERSAL_STORAGE_DISK.get());
+                output.accept(RANGE_CHARGER_ITEM.get());
             })
             .build());
 
@@ -55,10 +88,15 @@ public class RS_Create_Compat {
         // Register the commonSetup method for modloading
         modEventBus.addListener(this::commonSetup);
 
-        // Register the Deferred Register to the mod event bus so items get registered
+        // Register the Deferred Registers to the mod event bus
+        BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
-        // Register the Deferred Register to the mod event bus so tabs get registered
+        BLOCK_ENTITIES.register(modEventBus);
+        MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
+
+        // 注册方块能力（能量输出）
+        modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
 
         // Register ourselves for server and other game events we are interested in.
         NeoForge.EVENT_BUS.register(this);
