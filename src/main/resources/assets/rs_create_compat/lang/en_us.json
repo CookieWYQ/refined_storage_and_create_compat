@@ -6,5 +6,15 @@
   "block.rs_create_compat.range_charger.tooltip.1": "Powered by the RS network or any FE source. Charges blocks and dropped items in range.",
   "block.rs_create_compat.range_charger.tooltip.2": "Right-click to open the GUI and adjust the range (default 50x50x50).",
   "container.rs_create_compat.range_charger": "Range Charger",
-  "gui.rs_create_compat.range_charger.hint": "Charges blocks/items in range"
+  "gui.rs_create_compat.range_charger.hint": "Charges blocks/items in range",
+  "block.rs_create_compat.quantity_keeper": "Quantity Keeper",
+  "block.rs_create_compat.quantity_keeper.tooltip.1": "Marks an object and keeps its quantity stable: autocrafts when low, destroys when over.",
+  "block.rs_create_compat.quantity_keeper.tooltip.2": "Requires the RS network. Autocrafting needs an Autocrafting Upgrade.",
+  "container.rs_create_compat.quantity_keeper": "Quantity Keeper",
+  "gui.rs_create_compat.quantity_keeper.marker": "Marked object",
+  "gui.rs_create_compat.quantity_keeper.upgrades": "Upgrades",
+  "gui.rs_create_compat.quantity_keeper.target": "Target amount: %s",
+  "gui.rs_create_compat.quantity_keeper.speed": "Speed upgrades x%s",
+  "gui.rs_create_compat.quantity_keeper.autocrafting": "Autocrafting: %s",
+  "gui.rs_create_compat.quantity_keeper.destroy": "Destroy overflow"
 }

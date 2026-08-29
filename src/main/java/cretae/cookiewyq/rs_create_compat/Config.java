@@ -57,6 +57,23 @@ public class Config {
         .comment("是否给范围内掉落物中的可充电物品供电。")
         .define("rangeChargerChargeItems", true);
 
+    // ========== 定量保持器 ==========
+    private static final ModConfigSpec.IntValue QUANTITY_KEEPER_ENERGY_USAGE = BUILDER
+        .comment("定量保持器每 tick 的网络能量消耗（FE）。")
+        .defineInRange("quantityKeeperEnergyUsage", 10, 1, 100000);
+
+    private static final ModConfigSpec.IntValue QUANTITY_KEEPER_DEFAULT_TARGET = BUILDER
+        .comment("定量保持器的默认目标数量。")
+        .defineInRange("quantityKeeperDefaultTarget", 64, 1, 1000000000);
+
+    private static final ModConfigSpec.IntValue QUANTITY_KEEPER_DESTROY_RATE = BUILDER
+        .comment("定量保持器每 tick 最多销毁的过量数量（无速度升级时）。")
+        .defineInRange("quantityKeeperDestroyRate", 16, 1, 1000000);
+
+    private static final ModConfigSpec.IntValue QUANTITY_KEEPER_DESTROY_RATE_PER_SPEED = BUILDER
+        .comment("每个速度升级额外增加的每 tick 销毁数量。")
+        .defineInRange("quantityKeeperDestroyRatePerSpeed", 16, 0, 1000000);
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean logDirtBlock;
@@ -71,6 +88,10 @@ public class Config {
     public static int rangeChargerMaxTargets;
     public static boolean rangeChargerChargeBlocks;
     public static boolean rangeChargerChargeItems;
+    public static int quantityKeeperEnergyUsage;
+    public static int quantityKeeperDefaultTarget;
+    public static int quantityKeeperDestroyRate;
+    public static int quantityKeeperDestroyRatePerSpeed;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
@@ -90,6 +111,11 @@ public class Config {
         rangeChargerMaxTargets = RANGE_CHARGER_MAX_TARGETS.get();
         rangeChargerChargeBlocks = RANGE_CHARGER_CHARGE_BLOCKS.get();
         rangeChargerChargeItems = RANGE_CHARGER_CHARGE_ITEMS.get();
+
+        quantityKeeperEnergyUsage = QUANTITY_KEEPER_ENERGY_USAGE.get();
+        quantityKeeperDefaultTarget = QUANTITY_KEEPER_DEFAULT_TARGET.get();
+        quantityKeeperDestroyRate = QUANTITY_KEEPER_DESTROY_RATE.get();
+        quantityKeeperDestroyRatePerSpeed = QUANTITY_KEEPER_DESTROY_RATE_PER_SPEED.get();
 
         // convert the list of strings into a set of items
         items = ITEM_STRINGS.get().stream().map(itemName -> BuiltInRegistries.ITEM.get(ResourceLocation.parse(itemName))).collect(Collectors.toSet());

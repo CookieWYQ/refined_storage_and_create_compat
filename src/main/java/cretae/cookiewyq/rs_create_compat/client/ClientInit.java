@@ -2,6 +2,7 @@ package cretae.cookiewyq.rs_create_compat.client;
 
 import com.refinedmods.refinedstorage.common.api.RefinedStorageClientApi;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.client.screen.QuantityKeeperScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.RangeChargerScreen;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -28,6 +29,7 @@ public class ClientInit {
     @SubscribeEvent
     public static void onRegisterMenuScreens(final RegisterMenuScreensEvent event) {
         event.register(RS_Create_Compat.RANGE_CHARGER_MENU.get(), RangeChargerScreen::new);
+        event.register(RS_Create_Compat.QUANTITY_KEEPER_MENU.get(), QuantityKeeperScreen::new);
     }
 
     private ClientInit() {

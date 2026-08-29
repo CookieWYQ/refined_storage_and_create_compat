@@ -2,9 +2,12 @@ package cretae.cookiewyq.rs_create_compat;
 
 import com.mojang.logging.LogUtils;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
+import cretae.cookiewyq.rs_create_compat.block.QuantityKeeperBlock;
 import cretae.cookiewyq.rs_create_compat.block.RangeChargerBlock;
+import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
+import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.registries.Registries;
@@ -74,6 +77,21 @@ public class RS_Create_Compat {
             () -> new MenuType<>((id, inventory) -> new RangeChargerMenu(id, inventory),
                 FeatureFlags.DEFAULT_FLAGS));
 
+    // 定量保持器
+    public static final DeferredBlock<QuantityKeeperBlock> QUANTITY_KEEPER_BLOCK =
+        BLOCKS.register("quantity_keeper", () -> new QuantityKeeperBlock(
+            BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
+        ));
+    public static final DeferredItem<BlockItem> QUANTITY_KEEPER_ITEM =
+        ITEMS.registerSimpleBlockItem("quantity_keeper", QUANTITY_KEEPER_BLOCK);
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<QuantityKeeperBlockEntity>> QUANTITY_KEEPER_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("quantity_keeper",
+            () -> BlockEntityType.Builder.of(QuantityKeeperBlockEntity::new, QUANTITY_KEEPER_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<QuantityKeeperMenu>> QUANTITY_KEEPER_MENU =
+        MENUS.register("quantity_keeper",
+            () -> new MenuType<>((id, inventory) -> new QuantityKeeperMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
     // 创造模式标签页
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CREATIVE_TAB =
         CREATIVE_MODE_TABS.register("rs_create_compat", () -> CreativeModeTab.builder()
@@ -82,6 +100,7 @@ public class RS_Create_Compat {
             .displayItems((parameters, output) -> {
                 output.accept(UNIVERSAL_STORAGE_DISK.get());
                 output.accept(RANGE_CHARGER_ITEM.get());
+                output.accept(QUANTITY_KEEPER_ITEM.get());
             })
             .build());
 
@@ -98,8 +117,9 @@ public class RS_Create_Compat {
         MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
-        // 注册方块能力（能量输出）
+        // 注册方块能力（能量输出 / 网络节点容器）
         modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
+        modEventBus.addListener(QuantityKeeperBlockEntity::registerCapabilities);
 
         // 配置加载
         modEventBus.addListener(Config::onLoad);

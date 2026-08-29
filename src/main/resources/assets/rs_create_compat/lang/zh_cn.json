@@ -6,5 +6,15 @@
   "block.rs_create_compat.range_charger.tooltip.1": "接入 RS 网络或 FE 能量，为范围内方块/掉落物物品充电",
   "block.rs_create_compat.range_charger.tooltip.2": "右键打开界面调整充电范围（默认 50×50×50）",
   "container.rs_create_compat.range_charger": "范围充电器",
-  "gui.rs_create_compat.range_charger.hint": "为范围内方块/物品充电"
+  "gui.rs_create_compat.range_charger.hint": "为范围内方块/物品充电",
+  "block.rs_create_compat.quantity_keeper": "定量保持器",
+  "block.rs_create_compat.quantity_keeper.tooltip.1": "标记对象并保持其数量稳定：不足时自动合成，超出时自动销毁",
+  "block.rs_create_compat.quantity_keeper.tooltip.2": "需接入 RS 网络；自动合成需安装自动合成升级",
+  "container.rs_create_compat.quantity_keeper": "定量保持器",
+  "gui.rs_create_compat.quantity_keeper.marker": "标记对象",
+  "gui.rs_create_compat.quantity_keeper.upgrades": "插件",
+  "gui.rs_create_compat.quantity_keeper.target": "目标数量：%s",
+  "gui.rs_create_compat.quantity_keeper.speed": "速度升级 ×%s",
+  "gui.rs_create_compat.quantity_keeper.autocrafting": "自动合成：%s",
+  "gui.rs_create_compat.quantity_keeper.destroy": "销毁过量"
 }
