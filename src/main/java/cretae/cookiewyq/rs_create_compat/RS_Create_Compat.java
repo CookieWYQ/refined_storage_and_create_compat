@@ -1,7 +1,9 @@
 package cretae.cookiewyq.rs_create_compat;
 
 import com.mojang.logging.LogUtils;
+import com.mojang.serialization.Codec;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
+import com.refinedmods.refinedstorage.common.content.BlockEntities;
 import cretae.cookiewyq.rs_create_compat.block.AdvancedSchematicLoaderBlock;
 import cretae.cookiewyq.rs_create_compat.block.QuantityKeeperBlock;
 import cretae.cookiewyq.rs_create_compat.block.RangeChargerBlock;
@@ -17,9 +19,12 @@ import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
+import cretae.cookiewyq.rs_create_compat.mixin.AutocrafterAccessor;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
+import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.flag.FeatureFlags;
@@ -36,6 +41,8 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
@@ -63,6 +70,13 @@ public class RS_Create_Compat {
     // Create a Deferred Register to hold CreativeModeTabs
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
         DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
+    // 数据组件（Tag 过滤器）
+    public static final DeferredRegister.DataComponents DATA_COMPONENTS =
+        DeferredRegister.createDataComponents(Registries.DATA_COMPONENT_TYPE, MODID);
+    /** 附加在物品上的 Tag 过滤标记，值为如 "#minecraft:stone"。 */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<String>> TAG_FILTER =
+        DATA_COMPONENTS.registerComponentType("tag_filter",
+            builder -> builder.persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8));
 
     // ========== 物品 ==========
     // 通用储存磁盘：可同时存入物品、流体、气体任意类型
@@ -166,12 +180,15 @@ public class RS_Create_Compat {
         BLOCK_ENTITIES.register(modEventBus);
         MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
+        DATA_COMPONENTS.register(modEventBus);
 
         // 注册方块能力（能量输出 / 物品处理器 / 网络节点容器）
         modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
         modEventBus.addListener(QuantityKeeperBlockEntity::registerCapabilities);
         modEventBus.addListener(SchematicLoaderBlockEntity::registerCapabilities);
         modEventBus.addListener(AdvancedSchematicLoaderBlockEntity::registerCapabilities);
+        // 调整一：自动合成仓内部输出存储（物品 + 流体能力）
+        modEventBus.addListener(RS_Create_Compat::registerAutocrafterCapabilities);
 
         // 配置加载
         modEventBus.addListener(Config::onLoad);
@@ -191,6 +208,28 @@ public class RS_Create_Compat {
         );
 
         LOGGER.info("RS & Create Compat common setup complete");
+    }
+
+    /** 调整一：为 RS 自动合成仓注册内部输出存储能力（物品 + 流体，可开关）。 */
+    private static void registerAutocrafterCapabilities(final RegisterCapabilitiesEvent event) {
+        if (!Config.autocrafterStorageEnabled) {
+            return;
+        }
+        final var autocrafterType = BlockEntities.INSTANCE.getAutocrafter();
+        event.registerBlockEntity(
+            Capabilities.ItemHandler.BLOCK,
+            autocrafterType,
+            (blockEntity, direction) -> blockEntity instanceof AutocrafterAccessor accessor
+                ? accessor.rscc$getOutputStorage()
+                : null
+        );
+        event.registerBlockEntity(
+            Capabilities.FluidHandler.BLOCK,
+            autocrafterType,
+            (blockEntity, direction) -> blockEntity instanceof AutocrafterAccessor accessor
+                ? accessor.rscc$getOutputTank()
+                : null
+        );
     }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call

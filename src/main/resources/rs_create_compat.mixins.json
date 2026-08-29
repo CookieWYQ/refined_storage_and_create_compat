@@ -4,6 +4,9 @@
   "package": "cretae.cookiewyq.rs_create_compat.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "FilterTagMixin",
+    "AutocrafterStorageMixin",
+    "AutocrafterAccessor"
   ],
   "client": [
   ],

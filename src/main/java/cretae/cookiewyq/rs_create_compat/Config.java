@@ -99,6 +99,24 @@ public class Config {
         .comment("启用高级远程多功能终端的序列装配样板终端界面。")
         .define("advancedRemoteTerminalEnableSequence", true);
 
+    // ========== 调整一：自动合成仓存储改进 ==========
+    private static final ModConfigSpec.BooleanValue AUTOCRAFTER_STORAGE_ENABLED = BUILDER
+        .comment("改进自动合成仓：内部增加存储空间（物品/流体），确保单次合成产物能全部存入，玩家可单独提取。")
+        .define("autocrafterStorageEnabled", true);
+
+    private static final ModConfigSpec.IntValue AUTOCRAFTER_OUTPUT_SLOTS = BUILDER
+        .comment("自动合成仓内部物品存储槽位数量。")
+        .defineInRange("autocrafterOutputSlots", 54, 1, 108);
+
+    private static final ModConfigSpec.IntValue AUTOCRAFTER_FLUID_CAPACITY = BUILDER
+        .comment("自动合成仓内部流体存储容量（mB）。")
+        .defineInRange("autocrafterFluidCapacity", 64000, 1000, 10000000);
+
+    // ========== 调整二：输入/输出总线 Tag 过滤 ==========
+    private static final ModConfigSpec.BooleanValue TAG_FILTER_ENABLED = BUILDER
+        .comment("允许输入/输出总线的过滤器使用 Tag 过滤（在过滤槽中放入带 tag_filter 数据组件的物品，值如 #minecraft:stone）。")
+        .define("tagFilterEnabled", true);
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean logDirtBlock;
@@ -123,6 +141,10 @@ public class Config {
     public static boolean advancedRemoteTerminalEnableManager;
     public static boolean advancedRemoteTerminalEnableMonitor;
     public static boolean advancedRemoteTerminalEnableSequence;
+    public static boolean tagFilterEnabled;
+    public static boolean autocrafterStorageEnabled;
+    public static int autocrafterOutputSlots;
+    public static int autocrafterFluidCapacity;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
@@ -154,6 +176,11 @@ public class Config {
         advancedRemoteTerminalEnableManager = ADVANCED_REMOTE_TERMINAL_MANAGER.get();
         advancedRemoteTerminalEnableMonitor = ADVANCED_REMOTE_TERMINAL_MONITOR.get();
         advancedRemoteTerminalEnableSequence = ADVANCED_REMOTE_TERMINAL_SEQUENCE.get();
+
+        tagFilterEnabled = TAG_FILTER_ENABLED.get();
+        autocrafterStorageEnabled = AUTOCRAFTER_STORAGE_ENABLED.get();
+        autocrafterOutputSlots = AUTOCRAFTER_OUTPUT_SLOTS.get();
+        autocrafterFluidCapacity = AUTOCRAFTER_FLUID_CAPACITY.get();
 
         // convert the list of strings into a set of items
         items = ITEM_STRINGS.get().stream().map(itemName -> BuiltInRegistries.ITEM.get(ResourceLocation.parse(itemName))).collect(Collectors.toSet());
