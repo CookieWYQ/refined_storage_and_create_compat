@@ -35,7 +35,7 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     private static final int STORAGE_W_PX = AdvancedSchematicLoaderMenu.COLS
         * AdvancedSchematicLoaderMenu.ROW_SIZE; // 9*18 = 162
     private static final int STORAGE_H_PX = 6 * AdvancedSchematicLoaderMenu.ROW_SIZE; // 6 行可见
-    private static final int SCROLLBAR_X = 171;
+    private static final int SCROLLBAR_X = 173;
     private static final int SCROLLBAR_Y = STORAGE_TOP + 1;
     private static final int SCROLLBAR_H = STORAGE_H_PX - 2;
 

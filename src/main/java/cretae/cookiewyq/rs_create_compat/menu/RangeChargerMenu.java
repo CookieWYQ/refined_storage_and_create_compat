@@ -73,6 +73,12 @@ public class RangeChargerMenu extends AbstractContainerMenu {
         return data.get(4);
     }
 
+    /** 供客户端发送范围设置包。 */
+    @Nullable
+    public net.minecraft.core.BlockPos getChargerPos() {
+        return charger != null ? charger.getBlockPos() : null;
+    }
+
     @Override
     public ItemStack quickMoveStack(final Player player, final int index) {
         return ItemStack.EMPTY; // 无物品槽位，无需转移

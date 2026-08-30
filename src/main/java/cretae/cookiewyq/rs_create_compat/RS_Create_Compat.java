@@ -22,6 +22,7 @@ import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.mixin.AutocrafterAccessor;
 import cretae.cookiewyq.rs_create_compat.network.SetQuantityTargetPacket;
+import cretae.cookiewyq.rs_create_compat.network.SetRangePacket;
 import cretae.cookiewyq.rs_create_compat.network.SwitchTerminalModePacket;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.component.DataComponentType;
@@ -291,6 +292,11 @@ public class RS_Create_Compat {
             SetQuantityTargetPacket.TYPE,
             SetQuantityTargetPacket.STREAM_CODEC,
             (packet, ctx) -> SetQuantityTargetPacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
+        registrar.playToServer(
+            SetRangePacket.TYPE,
+            SetRangePacket.STREAM_CODEC,
+            (packet, ctx) -> SetRangePacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
     }
 

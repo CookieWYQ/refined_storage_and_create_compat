@@ -27,15 +27,15 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         "gui.rs_create_compat.schematic_loader.gunpowder"
     };
 
-    /** 每个 toggle 的位置：(labelX, labelY, btnX, btnY) —— 库存下方（y=140..188），玩家背包上方。 */
-    private static final int LABEL_X = 10;
-    private static final int BTN_X = 150;
+    // 开关：2 列 × 2 行（标签 x=10/100，按钮 x=68/158，行 y=140/156），库存下方、玩家背包上方
+    private static final int[] TOGGLE_LABEL_X = {10, 100};
+    private static final int[] TOGGLE_BTN_X = {68, 158};
     private static final int ROW0_Y = 140;
-    private static final int ROW_H = 14;
+    private static final int ROW_H = 16;
     private static final int BTN_W = 14;
     private static final int BTN_H = 12;
     /** 库存区滚动条：库存区 (9..171, 27..135)，滚动条放右侧。 */
-    private static final int SCROLLBAR_X = 171;
+    private static final int SCROLLBAR_X = 173;
     private static final int SCROLLBAR_Y = 28;
     private static final int SCROLLBAR_H = 106;
 
@@ -45,7 +45,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     public SchematicLoaderScreen(final SchematicLoaderMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
         this.imageWidth = 210; // 176 主界面 + 34 右侧升级栏（仿 RS）
-        this.imageHeight = 285;
+        this.imageHeight = 261;
         this.inventoryLabelY = 10000; // 玩家背包标签已含在背景中
     }
 
@@ -69,9 +69,11 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
 
         for (int i = 0; i < BTN_IDS.length; i++) {
             final int id = BTN_IDS[i];
-            final int y = ROW0_Y + i * ROW_H;
+            final int row = i / 2;
+            final int col = i % 2;
+            final int y = ROW0_Y + row * ROW_H;
             final Button button = new Button.Builder(getStateFor(id), btn -> sendButton(id))
-                .bounds(leftPos + BTN_X, topPos + y, BTN_W, BTN_H)
+                .bounds(leftPos + TOGGLE_BTN_X[col], topPos + y, BTN_W, BTN_H)
                 .build();
             toggleButtons[i] = button;
             addRenderableWidget(button);
@@ -117,7 +119,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
         // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 285);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 261);
     }
 
     @Override
@@ -126,10 +128,12 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         // 升级栏标签（右侧独立栏，仿 RS 原版）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.schematic_loader.upgrades"),
             176, 5, 0xA0A0A0, false);
-        // 开关标签（左侧文字，亮白提升可读性）
+        // 开关标签（2 列布局，亮白提升可读性）
         for (int i = 0; i < BTN_LABEL_KEYS.length; i++) {
+            final int row = i / 2;
+            final int col = i % 2;
             guiGraphics.drawString(font, Component.translatable(BTN_LABEL_KEYS[i]),
-                LABEL_X, ROW0_Y + i * ROW_H + 2, 0xFFFFFF, false);
+                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, 0xFFFFFF, false);
         }
     }
 
