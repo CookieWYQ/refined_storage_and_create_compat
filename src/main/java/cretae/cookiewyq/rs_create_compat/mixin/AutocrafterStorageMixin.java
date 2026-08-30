@@ -99,7 +99,7 @@ public abstract class AutocrafterStorageMixin {
     }
 
     @Inject(method = "saveAdditional", at = @At("TAIL"))
-    private void rscc$saveStorage(final CompoundTag tag, final HolderLookup.Provider provider) {
+    private void rscc$saveStorage(final CompoundTag tag, final HolderLookup.Provider provider, final CallbackInfo ci) {
         tag.put("rscc_output", rscc$outputStorage.serializeNBT(provider));
         final FluidStack fluid = rscc$outputTank.getFluid();
         if (!fluid.isEmpty()) {
@@ -110,7 +110,7 @@ public abstract class AutocrafterStorageMixin {
     }
 
     @Inject(method = "loadAdditional", at = @At("TAIL"))
-    private void rscc$loadStorage(final CompoundTag tag, final HolderLookup.Provider provider) {
+    private void rscc$loadStorage(final CompoundTag tag, final HolderLookup.Provider provider, final CallbackInfo ci) {
         if (tag.contains("rscc_output")) {
             rscc$outputStorage.deserializeNBT(provider, tag.getCompound("rscc_output"));
         }
