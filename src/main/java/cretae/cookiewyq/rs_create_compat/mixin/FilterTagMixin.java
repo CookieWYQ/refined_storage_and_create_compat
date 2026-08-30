@@ -4,6 +4,8 @@ import com.refinedmods.refinedstorage.api.resource.ResourceKey;
 import com.refinedmods.refinedstorage.api.resource.filter.Filter;
 import com.refinedmods.refinedstorage.api.resource.filter.FilterMode;
 import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
+import com.simibubi.create.AllDataComponents;
+import com.simibubi.create.content.logistics.filter.AttributeFilterItem;
 import com.simibubi.create.content.logistics.filter.FilterItem;
 import com.simibubi.create.content.logistics.filter.FilterItemStack;
 import cretae.cookiewyq.rs_create_compat.Config;
@@ -20,6 +22,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -59,11 +62,13 @@ public abstract class FilterTagMixin {
                 final FilterItemStack wrapper = FilterItemStack.of(filterStack);
                 final boolean isEmptyListFilter = wrapper instanceof FilterItemStack.ListFilterItemStack listFilter
                     && listFilter.containedItems.isEmpty();
-                if (!isEmptyListFilter && wrapper.test(null, resourceStack)) {
+                final boolean isEmptyAttributeFilter = filterStack.getItem() instanceof AttributeFilterItem
+                    && filterStack.getOrDefault(AllDataComponents.ATTRIBUTE_FILTER_MATCHED_ATTRIBUTES, List.of()).isEmpty();
+                if (!isEmptyListFilter && !isEmptyAttributeFilter && wrapper.test(null, resourceStack)) {
                     matched = true;
                     break;
                 }
-                continue; // 空列表过滤器：不展开，按原逻辑过滤物品本身
+                continue; // 空列表过滤器 / 空属性过滤器：不展开，按原逻辑过滤物品本身
             }
 
             // 2) Tag 过滤组件
