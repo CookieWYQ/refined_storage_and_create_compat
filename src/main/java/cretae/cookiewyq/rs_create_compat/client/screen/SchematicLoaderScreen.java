@@ -45,7 +45,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     public SchematicLoaderScreen(final SchematicLoaderMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
         this.imageWidth = 210; // 176 主界面 + 34 右侧升级栏（仿 RS）
-        this.imageHeight = 268;
+        this.imageHeight = 285;
         this.inventoryLabelY = 10000; // 玩家背包标签已含在背景中
     }
 
@@ -111,7 +111,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
         // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 268);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 285);
     }
 
     @Override

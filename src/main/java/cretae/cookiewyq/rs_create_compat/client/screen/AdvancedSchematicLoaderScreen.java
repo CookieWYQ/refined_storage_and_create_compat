@@ -29,7 +29,7 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         "gui.rs_create_compat.schematic_loader.gunpowder"
     };
     private static final int BG_W = 210;
-    private static final int BG_H = 320;
+    private static final int BG_H = 329;
     private static final int STORAGE_X = 9;
     private static final int STORAGE_TOP = AdvancedSchematicLoaderMenu.STORAGE_BASE_Y; // 71
     private static final int STORAGE_W_PX = AdvancedSchematicLoaderMenu.COLS
@@ -39,15 +39,15 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     private static final int SCROLLBAR_Y = STORAGE_TOP + 1;
     private static final int SCROLLBAR_H = STORAGE_H_PX - 2;
 
-    // 开关：y=188..230 (4 行 × 14)，按钮 x=150, 标签 x=10（库存下方、玩家背包上方）
+    // 开关：y=186..232 (4 行 × 14)，按钮 x=150, 标签 x=10（库存下方、玩家背包上方）
     private static final int LABEL_X = 10;
     private static final int BTN_X = 150;
-    private static final int ROW0_Y = 188;
+    private static final int ROW0_Y = 186;
     private static final int ROW_H = 14;
     private static final int BTN_W = 14;
     private static final int BTN_H = 12;
     // 队列运行按钮：底部（玩家背包下方）
-    private static final int QUEUE_BTN_Y = 300;
+    private static final int QUEUE_BTN_Y = 316;
     private static final int QUEUE_BTN_W = 158;
     private static final int QUEUE_BTN_H = 16;
 
@@ -169,7 +169,7 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
                 LABEL_X, ROW0_Y + i * ROW_H + 2, 0xD0D0D0, false);
         }
         // 玩家背包文字（库存下方按钮区之后）
-        guiGraphics.drawString(font, playerInventoryTitle, 8, 222, 0xA0A0A0, false);
+        guiGraphics.drawString(font, playerInventoryTitle, 8, 234, 0xA0A0A0, false);
     }
 
     @Override

@@ -66,15 +66,15 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
                     col + row * 9, 9 + col * 18, 27 + row * 18));
             }
         }
-        // 玩家主物品栏（背景精灵 (8,188) 起 → Menu (9,189) 起）
+        // 玩家主物品栏（背景精灵 (8,196) 起 → Menu (9,197) 起）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 9 + col * 18, 189 + row * 18));
+                addSlot(new Slot(inventory, col + row * 9 + 9, 9 + col * 18, 197 + row * 18));
             }
         }
-        // 快捷栏（背景精灵 (8,260) → Menu (9,261)）
+        // 快捷栏（背景精灵 (8,268) → Menu (9,269)）
         for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 9 + col * 18, 261));
+            addSlot(new Slot(inventory, col, 9 + col * 18, 269));
         }
     }
 
