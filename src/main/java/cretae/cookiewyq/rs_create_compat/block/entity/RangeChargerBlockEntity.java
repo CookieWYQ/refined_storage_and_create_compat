@@ -137,14 +137,7 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         if (energyStorage.getEnergyStored() <= 0) {
             return;
         }
-        // 待机扫描耗电：随范围增大而较快上升（默认 50^3 时约 25 FE/tick）
-        final long volume = (long) (rangeX + 1) * (rangeY + 1) * (rangeZ + 1);
-        final int scanCost = (int) Math.min(1000, volume / 5000);
-        if (energyStorage.getEnergyStored() <= scanCost) {
-            return;
-        }
-        energyStorage.extractEnergy(scanCost, false);
-
+        // 每 tick 都执行充电；扫描耗电很小，不再因能量不足而跳过
         if (Config.rangeChargerChargeBlocks) {
             scanBlocks(level);
         }

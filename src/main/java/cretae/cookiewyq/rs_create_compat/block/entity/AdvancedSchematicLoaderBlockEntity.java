@@ -84,7 +84,7 @@ public class AdvancedSchematicLoaderBlockEntity extends SchematicLoaderBlockEnti
         return autoPrint || queueRunning;
     }
 
-    /** 供菜单同步：0/1/2/3 = 开关，4 = 队列运行中。 */
+    /** 供菜单同步：0/1/2/3 = 开关，4 = 队列运行中，5 = 集群装填器数量。 */
     @Override
     public net.minecraft.world.inventory.ContainerData getContainerData() {
         return new net.minecraft.world.inventory.ContainerData() {
@@ -96,6 +96,7 @@ public class AdvancedSchematicLoaderBlockEntity extends SchematicLoaderBlockEnti
                     case 2 -> autoRecycle ? 1 : 0;
                     case 3 -> autoFillGunpowder ? 1 : 0;
                     case 4 -> queueRunning ? 1 : 0;
+                    case 5 -> collectCluster().size();
                     default -> 0;
                 };
             }
@@ -107,7 +108,7 @@ public class AdvancedSchematicLoaderBlockEntity extends SchematicLoaderBlockEnti
 
             @Override
             public int getCount() {
-                return 5;
+                return 6;
             }
         };
     }

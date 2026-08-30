@@ -38,7 +38,7 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
                                @Nullable final SchematicLoaderBlockEntity loader) {
         super(RS_Create_Compat.SCHEMATIC_LOADER_MENU.get(), id);
         this.loader = loader;
-        this.data = loader != null ? loader.getContainerData() : new SimpleContainerData(4);
+        this.data = loader != null ? loader.getContainerData() : new SimpleContainerData(5);
         addDataSlots(data);
 
         final ItemStackHandler blueprint = loader != null ? loader.getBlueprintSlot() : new ItemStackHandler(1);
@@ -84,9 +84,10 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
         return new SchematicLoaderMenu(id, inventory, loader);
     }
 
-    /** @return 集群内装填器数量（内存叠加后需要翻页的数量）。 */
+    /** @return 集群内装填器数量（由服务端 ContainerData 同步，客户端重建后仍正确）。 */
     public int getClusterSize() {
-        return clusterInventories.size();
+        final int size = data.get(4);
+        return Math.max(1, size);
     }
 
     /** @return 当前行偏移。 */

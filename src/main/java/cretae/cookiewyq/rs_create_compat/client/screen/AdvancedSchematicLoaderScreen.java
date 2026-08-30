@@ -122,6 +122,12 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
                 toggleButtons[i].setMessage(toggleState(TOGGLE_IDS[i]));
             }
         }
+        // 每次渲染同步集群滚动条范围（客户端重建后数据包同步集群数）
+        if (scrollbar != null) {
+            final int maxOffset = menu.getClusterSize() * 12 - 6;
+            scrollbar.setEnabled(maxOffset > 0);
+            scrollbar.setMaxOffset(maxOffset);
+        }
         renderBackground(guiGraphics, mouseX, mouseY, partialTick);
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         if (scrollbar != null) {

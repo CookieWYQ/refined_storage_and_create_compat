@@ -50,20 +50,27 @@ public class ClusterSlot extends Slot {
         return Math.max(0, rowOffsetSupplier.getAsInt()) * cols + indexInPage;
     }
 
+    /**
+     * 客户端重建菜单时 handlers 仅 1 个（空容器），槽位内容由数据包按固定 indexInPage 同步，
+     * 因此客户端必须使用固定索引；服务端多 handler 时才按行偏移动态映射。
+     */
+    private int slotInHandler() {
+        if (handlers.size() <= 1) {
+            return indexInPage;
+        }
+        return globalSlot() % slotsPerHandler;
+    }
+
     private IItemHandler current() {
         if (handlers.isEmpty()) {
             return null;
         }
-        final int global = globalSlot();
-        final int handlerIndex = global / slotsPerHandler;
+        if (handlers.size() <= 1) {
+            return handlers.get(0);
+        }
+        final int handlerIndex = globalSlot() / slotsPerHandler;
         final int clamped = Math.max(0, Math.min(handlerIndex, handlers.size() - 1));
         return handlers.get(clamped);
-    }
-
-    /** 当前实际指向的装填器内槽位索引。 */
-    private int slotInHandler() {
-        final int global = globalSlot();
-        return global % slotsPerHandler;
     }
 
     @Override

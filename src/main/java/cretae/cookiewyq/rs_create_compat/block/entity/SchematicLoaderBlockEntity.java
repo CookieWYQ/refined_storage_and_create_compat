@@ -194,13 +194,12 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                 cannon.inventory.setStackInSlot(0, blueprint);
                 cannon.sendUpdate = true;
                 blueprintChanged = true;
+                // 强制打印机重载新蓝图，否则 checklist 仍用旧蓝图的材料清单
+                cannon.printer.resetSchematic();
             }
         }
 
         // 蓝图更换后强制刷新 checklist，避免沿用旧蓝图的材料清单
-        if (blueprintChanged) {
-            cannon.updateChecklist();
-        }
         cannon.updateChecklist();
         restockFromNetwork(cannon, network);
 
@@ -437,7 +436,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return result;
     }
 
-    /** 供菜单同步：0/1/2/3 = 自动打印/部署/回收/火药 开关。 */
+    /** 供菜单同步：0/1/2/3 = 自动打印/部署/回收/火药 开关，4 = 集群装填器数量。 */
     public net.minecraft.world.inventory.ContainerData getContainerData() {
         return new net.minecraft.world.inventory.ContainerData() {
             @Override
@@ -447,6 +446,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                     case 1 -> autoDeploy ? 1 : 0;
                     case 2 -> autoRecycle ? 1 : 0;
                     case 3 -> autoFillGunpowder ? 1 : 0;
+                    case 4 -> collectCluster().size();
                     default -> 0;
                 };
             }
@@ -458,7 +458,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
 
             @Override
             public int getCount() {
-                return 4;
+                return 5;
             }
         };
     }

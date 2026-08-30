@@ -21,6 +21,7 @@ import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.mixin.AutocrafterAccessor;
+import cretae.cookiewyq.rs_create_compat.network.SetQuantityTargetPacket;
 import cretae.cookiewyq.rs_create_compat.network.SwitchTerminalModePacket;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.component.DataComponentType;
@@ -278,13 +279,18 @@ public class RS_Create_Compat {
         }
     }
 
-    /** 网络包：终端模式切换（C2S）。 */
+    /** 网络包：终端模式切换（C2S）+ 定量保持器目标数量输入（C2S）。 */
     private static void registerPayloads(final RegisterPayloadHandlersEvent event) {
         final PayloadRegistrar registrar = event.registrar(MODID);
         registrar.playToServer(
             SwitchTerminalModePacket.TYPE,
             SwitchTerminalModePacket.STREAM_CODEC,
             (packet, ctx) -> SwitchTerminalModePacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
+        registrar.playToServer(
+            SetQuantityTargetPacket.TYPE,
+            SetQuantityTargetPacket.STREAM_CODEC,
+            (packet, ctx) -> SetQuantityTargetPacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
     }
 

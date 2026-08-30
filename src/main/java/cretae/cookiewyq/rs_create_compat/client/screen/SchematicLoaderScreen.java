@@ -102,6 +102,12 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
                 toggleButtons[i].setMessage(getStateFor(BTN_IDS[i]));
             }
         }
+        // 每次渲染同步集群滚动条范围（客户端重建后数据包同步集群数）
+        if (clusterScrollbar != null) {
+            final int maxOffset = menu.getClusterSize() * 6 - 6;
+            clusterScrollbar.setEnabled(maxOffset > 0);
+            clusterScrollbar.setMaxOffset(maxOffset);
+        }
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         if (clusterScrollbar != null) {
             clusterScrollbar.render(guiGraphics, mouseX, mouseY, partialTick);

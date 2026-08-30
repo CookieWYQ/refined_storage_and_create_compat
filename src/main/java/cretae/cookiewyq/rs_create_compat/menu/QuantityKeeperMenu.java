@@ -83,6 +83,12 @@ public class QuantityKeeperMenu extends AbstractContainerMenu {
         return data.get(0);
     }
 
+    /** 供客户端发送数值设置包。 */
+    @Nullable
+    public net.minecraft.core.BlockPos getKeeperPos() {
+        return keeper != null ? keeper.getBlockPos() : null;
+    }
+
     public boolean isDestroyOverflow() {
         return data.get(1) == 1;
     }
