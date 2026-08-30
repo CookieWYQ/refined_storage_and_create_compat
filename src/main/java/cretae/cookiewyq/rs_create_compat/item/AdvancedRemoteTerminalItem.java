@@ -19,8 +19,10 @@ import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 
 import javax.annotation.Nullable;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -62,6 +64,16 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     }
 
     @Override
+    public void appendHoverText(final ItemStack stack,
+                                final TooltipContext context,
+                                final List<Component> tooltip,
+                                final TooltipFlag flag) {
+        super.appendHoverText(stack, context, tooltip, flag);
+        tooltip.add(Component.translatable("item.rs_create_compat.advanced_remote_terminal.bind_hint"));
+        tooltip.add(Component.translatable("item.rs_create_compat.advanced_remote_terminal.usage"));
+    }
+
+    @Override
     protected void use(@Nullable final Component name,
                        final ServerPlayer player,
                        final SlotReference slotReference,
@@ -77,7 +89,9 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         }
         final Optional<Network> network = context.resolveNetwork();
         if (network.isEmpty()) {
-            player.displayClientMessage(Component.translatable("item.rs_create_compat.advanced_remote_terminal.not_bound"), true);
+            player.displayClientMessage(
+                Component.translatable("item.rs_create_compat.advanced_remote_terminal.not_bound"),
+                true);
             return;
         }
         context.drainEnergy(10);
