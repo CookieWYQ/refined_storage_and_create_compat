@@ -13,6 +13,7 @@ import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
+import cretae.cookiewyq.rs_create_compat.item.CompatBlockItem;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedRemoteTerminalMenu;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
@@ -28,7 +29,6 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.flag.FeatureFlags;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
@@ -106,8 +106,11 @@ public class RS_Create_Compat {
         BLOCKS.register("range_charger", () -> new RangeChargerBlock(
             BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
         ));
-    public static final DeferredItem<BlockItem> RANGE_CHARGER_ITEM =
-        ITEMS.registerSimpleBlockItem("range_charger", RANGE_CHARGER_BLOCK);
+    public static final DeferredItem<CompatBlockItem> RANGE_CHARGER_ITEM =
+        ITEMS.register("range_charger", () -> new CompatBlockItem(
+            RANGE_CHARGER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.range_charger.help")
+        ));
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<RangeChargerBlockEntity>> RANGE_CHARGER_BLOCK_ENTITY =
         BLOCK_ENTITIES.register("range_charger",
             () -> BlockEntityType.Builder.of(RangeChargerBlockEntity::new, RANGE_CHARGER_BLOCK.get()).build(null));
@@ -121,8 +124,11 @@ public class RS_Create_Compat {
         BLOCKS.register("quantity_keeper", () -> new QuantityKeeperBlock(
             BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
         ));
-    public static final DeferredItem<BlockItem> QUANTITY_KEEPER_ITEM =
-        ITEMS.registerSimpleBlockItem("quantity_keeper", QUANTITY_KEEPER_BLOCK);
+    public static final DeferredItem<CompatBlockItem> QUANTITY_KEEPER_ITEM =
+        ITEMS.register("quantity_keeper", () -> new CompatBlockItem(
+            QUANTITY_KEEPER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.quantity_keeper.help")
+        ));
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<QuantityKeeperBlockEntity>> QUANTITY_KEEPER_BLOCK_ENTITY =
         BLOCK_ENTITIES.register("quantity_keeper",
             () -> BlockEntityType.Builder.of(QuantityKeeperBlockEntity::new, QUANTITY_KEEPER_BLOCK.get()).build(null));
@@ -136,8 +142,11 @@ public class RS_Create_Compat {
         BLOCKS.register("schematic_loader", () -> new SchematicLoaderBlock(
             BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3.5F)
         ));
-    public static final DeferredItem<BlockItem> SCHEMATIC_LOADER_ITEM =
-        ITEMS.registerSimpleBlockItem("schematic_loader", SCHEMATIC_LOADER_BLOCK);
+    public static final DeferredItem<CompatBlockItem> SCHEMATIC_LOADER_ITEM =
+        ITEMS.register("schematic_loader", () -> new CompatBlockItem(
+            SCHEMATIC_LOADER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.schematic_loader.help")
+        ));
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<SchematicLoaderBlockEntity>> SCHEMATIC_LOADER_BLOCK_ENTITY =
         BLOCK_ENTITIES.register("schematic_loader",
             () -> BlockEntityType.Builder.of(SchematicLoaderBlockEntity::new, SCHEMATIC_LOADER_BLOCK.get()).build(null));
@@ -151,8 +160,11 @@ public class RS_Create_Compat {
         BLOCKS.register("advanced_schematic_loader", () -> new AdvancedSchematicLoaderBlock(
             BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(4.0F)
         ));
-    public static final DeferredItem<BlockItem> ADVANCED_SCHEMATIC_LOADER_ITEM =
-        ITEMS.registerSimpleBlockItem("advanced_schematic_loader", ADVANCED_SCHEMATIC_LOADER_BLOCK);
+    public static final DeferredItem<CompatBlockItem> ADVANCED_SCHEMATIC_LOADER_ITEM =
+        ITEMS.register("advanced_schematic_loader", () -> new CompatBlockItem(
+            ADVANCED_SCHEMATIC_LOADER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.advanced_schematic_loader.help")
+        ));
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<AdvancedSchematicLoaderBlockEntity>> ADVANCED_SCHEMATIC_LOADER_BLOCK_ENTITY =
         BLOCK_ENTITIES.register("advanced_schematic_loader",
             () -> BlockEntityType.Builder.of(AdvancedSchematicLoaderBlockEntity::new,

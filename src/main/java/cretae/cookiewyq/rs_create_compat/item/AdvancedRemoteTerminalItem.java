@@ -5,6 +5,7 @@ import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
 import com.refinedmods.refinedstorage.common.Platform;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
+import com.refinedmods.refinedstorage.common.api.support.HelpTooltipComponent;
 import com.refinedmods.refinedstorage.common.api.support.energy.AbstractNetworkEnergyItem;
 import com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemContext;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
@@ -14,6 +15,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.world.inventory.tooltip.TooltipComponent;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
@@ -105,9 +107,19 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                                 final TooltipContext context,
                                 final List<Component> tooltip,
                                 final TooltipFlag flag) {
+        // 仿 RS 原版：super 会追加能量信息与绑定状态（未绑定红色 / 已绑定灰色坐标）
         super.appendHoverText(stack, context, tooltip, flag);
-        tooltip.add(Component.translatable("item.rs_create_compat.advanced_remote_terminal.bind_hint"));
-        tooltip.add(Component.translatable("item.rs_create_compat.advanced_remote_terminal.usage"));
+    }
+
+    @Override
+    public Optional<TooltipComponent> getTooltipImage(final ItemStack stack) {
+        // 仿 RS 原版：描述文本放在帮助组件中（帮助图标 + 蓝色小字 + Shift 展开）
+        // 未绑定时提示如何绑定；已绑定时说明用法。
+        return Optional.of(new HelpTooltipComponent(
+            isBound(stack)
+                ? Component.translatable("item.rs_create_compat.advanced_remote_terminal.usage")
+                : Component.translatable("item.rs_create_compat.advanced_remote_terminal.bind_hint")
+        ));
     }
 
     @Override

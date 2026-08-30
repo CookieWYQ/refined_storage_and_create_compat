@@ -8,9 +8,6 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
@@ -21,8 +18,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
 import com.refinedmods.refinedstorage.common.support.network.NetworkNodeBlockEntityTicker;
-
-import java.util.List;
 
 /**
  * 定量保持器方块：接入 RS 网络，标记对象并保持其数量稳定。
@@ -79,14 +74,5 @@ public class QuantityKeeperBlock extends Block implements EntityBlock {
             ),
             Component.translatable("block.rs_create_compat.quantity_keeper")
         );
-    }
-
-    @Override
-    public void appendHoverText(final ItemStack stack,
-                                final Item.TooltipContext context,
-                                final List<Component> tooltip,
-                                final TooltipFlag flag) {
-        tooltip.add(Component.translatable("block.rs_create_compat.quantity_keeper.tooltip.1"));
-        tooltip.add(Component.translatable("block.rs_create_compat.quantity_keeper.tooltip.2"));
     }
 }
