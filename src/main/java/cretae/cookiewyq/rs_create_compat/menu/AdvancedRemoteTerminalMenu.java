@@ -6,7 +6,6 @@ import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponen
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
 import javax.annotation.Nullable;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -68,7 +67,7 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
     @Override
     public boolean clickMenuButton(final Player player, final int id) {
         // 旧界面兜底：直接切换到对应模式（一般不会走到，因为模式切换已由 Tab + C2S 包完成）
-        if (network != null && stack != null && !player.level().isClientSide() && player instanceof ServerPlayer sp) {
+        if (network != null && stack != null && !player.level().isClientSide()) {
             final int mode = Math.clamp(id, 0, 4);
             AdvancedRemoteTerminalItem.setMode(stack, mode);
             refresh();

@@ -33,28 +33,28 @@ public class QuantityKeeperMenu extends AbstractContainerMenu {
         addDataSlots(data);
 
         if (keeper != null) {
-            addSlot(new Slot(keeper.getInventory(), 0, 8, 20));
-            // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
+            addSlot(new Slot(keeper.getInventory(), 0, 7, 19));
+            // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=186 y=5+i*18）
             for (int i = 0; i < 6; i++) {
-                addSlot(new Slot(keeper.getInventory(), 1 + i, 187, 6 + i * 18));
+                addSlot(UpgradeSlot.forContainer(keeper.getInventory(), 1 + i, 186, 5 + i * 18));
             }
         } else {
             // 客户端重建：槽位数必须与服务端一致（内容由数据包同步）
             final net.minecraft.world.SimpleContainer empty = new net.minecraft.world.SimpleContainer(7);
-            addSlot(new Slot(empty, 0, 8, 20));
+            addSlot(new Slot(empty, 0, 7, 19));
             for (int i = 0; i < 6; i++) {
-                addSlot(new Slot(empty, 1 + i, 187, 6 + i * 18));
+                addSlot(UpgradeSlot.forContainer(empty, 1 + i, 186, 5 + i * 18));
             }
         }
         // 玩家主物品栏（3 行 9 列）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 8 + col * 18, 84 + row * 18));
+                addSlot(new Slot(inventory, col + row * 9 + 9, 7 + col * 18, 83 + row * 18));
             }
         }
         // 快捷栏
         for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 8 + col * 18, 142));
+            addSlot(new Slot(inventory, col, 7 + col * 18, 141));
         }
     }
 

@@ -88,6 +88,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return upgradeContainer;
     }
 
+    /** 返回网络节点（主要用于方块被破坏时读取 Network 引用以回流物品）。 */
+    public SchematicLoaderNetworkNode getNode() {
+        return mainNetworkNode;
+    }
+
     /** 蓝图队列（高级版 27 格；基础版为空占位，供菜单统一引用）。 */
     public ItemStackHandler getQueue() {
         return queue;
@@ -182,19 +187,25 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         }
 
         // 自动部署：将下一张蓝图放入加农炮蓝图槽
+        boolean blueprintChanged = false;
         if (autoDeploy && cannon.inventory.getStackInSlot(0).isEmpty()) {
             final ItemStack blueprint = getNextBlueprint();
             if (!blueprint.isEmpty()) {
                 cannon.inventory.setStackInSlot(0, blueprint);
                 cannon.sendUpdate = true;
+                blueprintChanged = true;
             }
         }
 
+        // 蓝图更换后强制刷新 checklist，避免沿用旧蓝图的材料清单
+        if (blueprintChanged) {
+            cannon.updateChecklist();
+        }
         cannon.updateChecklist();
         restockFromNetwork(cannon, network);
 
         if (autoFillGunpowder) {
-            restockGunpowder(network);
+            restockGunpowderDirect(cannon, network);
         }
 
         // 自动回收：打印完成后回收空白蓝图（基础版放回蓝图槽，高级版放入队列）
@@ -310,6 +321,39 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             final ItemStack stack = inventory.getStackInSlot(i);
             if (!stack.isEmpty() && stack.is(item)) {
                 count += stack.getCount();
+            }
+        }
+        return count;
+    }
+
+    /** 以加农炮为中心，统计所有紧贴它的装填器（含自身）中的该物品数量，避免多装填器互不识别。 */
+    protected int countItemInClusterAroundCannon(final SchematicannonBlockEntity cannon, final Item item) {
+        int count = 0;
+        final Level level = getLevel();
+        if (level == null) {
+            return count;
+        }
+        final java.util.IdentityHashMap<SchematicLoaderBlockEntity, Boolean> seen =
+            new java.util.IdentityHashMap<>();
+        final java.util.Queue<SchematicLoaderBlockEntity> queue = new java.util.ArrayDeque<>();
+        // 起点：加农炮六个方向上所有的装填器
+        for (final Direction d : Direction.values()) {
+            final BlockEntity be = level.getBlockEntity(cannon.getBlockPos().relative(d));
+            if (be instanceof SchematicLoaderBlockEntity ldr && !seen.containsKey(ldr)) {
+                seen.put(ldr, Boolean.TRUE);
+                queue.add(ldr);
+            }
+        }
+        while (!queue.isEmpty()) {
+            final SchematicLoaderBlockEntity ldr = queue.poll();
+            count += ldr.countItem(item);
+            // BFS 展开邻接装填器（装填器贴在一起时也算同一集群）
+            for (final Direction d : Direction.values()) {
+                final BlockEntity be = level.getBlockEntity(ldr.getBlockPos().relative(d));
+                if (be instanceof SchematicLoaderBlockEntity next && !seen.containsKey(next)) {
+                    seen.put(next, Boolean.TRUE);
+                    queue.add(next);
+                }
             }
         }
         return count;

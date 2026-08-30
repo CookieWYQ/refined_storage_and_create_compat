@@ -1,5 +1,6 @@
 package cretae.cookiewyq.rs_create_compat.network;
 
+import com.refinedmods.refinedstorage.api.network.Network;
 import com.refinedmods.refinedstorage.api.network.impl.node.AbstractNetworkNode;
 import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
 
@@ -15,6 +16,12 @@ public class SchematicLoaderNetworkNode extends AbstractNetworkNode {
 
     public void setBlockEntity(final SchematicLoaderBlockEntity blockEntity) {
         this.blockEntity = blockEntity;
+    }
+
+    /** 方块被破坏时回流物品用：可能为 null（未接入网络）。 */
+    @Nullable
+    public Network getNetworkOrNull() {
+        return network;
     }
 
     @Override

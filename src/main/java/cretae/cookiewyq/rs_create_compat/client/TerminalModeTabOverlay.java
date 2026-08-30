@@ -3,7 +3,6 @@ package cretae.cookiewyq.rs_create_compat.client;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import com.refinedmods.refinedstorage.common.content.Blocks;
-import com.refinedmods.refinedstorage.common.content.Items;
 import com.refinedmods.refinedstorage.common.content.Menus;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
@@ -138,7 +137,7 @@ public final class TerminalModeTabOverlay {
                 case 1 -> new ItemStack(Items.CRAFTING_TABLE);        // 样板终端
                 case 2 -> new ItemStack(Blocks.INSTANCE.getAutocrafterManager().getDefault().asItem());
                 case 3 -> new ItemStack(Blocks.INSTANCE.getAutocraftingMonitor().getDefault().asItem());
-                default -> new ItemStack(Items.INSTANCE.getPattern()); // 序列装配（样板）
+                default -> new ItemStack(com.refinedmods.refinedstorage.common.content.Items.INSTANCE.getPattern());
             };
         }
 

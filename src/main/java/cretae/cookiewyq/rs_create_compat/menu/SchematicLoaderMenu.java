@@ -37,27 +37,27 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
         final ItemStackHandler blueprint = loader != null ? loader.getBlueprintSlot() : new ItemStackHandler(1);
         final ItemStackHandler upgrades = loader != null ? loader.getUpgradeContainer() : new ItemStackHandler(6);
         final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(54);
-        // 蓝图槽
-        addSlot(new SlotItemHandler(blueprint, 0, 8, 8));
-        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
+        // 蓝图槽（Menu 槽位 x/y 各-1 以与背景 slot 精灵对齐）
+        addSlot(new SlotItemHandler(blueprint, 0, 7, 7));
+        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=186 y=5+i*18）
         for (int i = 0; i < 6; i++) {
-            addSlot(new SlotItemHandler(upgrades, i, 187, 6 + i * 18));
+            addSlot(new UpgradeSlot(upgrades, i, 186, 5 + i * 18));
         }
         // 主库存 54 格（6 行 × 9 列）
         for (int row = 0; row < 6; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new SlotItemHandler(loaderInv, col + row * 9, 8 + col * 18, 26 + row * 18));
+                addSlot(new SlotItemHandler(loaderInv, col + row * 9, 7 + col * 18, 25 + row * 18));
             }
         }
         // 玩家主物品栏
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 8 + col * 18, 140 + row * 18));
+                addSlot(new Slot(inventory, col + row * 9 + 9, 7 + col * 18, 139 + row * 18));
             }
         }
         // 快捷栏
         for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 8 + col * 18, 198));
+            addSlot(new Slot(inventory, col, 7 + col * 18, 197));
         }
     }
 

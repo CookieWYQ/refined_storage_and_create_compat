@@ -35,6 +35,10 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
         inventory.addListener(container -> setChanged());
     }
 
+    public QuantityKeeperNetworkNode getNode() {
+        return mainNetworkNode;
+    }
+
     public SimpleContainer getInventory() {
         return inventory;
     }

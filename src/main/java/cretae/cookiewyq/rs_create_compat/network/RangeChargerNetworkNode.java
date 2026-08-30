@@ -18,6 +18,11 @@ public class RangeChargerNetworkNode extends AbstractNetworkNode {
         this.blockEntity = blockEntity;
     }
 
+    @Nullable
+    public com.refinedmods.refinedstorage.api.network.Network getNetworkOrNull() {
+        return network;
+    }
+
     @Override
     public long getEnergyUsage() {
         // 网络能量消耗按需从 doWork 抽取，这里不设定固定消耗

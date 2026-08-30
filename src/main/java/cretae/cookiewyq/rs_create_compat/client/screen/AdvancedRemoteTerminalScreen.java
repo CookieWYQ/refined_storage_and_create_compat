@@ -84,51 +84,49 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, 0xFFFFFF, false);
-        // 能量
-        guiGraphics.drawString(font,
-            Component.translatable("gui.rs_create_compat.advanced_remote_terminal.energy",
-                menu.getEnergy(), menu.getMaxEnergy()),
-            8, 62, 0xA0A0A0, false);
+        int y = 62;
+        // 能量（创造版不显示）
+        if (!menu.isCreative()) {
+            guiGraphics.drawString(font,
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.energy",
+                    menu.getEnergy(), menu.getMaxEnergy()),
+                8, y, 0xA0A0A0, false);
+            y += 12;
+        }
         // 网络状态
         guiGraphics.drawString(font,
             Component.translatable("gui.rs_create_compat.advanced_remote_terminal.online",
                 menu.isOnline() ? "✓" : "✗"),
-            8, 74, menu.isOnline() ? 0x55FF55 : 0xFF5555, false);
-        // 没电提示：仿 RS 原版，界面照常打开但操作被禁用
-        final boolean noEnergy = menu.getEnergy() <= 0 && !menu.isCreative();
+            8, y, menu.isOnline() ? 0x55FF55 : 0xFF5555, false);
+        y += 12;
+        // 没电提示：仿 RS 原版，界面照常打开但操作被禁用（创造版不显示）
+        final boolean noEnergy = !menu.isCreative() && menu.getEnergy() <= 0;
         if (noEnergy) {
             guiGraphics.drawString(font,
                 Component.translatable("gui.rs_create_compat.advanced_remote_terminal.no_energy_hint"),
-                8, 86, 0xFF5555, false);
+                8, y, 0xFF5555, false);
+            y += 12;
         }
         // 当前模式信息
         final int mode = menu.getMode();
-        guiGraphics.drawString(font, Component.translatable(MODE_KEYS[mode]), 8, 96, 0xFFFFFF, false);
-        switch (mode) {
+        guiGraphics.drawString(font, Component.translatable(MODE_KEYS[mode]), 8, y, 0xFFFFFF, false);
+        y += 12;
+        final String info = switch (mode) {
             case AdvancedRemoteTerminalItem.MODE_GRID ->
-                guiGraphics.drawString(font,
-                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.grid.stored",
-                        menu.getStored()),
-                    8, 108, 0xA0A0A0, false);
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.grid.stored",
+                    menu.getStored()).getString();
             case AdvancedRemoteTerminalItem.MODE_PATTERNS ->
-                guiGraphics.drawString(font,
-                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.patterns.count",
-                        menu.getPatternCount()),
-                    8, 108, 0xA0A0A0, false);
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.patterns.count",
+                    menu.getPatternCount()).getString();
             case AdvancedRemoteTerminalItem.MODE_MANAGER ->
-                guiGraphics.drawString(font,
-                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.tasks.count",
-                        menu.getTaskCount()),
-                    8, 108, 0xA0A0A0, false);
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.tasks.count",
+                    menu.getTaskCount()).getString();
             case AdvancedRemoteTerminalItem.MODE_MONITOR ->
-                guiGraphics.drawString(font,
-                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.monitor.hint"),
-                    8, 108, 0xA0A0A0, false);
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.monitor.hint").getString();
             default ->
-                guiGraphics.drawString(font,
-                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.sequence.pending"),
-                    8, 108, 0xA0A0A0, false);
-        }
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.sequence.pending").getString();
+        };
+        guiGraphics.drawString(font, Component.literal(info), 8, y, 0xA0A0A0, false);
     }
 
     @Override

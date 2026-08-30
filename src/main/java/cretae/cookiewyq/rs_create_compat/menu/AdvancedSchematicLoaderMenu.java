@@ -2,6 +2,8 @@ package cretae.cookiewyq.rs_create_compat.menu;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedSchematicLoaderBlockEntity;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -14,12 +16,35 @@ import net.neoforged.neoforge.items.SlotItemHandler;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 高级蓝图加农炮装填器菜单：队列 27 格 + 库存 108 格 + 插件槽 6 格 + 玩家背包。
+ * 高级蓝图加农炮装填器菜单：队列 27 格 + 库存 108 格（仅 6 行可见，Screen 通过滚动条改 slot.y）
+ * + 插件槽 6 格 + 玩家背包。
  */
 public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
-    /** 按钮 id：0/1/2/3 = 开关，4 = 队列开始/停止。 */
+    public static final int VISIBLE_ROWS = 6;
+    public static final int TOTAL_ROWS = 12;
+    public static final int COLS = 9;
+    public static final int ROW_SIZE = 18;
+
+    /** 库存区域左上 y（背景图上的位置，与 Menu 库存槽初始 y 对应）。 */
+    public static final int STORAGE_BASE_Y = 97;
+    /** 升级槽起始 index。 */
+    public static final int UPGRADE_START = 0;
+    public static final int UPGRADE_COUNT = 6;
+    /** 蓝图队列起始 index。 */
+    public static final int QUEUE_START = 6;
+    public static final int QUEUE_COUNT = 27;
+    /** 主库存起始 index（12 行 × 9）。 */
+    public static final int STORAGE_START = 33;
+    public static final int STORAGE_COUNT = TOTAL_ROWS * COLS;
+    /** 玩家背包起始 index。 */
+    public static final int PLAYER_START = STORAGE_START + STORAGE_COUNT;
+
     private final AdvancedSchematicLoaderBlockEntity loader;
     private final ContainerData data;
+    /** 主库存槽（按 menu slot 引用，Screen 用滚动条改它们的 y）。 */
+    private final List<Slot> storageSlots = new ArrayList<>(STORAGE_COUNT);
+    /** 主库存槽的基准 y（每行 18），Screen 用它 + scrollOffset 重算 y。 */
+    private final int[] storageBaseY = new int[STORAGE_COUNT];
 
     public AdvancedSchematicLoaderMenu(final int id, final Inventory inventory) {
         this(id, inventory, null);
@@ -33,35 +58,41 @@ public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
         this.data = loader != null ? loader.getContainerData() : new SimpleContainerData(5);
         addDataSlots(data);
 
-        // 客户端重建时使用空容器，保证槽位数与服务端一致（内容由数据包同步）
         final ItemStackHandler upgrades = loader != null ? loader.getUpgradeContainer() : new ItemStackHandler(6);
         final ItemStackHandler queue = loader != null ? loader.getQueue() : new ItemStackHandler(27);
         final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(108);
-        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
+
+        // 插件槽（6 格竖排，界面右侧独立栏）
         for (int i = 0; i < 6; i++) {
-            addSlot(new SlotItemHandler(upgrades, i, 187, 6 + i * 18));
+            addSlot(new UpgradeSlot(upgrades, i, 186, 5 + i * 18));
         }
         // 蓝图队列 27 格（3 行 × 9 列）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new SlotItemHandler(queue, col + row * 9, 8 + col * 18, 30 + row * 18));
+                addSlot(new SlotItemHandler(queue, col + row * 9, 7 + col * 18, 29 + row * 18));
             }
         }
-        // 主库存 108 格（12 行 × 9 列）
-        for (int row = 0; row < 12; row++) {
-            for (int col = 0; col < 9; col++) {
-                addSlot(new SlotItemHandler(loaderInv, col + row * 9, 8 + col * 18, 98 + row * 18));
+        // 主库存 108 格：逻辑上 12 行，初始 y 全部放到前 6 行位置，Screen 会按滚动偏移刷新
+        for (int row = 0; row < TOTAL_ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                final int idx = col + row * COLS;
+                final int baseY = STORAGE_BASE_Y + row * ROW_SIZE;
+                storageBaseY[idx] = baseY;
+                // 初始 y = 基准 y（Screen 会在 init / 滚动时覆盖为基准 y - scrollOffset）
+                final SlotItemHandler slot = new SlotItemHandler(loaderInv, idx, 7 + col * 18, baseY);
+                storageSlots.add(slot);
+                addSlot(slot);
             }
         }
-        // 玩家主物品栏
+        // 玩家主物品栏（3 行 × 9）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 8 + col * 18, 348 + row * 18));
+                addSlot(new Slot(inventory, col + row * 9 + 9, 7 + col * 18, 216 + row * 18));
             }
         }
         // 快捷栏
         for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 8 + col * 18, 406));
+            addSlot(new Slot(inventory, col, 7 + col * 18, 274));
         }
     }
 
@@ -69,6 +100,21 @@ public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
                                                      final Inventory inventory,
                                                      final AdvancedSchematicLoaderBlockEntity loader) {
         return new AdvancedSchematicLoaderMenu(id, inventory, loader);
+    }
+
+    /** @return 主库存槽数量。 */
+    public int getStorageSlotCount() {
+        return storageSlots.size();
+    }
+
+    /** 按 index 获取主库存槽。 */
+    public Slot getStorageSlot(final int idx) {
+        return storageSlots.get(idx);
+    }
+
+    /** 主库存槽的基准 y（未滚动时的 y）。 */
+    public int getStorageBaseY(final int idx) {
+        return storageBaseY[idx];
     }
 
     @Override
@@ -114,11 +160,12 @@ public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
         if (slot != null && slot.hasItem()) {
             final ItemStack stackInSlot = slot.getItem();
             stack = stackInSlot.copy();
-            if (index < 141) {
-                if (!moveItemStackTo(stackInSlot, 141, 141 + 36, true)) {
+            final int playerEnd = PLAYER_START + 36;
+            if (index < PLAYER_START) {
+                if (!moveItemStackTo(stackInSlot, PLAYER_START, playerEnd, true)) {
                     return ItemStack.EMPTY;
                 }
-            } else if (!moveItemStackTo(stackInSlot, 0, 141, false)) {
+            } else if (!moveItemStackTo(stackInSlot, 0, PLAYER_START, false)) {
                 return ItemStack.EMPTY;
             }
             if (stackInSlot.isEmpty()) {

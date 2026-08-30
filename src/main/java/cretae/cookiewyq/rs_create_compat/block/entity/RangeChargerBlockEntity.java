@@ -51,6 +51,10 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         return energyStorage;
     }
 
+    public RangeChargerNetworkNode getNode() {
+        return mainNetworkNode;
+    }
+
     /**
      * 供菜单同步的实时数据：0/1/2 = 三轴范围，3/4 = 能量/上限。
      */

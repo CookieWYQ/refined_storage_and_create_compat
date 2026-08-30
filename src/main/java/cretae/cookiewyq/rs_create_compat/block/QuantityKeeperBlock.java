@@ -3,11 +3,14 @@ package cretae.cookiewyq.rs_create_compat.block;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.Container;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
@@ -17,6 +20,10 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
+import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
+import com.refinedmods.refinedstorage.api.core.Action;
+import com.refinedmods.refinedstorage.api.storage.Actor;
+import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import com.refinedmods.refinedstorage.common.support.network.NetworkNodeBlockEntityTicker;
 
 /**
@@ -75,4 +82,41 @@ public class QuantityKeeperBlock extends Block implements EntityBlock {
             Component.translatable("block.rs_create_compat.quantity_keeper")
         );
     }
+
+    /** 方块被破坏时：优先回流物品到 RS 网络，剩余部分掉落世界。 */
+    @Override
+    public void onRemove(final BlockState state,
+                         final Level level,
+                         final BlockPos pos,
+                         final BlockState newState,
+                         final boolean movedByPiston) {
+        if (!state.is(newState.getBlock())
+            && level.getBlockEntity(pos) instanceof QuantityKeeperBlockEntity keeper) {
+            final var network = keeper.getNode().getNetworkOrNull();
+            pushOrDrop(level, pos, network, keeper.getInventory());
+        }
+        super.onRemove(state, level, pos, newState, movedByPiston);
+    }
+
+    private static void pushOrDrop(final Level level,
+                                   final BlockPos pos,
+                                   @Nullable final com.refinedmods.refinedstorage.api.network.Network network,
+                                   final Container container) {
+        final StorageNetworkComponent storage = network != null
+            ? network.getComponent(StorageNetworkComponent.class)
+            : null;
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack stack = container.getItem(i).copy();
+            if (stack.isEmpty()) continue;
+            container.setItem(i, ItemStack.EMPTY);
+            if (storage != null) {
+                final var key = new ItemResource(stack.getItem(), DataComponentPatch.EMPTY);
+                final long inserted = storage.insert(key, stack.getCount(), Action.EXECUTE, Actor.EMPTY);
+                if (inserted >= stack.getCount()) continue;
+                stack = new ItemStack(stack.getItem(), (int) (stack.getCount() - inserted));
+            }
+            Block.popResource(level, pos, stack);
+        }
+    }
 }
+

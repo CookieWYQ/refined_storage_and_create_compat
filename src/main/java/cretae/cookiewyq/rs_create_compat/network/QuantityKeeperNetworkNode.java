@@ -31,6 +31,11 @@ public class QuantityKeeperNetworkNode extends AbstractNetworkNode {
         this.blockEntity = blockEntity;
     }
 
+    @Nullable
+    public com.refinedmods.refinedstorage.api.network.Network getNetworkOrNull() {
+        return network;
+    }
+
     @Override
     public long getEnergyUsage() {
         return Config.quantityKeeperEnergyUsage;
