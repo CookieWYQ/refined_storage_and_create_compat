@@ -171,7 +171,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         return handled || super.mouseScrolled(x, y, z, delta);
     }
 
-    /** 空升级槽悬停提示：升级槽（UpgradeSlot 实例）为空时显示可放入的升级种类。 */
+    /** 所有槽位 tooltip：物品槽由 super 渲染；空升级槽补充可放升级提示。 */
     @Override
     protected void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         super.renderTooltip(guiGraphics, mouseX, mouseY);
