@@ -33,8 +33,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 @EventBusSubscriber(modid = RS_Create_Compat.MODID, value = Dist.CLIENT)
 @SuppressWarnings({"deprecation", "removal"})
 public final class TerminalModeTabOverlay {
-    private static final int TAB_W = 32;
-    private static final int TAB_H = 26;
+    private static final int TAB_W = 24;
+    private static final int TAB_H = 22;
     private static final String[] MODE_KEYS = {
         "gui.rs_create_compat.advanced_remote_terminal.mode.grid",
         "gui.rs_create_compat.advanced_remote_terminal.mode.patterns",

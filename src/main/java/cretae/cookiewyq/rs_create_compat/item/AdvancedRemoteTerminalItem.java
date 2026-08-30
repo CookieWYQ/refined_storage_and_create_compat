@@ -1,6 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.item;
 
-import com.refinedmods.refinedstorage.api.network.Network;
 import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
 import com.refinedmods.refinedstorage.common.Platform;
@@ -141,7 +140,12 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         final long capacity = type == Type.CREATIVE
             ? Integer.MAX_VALUE
             : Config.advancedRemoteTerminalEnergyCapacity;
-        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(new EnergyStorageImpl(capacity), stack);
+        final EnergyStorageImpl impl = new EnergyStorageImpl(capacity);
+        // 满电版 / 创造版：直接让存储满电，不依赖物品组件（组件可能因创建方式不同而未写入）
+        if (type != Type.NORMAL) {
+            impl.receive(capacity, com.refinedmods.refinedstorage.api.core.Action.EXECUTE);
+        }
+        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(impl, stack);
     }
 
     @Override
