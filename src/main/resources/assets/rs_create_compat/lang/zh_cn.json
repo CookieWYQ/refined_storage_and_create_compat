@@ -52,5 +52,5 @@
   "gui.rs_create_compat.advanced_remote_terminal.tasks.count": "自动合成任务：%s",
   "gui.rs_create_compat.advanced_remote_terminal.sequence.pending": "序列装配终端功能开发中",
   "gui.rs_create_compat.advanced_remote_terminal.monitor.hint": "右键打开 RS 自动合成仓监视器",
-  "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）",
+  "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）"
 }
