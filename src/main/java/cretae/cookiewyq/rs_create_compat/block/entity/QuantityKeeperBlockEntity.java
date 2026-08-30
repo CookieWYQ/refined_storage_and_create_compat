@@ -89,7 +89,12 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
     }
 
     @Override
-    protected void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public net.minecraft.network.chat.Component getName() {
+        return getBlockState().getBlock().getName();
+    }
+
+    @Override
+    public void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.putInt("TargetAmount", targetAmount);
         tag.putBoolean("DestroyOverflow", destroyOverflow);
@@ -97,7 +102,7 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
     }
 
     @Override
-    protected void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
         targetAmount = Math.max(1, tag.getInt("TargetAmount"));
         destroyOverflow = tag.getBoolean("DestroyOverflow");

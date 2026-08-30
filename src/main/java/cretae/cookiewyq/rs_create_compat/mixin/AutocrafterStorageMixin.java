@@ -93,7 +93,7 @@ public abstract class AutocrafterStorageMixin {
                 }
             } else if (resource instanceof FluidResource fluidResource) {
                 rscc$outputTank.fill(new FluidStack(fluidResource.fluid(), (int) amount),
-                    net.neoforged.neoforge.fluids.FluidAction.EXECUTE);
+                    net.neoforged.neoforge.fluids.capability.IFluidHandler.FluidAction.EXECUTE);
             }
         }
     }
@@ -115,8 +115,10 @@ public abstract class AutocrafterStorageMixin {
             rscc$outputStorage.deserializeNBT(provider, tag.getCompound("rscc_output"));
         }
         if (tag.contains("rscc_output_fluid")) {
-            FluidStack.parseOptional(provider, tag.getCompound("rscc_output_fluid"))
-                .ifPresent(fluid -> rscc$outputTank.setFluid(fluid));
+            final FluidStack parsed = FluidStack.parseOptional(provider, tag.getCompound("rscc_output_fluid"));
+            if (!parsed.isEmpty()) {
+                rscc$outputTank.setFluid(parsed);
+            }
         }
     }
 }

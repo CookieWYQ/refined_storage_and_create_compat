@@ -145,6 +145,11 @@ public class AdvancedSchematicLoaderBlockEntity extends AbstractBaseNetworkNodeC
         return false;
     }
 
+    @Override
+    public net.minecraft.network.chat.Component getName() {
+        return getBlockState().getBlock().getName();
+    }
+
     /** 由网络节点每 tick 驱动。 */
     public void doLoaderWork(final Network network) {
         final Level level = getLevel();
@@ -348,7 +353,7 @@ public class AdvancedSchematicLoaderBlockEntity extends AbstractBaseNetworkNodeC
     }
 
     @Override
-    protected void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.put("Inventory", inventory.serializeNBT(registries));
         tag.put("Queue", queue.serializeNBT(registries));
@@ -361,7 +366,7 @@ public class AdvancedSchematicLoaderBlockEntity extends AbstractBaseNetworkNodeC
     }
 
     @Override
-    protected void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
         if (tag.contains("Inventory")) {
             inventory.deserializeNBT(registries, tag.getCompound("Inventory"));

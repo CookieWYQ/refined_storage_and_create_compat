@@ -50,7 +50,7 @@ public abstract class FilterTagMixin {
                         Registries.ITEM,
                         ResourceLocation.parse(tag.substring(1))
                     );
-                    if (BuiltInRegistries.ITEM.get(itemResource.item()).is(tagKey)) {
+                    if (itemResource.item().is(tagKey)) {
                         matchedTag = true;
                         break;
                     }

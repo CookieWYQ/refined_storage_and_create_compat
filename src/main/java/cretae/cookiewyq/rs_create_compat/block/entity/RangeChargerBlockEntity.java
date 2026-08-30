@@ -113,6 +113,11 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         return false;
     }
 
+    @Override
+    public net.minecraft.network.chat.Component getName() {
+        return getBlockState().getBlock().getName();
+    }
+
     /**
      * 由网络节点 ticker 每 tick 调用：先抽取网络能量，再执行充电扫描。
      */
@@ -236,7 +241,7 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
     }
 
     @Override
-    protected void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.putInt("RangeX", rangeX);
         tag.putInt("RangeY", rangeY);
@@ -245,7 +250,7 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
     }
 
     @Override
-    protected void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
+    public void loadAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
         rangeX = Math.clamp(tag.getInt("RangeX"), 1, 100);
         rangeY = Math.clamp(tag.getInt("RangeY"), 1, 100);
