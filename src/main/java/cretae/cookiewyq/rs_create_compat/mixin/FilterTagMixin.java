@@ -75,7 +75,7 @@ public abstract class FilterTagMixin {
             final String tag = filterStack.get(RS_Create_Compat.TAG_FILTER);
             if (tag != null && tag.startsWith("#")) {
                 final TagKey<Item> tagKey = TagKey.create(Registries.ITEM, ResourceLocation.parse(tag.substring(1)));
-                if (itemResource.item().is(tagKey)) {
+                if (itemResource.item().builtInRegistryHolder().is(tagKey)) {
                     matched = true;
                     break;
                 }

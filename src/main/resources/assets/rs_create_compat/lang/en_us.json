@@ -51,5 +51,6 @@
   "gui.rs_create_compat.advanced_remote_terminal.patterns.count": "Patterns: %s",
   "gui.rs_create_compat.advanced_remote_terminal.tasks.count": "Autocrafting tasks: %s",
   "gui.rs_create_compat.advanced_remote_terminal.sequence.pending": "Sequence terminal is under development",
-  "gui.rs_create_compat.advanced_remote_terminal.monitor.hint": "Right-click to open the RS Autocrafting Monitor"
+  "gui.rs_create_compat.advanced_remote_terminal.monitor.hint": "Right-click to open the RS Autocrafting Monitor",
+  "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "Failed to open the RS Autocrafting Monitor (version mismatch)",
 }

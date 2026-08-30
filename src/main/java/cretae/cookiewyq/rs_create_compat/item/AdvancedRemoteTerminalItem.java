@@ -5,14 +5,11 @@ import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
 import com.refinedmods.refinedstorage.common.Platform;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
-import com.refinedmods.refinedstorage.common.api.autocrafting.AutocraftingMonitor;
 import com.refinedmods.refinedstorage.common.api.support.energy.AbstractNetworkEnergyItem;
 import com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemContext;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedRemoteTerminalMenu;
-import cretae.cookiewyq.rs_create_compat.mixin.WirelessAutocraftingMonitorMixin;
-import cretae.cookiewyq.rs_create_compat.mixin.WirelessAutocraftingMonitorProviderMixin;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.MenuProvider;
@@ -20,8 +17,11 @@ import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,6 +37,14 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     public static final int MODE_MANAGER = 2;
     public static final int MODE_MONITOR = 3;
     public static final int MODE_SEQUENCE = 4;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AdvancedRemoteTerminalItem.class);
+    private static final String RS_MONITOR_CLASS =
+        "com.refinedmods.refinedstorage.common.autocrafting.monitor.WirelessAutocraftingMonitor";
+    private static final String RS_MONITOR_IFACE =
+        "com.refinedmods.refinedstorage.common.autocrafting.monitor.AutocraftingMonitor";
+    private static final String RS_MONITOR_PROVIDER_CLASS =
+        "com.refinedmods.refinedstorage.common.autocrafting.monitor.WirelessAutocraftingMonitorExtendedMenuProvider";
 
     public AdvancedRemoteTerminalItem() {
         super(
@@ -100,12 +108,7 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         // Shift+右键强制打开终端界面以切换模式。
         final int mode = AdvancedRemoteTerminalItem.getMode(stack.get());
         if (!player.isShiftKeyDown() && mode == MODE_MONITOR) {
-            final AutocraftingMonitor monitor = WirelessAutocraftingMonitorMixin.rscc$create(context);
-            final Component monitorName = name != null ? name
-                : Component.translatable("item.rs_create_compat.advanced_remote_terminal");
-            final MenuProvider provider =
-                WirelessAutocraftingMonitorProviderMixin.rscc$create(monitorName, monitor, slotReference);
-            Platform.INSTANCE.getMenuOpener().openMenu(player, provider);
+            openAutocraftingMonitor(name, player, slotReference, context);
             return;
         }
 
@@ -113,5 +116,37 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             (id, inventory, p) -> new AdvancedRemoteTerminalMenu(id, inventory, network.get(), stack.get()),
             name != null ? name : Component.translatable("item.rs_create_compat.advanced_remote_terminal")
         ));
+    }
+
+    /**
+     * 通过反射打开 RS 原版自动合成仓监视器界面。
+     * RS 的 WirelessAutocraftingMonitor 及其界面提供者为包内私有，无法直接引用，
+     * 因此使用反射构造（若 RS 类名变更会优雅降级为提示信息）。
+     */
+    private static void openAutocraftingMonitor(@Nullable final Component name,
+                                                final ServerPlayer player,
+                                                final SlotReference slotReference,
+                                                final NetworkItemContext context) {
+        try {
+            final Class<?> monitorClass = Class.forName(RS_MONITOR_CLASS);
+            final Constructor<?> monitorCtor = monitorClass.getDeclaredConstructor(NetworkItemContext.class);
+            monitorCtor.setAccessible(true);
+            final Object monitor = monitorCtor.newInstance(context);
+
+            final Class<?> monitorIface = Class.forName(RS_MONITOR_IFACE);
+            final Class<?> providerClass = Class.forName(RS_MONITOR_PROVIDER_CLASS);
+            final Constructor<?> providerCtor = providerClass.getDeclaredConstructor(
+                Component.class, monitorIface, SlotReference.class);
+            providerCtor.setAccessible(true);
+            final Component monitorName = name != null ? name
+                : Component.translatable("item.rs_create_compat.advanced_remote_terminal");
+            final Object provider = providerCtor.newInstance(monitorName, monitor, slotReference);
+            Platform.INSTANCE.getMenuOpener().openMenu(player, (MenuProvider) provider);
+        } catch (ReflectiveOperationException e) {
+            LOGGER.error("Failed to open RS autocrafting monitor", e);
+            player.displayClientMessage(
+                Component.translatable("item.rs_create_compat.advanced_remote_terminal.monitor_failed"),
+                true);
+        }
     }
 }
