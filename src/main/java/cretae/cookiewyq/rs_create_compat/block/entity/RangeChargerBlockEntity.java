@@ -181,8 +181,8 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
 
     /**
      * 扫描范围内所有已加载方块实体并充电。
-     * 每 tick 全量遍历（只迭代实际存在的方块实体，性能好），
-     * 最多给 maxTargets 个目标充电 —— 解决分片扫描导致方块充电过慢的问题。
+     * 遍历范围内已加载的 chunk（LevelChunk.getBlockEntities() 返回 Map<BlockPos, BlockEntity>），
+     * 每 tick 全量给最多 maxTargets 个目标充电 —— 解决分片扫描导致方块充电过慢的问题。
      */
     private void scanBlocks(final Level level) {
         final int halfX = rangeX / 2;
@@ -195,22 +195,39 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         final int minZ = worldPosition.getZ() - halfZ;
         final int maxZ = worldPosition.getZ() + halfZ;
 
+        final int minChunkX = minX >> 4;
+        final int maxChunkX = maxX >> 4;
+        final int minChunkZ = minZ >> 4;
+        final int maxChunkZ = maxZ >> 4;
+
         int targets = 0;
-        for (final BlockEntity blockEntity : level.getBlockEntities()) {
-            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                return;
-            }
-            final BlockPos pos = blockEntity.getBlockPos();
-            if (pos.getX() < minX || pos.getX() > maxX
-                || pos.getY() < minY || pos.getY() > maxY
-                || pos.getZ() < minZ || pos.getZ() > maxZ) {
-                continue;
-            }
-            if (pos.equals(worldPosition)) {
-                continue; // 跳过自身
-            }
-            if (chargeBlock(level, pos, blockEntity)) {
-                targets++;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                    return;
+                }
+                // 仅处理已加载的 chunk，避免触发区块加载
+                if (!level.isLoaded(new BlockPos(chunkX * 16, worldPosition.getY(), chunkZ * 16))) {
+                    continue;
+                }
+                final var chunk = level.getChunk(chunkX, chunkZ);
+                for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                    if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                        return;
+                    }
+                    final BlockPos pos = entry.getKey();
+                    if (pos.getX() < minX || pos.getX() > maxX
+                        || pos.getY() < minY || pos.getY() > maxY
+                        || pos.getZ() < minZ || pos.getZ() > maxZ) {
+                        continue;
+                    }
+                    if (pos.equals(worldPosition)) {
+                        continue; // 跳过自身
+                    }
+                    if (chargeBlock(level, pos, entry.getValue())) {
+                        targets++;
+                    }
+                }
             }
         }
     }
