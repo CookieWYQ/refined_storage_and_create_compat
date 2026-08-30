@@ -17,6 +17,11 @@ bg.png 结构（256x256）：
 
     # 完整容器（含玩家背包 3x9 + 快捷栏区域由 bg.png 下半部拼接）
     python make_gui_bg.py --out ..\\src\\main\\resources\\assets\\rs_create_compat\\textures\\gui\\inventory.png --width 176 --height 166 --container-height 84 --with-inventory --slot-cols 9 --slot-rows 3
+
+    # 自定义槽位网格（可多次 --slots，格式 X,Y,COLS,ROWS，间距 18px）
+    python make_gui_bg.py --out ..\\gui\\loader.png --width 208 --height 222 --container-height 140 --with-inventory \
+        --slot-start-x 8 --slot-start-y 140 --slot-cols 9 --slot-rows 3 \
+        --slots "8,8,1,1" "35,8,6,1" "8,26,9,6" "8,198,9,1"
 """
 import argparse
 import os
@@ -110,17 +115,29 @@ def main():
     parser.add_argument("--slot-cols", type=int, default=9)
     parser.add_argument("--slot-rows", type=int, default=3)
     parser.add_argument("--slot-gap", type=int, default=18)
+    parser.add_argument("--slots", action="append", default=[], metavar="X,Y,COLS,ROWS",
+                        help="自定义槽位网格，可多次指定（如 --slots \"8,8,1,1\" \"8,26,9,6\"）")
     args = parser.parse_args()
 
     bg = Image.open(args.bg).convert("RGBA")
+    slot_img = Image.open(args.slot).convert("RGBA").crop((0, 0, SLOT_SIZE, SLOT_SIZE))
     container_h = args.container_height if args.container_height else args.height
 
     dst = Image.new("RGBA", (args.width, args.height), (0, 0, 0, 0))
     draw_container(dst, bg, args.width, min(container_h, args.height))
     if args.with_inventory:
-        slot_img = Image.open(args.slot).convert("RGBA").crop((0, 0, SLOT_SIZE, SLOT_SIZE))
         draw_inventory(dst, bg, args.width, min(container_h, args.height), slot_img,
                        args.slot_start_x, args.slot_start_y, args.slot_cols, args.slot_rows, args.slot_gap)
+
+    # 自定义槽位网格（与 Menu 槽位坐标一一对应）
+    for spec in args.slots:
+        sx, sy, cols, rows = (int(v) for v in spec.split(","))
+        for row in range(rows):
+            for col in range(cols):
+                x, y = sx + col * SLOT_SIZE, sy + row * SLOT_SIZE
+                if x + SLOT_SIZE > args.width or y + SLOT_SIZE > args.height:
+                    continue
+                dst.paste(slot_img, (x, y))
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     dst.save(args.out)

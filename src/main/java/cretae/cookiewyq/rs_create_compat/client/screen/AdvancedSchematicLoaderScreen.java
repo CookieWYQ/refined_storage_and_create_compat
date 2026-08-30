@@ -23,7 +23,7 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
                                          final Component title) {
         super(menu, inventory, title);
         this.imageWidth = 176;
-        this.imageHeight = 410;
+        this.imageHeight = 428;
         this.inventoryLabelY = 10000;
     }
 
@@ -31,16 +31,16 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     protected void init() {
         super.init();
         addRenderableWidget(new Button.Builder(Component.literal("A"), btn -> sendButton(0))
-            .bounds(leftPos + 8, topPos + 404, 18, 14).build());
+            .bounds(leftPos + 8, topPos + 410, 18, 14).build());
         addRenderableWidget(new Button.Builder(Component.literal("D"), btn -> sendButton(1))
-            .bounds(leftPos + 28, topPos + 404, 18, 14).build());
+            .bounds(leftPos + 28, topPos + 410, 18, 14).build());
         addRenderableWidget(new Button.Builder(Component.literal("R"), btn -> sendButton(2))
-            .bounds(leftPos + 48, topPos + 404, 18, 14).build());
+            .bounds(leftPos + 48, topPos + 410, 18, 14).build());
         addRenderableWidget(new Button.Builder(Component.literal("G"), btn -> sendButton(3))
-            .bounds(leftPos + 68, topPos + 404, 18, 14).build());
+            .bounds(leftPos + 68, topPos + 410, 18, 14).build());
         addRenderableWidget(new Button.Builder(Component.translatable("gui.rs_create_compat.advanced_schematic_loader.start"),
             btn -> sendButton(4))
-            .bounds(leftPos + 100, topPos + 404, 68, 14).build());
+            .bounds(leftPos + 100, topPos + 410, 68, 14).build());
     }
 
     private void sendButton(final int id) {
@@ -51,20 +51,21 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 176, 410);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 176, 428);
     }
 
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, 0xFFFFFF, false);
+        // 队列 / 存储标签（背景已绘制槽位，标签仅作提示）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.queue"),
             8, 20, 0xA0A0A0, false);
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.storage"),
-            8, 82, 0xA0A0A0, false);
-        // 状态行
+            8, 88, 0xA0A0A0, false);
+        // 状态文字（标题行右侧）
         final String state = menu.isQueueRunning() ? "RUNNING" : "STOPPED";
         guiGraphics.drawString(font, Component.literal(state),
-            8, 405, menu.isQueueRunning() ? 0x55FF55 : 0xFF5555, false);
+            118, 6, menu.isQueueRunning() ? 0x55FF55 : 0xFF5555, false);
     }
 
     @Override

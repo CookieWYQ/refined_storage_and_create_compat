@@ -15,8 +15,6 @@ import net.minecraft.world.entity.player.Inventory;
 public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoaderMenu> {
     private static final ResourceLocation TEXTURE =
         ResourceLocation.fromNamespaceAndPath(RS_Create_Compat.MODID, "textures/gui/schematic_loader.png");
-    private static final ResourceLocation SLOT_SPRITE =
-        ResourceLocation.withDefaultNamespace("container/slot");
 
     public SchematicLoaderScreen(final SchematicLoaderMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
@@ -48,14 +46,8 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
+        // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
         guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 208, 222);
-        // 蓝图槽与插件槽背景
-        guiGraphics.blitSprite(SLOT_SPRITE, leftPos + 171, topPos + 16, 18, 18);
-        for (int i = 0; i < 6; i++) {
-            final int x = 171 + (i % 2) * 18;
-            final int y = 39 + (i / 2) * 18;
-            guiGraphics.blitSprite(SLOT_SPRITE, leftPos + x, topPos + y, 18, 18);
-        }
     }
 
     @Override
