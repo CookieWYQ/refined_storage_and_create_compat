@@ -76,15 +76,31 @@ public final class TerminalModeTabOverlay {
             .createInventorySlotReference(player, hand);
         final int currentMode = AdvancedRemoteTerminalItem.getMode(player.getItemInHand(hand));
         final int count = AdvancedRemoteTerminalItem.MODE_COUNT;
+        // imageWidth / imageHeight 为 AbstractContainerScreen 的 protected 字段，外部无法直接访问，用反射取值
+        final int guiW = guiSize(containerScreen, "imageWidth", 176);
+        final int guiH = guiSize(containerScreen, "imageHeight", 166);
         for (int i = 0; i < count; i++) {
             final int mode = i;
-            final int x = containerScreen.getGuiLeft() + containerScreen.imageWidth - 21;
-            final int y = containerScreen.getGuiTop() + containerScreen.imageHeight
+            final int x = containerScreen.getGuiLeft() + guiW - 21;
+            final int y = containerScreen.getGuiTop() + guiH
                 - (TAB_H * count) + (TAB_H * i);
             event.addListener(new TerminalModeTabButton(
                 x, y, mode, currentMode == mode,
                 Component.translatable(MODE_KEYS[mode]),
                 () -> sendSwitch(player, slotReference, mode)));
+        }
+    }
+
+    /** 反射读取 AbstractContainerScreen 的 protected 尺寸字段，失败时返回默认值。 */
+    private static int guiSize(final Object screen, final String fieldName, final int fallback) {
+        try {
+            final java.lang.reflect.Field field =
+                net.minecraft.client.gui.screens.inventory.AbstractContainerScreen.class
+                    .getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.getInt(screen);
+        } catch (final ReflectiveOperationException e) {
+            return fallback;
         }
     }
 
