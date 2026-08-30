@@ -70,7 +70,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                                          final BlockState state,
                                          final int capacity,
                                          final boolean withQueue) {
-        super((BlockEntityType<Object>) blockEntityType, pos, state, new SchematicLoaderNetworkNode());
+        super(blockEntityType, pos, state, new SchematicLoaderNetworkNode());
         this.inventory = new ItemStackHandler(capacity);
         this.queue = withQueue ? new ItemStackHandler(27) : new ItemStackHandler(0);
         this.mainNetworkNode.setBlockEntity(this);

@@ -10,6 +10,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 
+import java.util.List;
+
 /**
  * 高级远程多功能终端界面：模式切换按钮 + 当前模式信息展示。
  * 监视器模式为特殊入口：普通右键打开 RS 原版自动合成仓监视器（见物品 use 逻辑）。
@@ -55,9 +57,13 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
     }
 
     @Override
-    public void tick() {
-        super.tick();
-        // 仿 RS 原版：没电时界面打开但操作禁用（创造版无视电量）
+    public void render(final GuiGraphics guiGraphics, final int mouseX, final int mouseY, final float partialTick) {
+        updateButtonStates();
+        super.render(guiGraphics, mouseX, mouseY, partialTick);
+    }
+
+    /** 仿 RS 原版：没电时界面打开但操作禁用（创造版无视电量）。 */
+    private void updateButtonStates() {
         final boolean noEnergy = menu.getEnergy() <= 0 && !menu.isCreative();
         for (final Button button : modeButtons) {
             button.active = !noEnergy;
