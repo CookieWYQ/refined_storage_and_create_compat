@@ -53,5 +53,6 @@
   "item.rs_create_compat.universal_storage_disk.help": "可同时存入物品、流体与气体的通用储存磁盘。",
   "itemGroup.rs_create_compat": "精致存储&机械动力：兼容与改善",
   "item.rs_create_compat.advanced_remote_terminal.mode_failed": "无法打开该模式界面",
-  "gui.rs_create_compat.quantity_keeper.target_label": "目标数量"
+  "gui.rs_create_compat.quantity_keeper.target_label": "目标数量",
+  "item.rs_create_compat.advanced_remote_terminal.mode_unavailable": "该模式暂不可用（RS 原版无对应无线界面）"
 }

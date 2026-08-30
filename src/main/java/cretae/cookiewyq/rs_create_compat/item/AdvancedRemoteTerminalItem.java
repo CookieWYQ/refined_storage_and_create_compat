@@ -2,27 +2,19 @@ package cretae.cookiewyq.rs_create_compat.item;
 
 import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
-import com.refinedmods.refinedstorage.common.Platform;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
-import com.refinedmods.refinedstorage.common.api.grid.Grid;
 import com.refinedmods.refinedstorage.common.api.support.HelpTooltipComponent;
 import com.refinedmods.refinedstorage.common.api.support.energy.AbstractNetworkEnergyItem;
 import com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemContext;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import com.refinedmods.refinedstorage.common.content.Items;
-import com.refinedmods.refinedstorage.common.grid.GridData;
-import com.refinedmods.refinedstorage.common.support.containermenu.ExtendedMenuProvider;
 import cretae.cookiewyq.rs_create_compat.Config;
-import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.tooltip.TooltipComponent;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -50,20 +42,6 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     public static final int MODE_COUNT = 5;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AdvancedRemoteTerminalItem.class);
-    private static final String RS_PATTERN_GRID_MENU =
-        "com.refinedmods.refinedstorage.common.autocrafting.patterngrid.PatternGridContainerMenu";
-    private static final String RS_PATTERN_GRID_DATA =
-        "com.refinedmods.refinedstorage.common.autocrafting.patterngrid.PatternGridData";
-    private static final String RS_PATTERN_TYPE =
-        "com.refinedmods.refinedstorage.common.autocrafting.patterngrid.PatternType";
-    private static final String RS_PROCESSING_INPUT_DATA =
-        "com.refinedmods.refinedstorage.common.autocrafting.patterngrid.ProcessingInputData";
-    private static final String RS_RESOURCE_CONTAINER_DATA =
-        "com.refinedmods.refinedstorage.common.support.resource.ResourceContainerData";
-    private static final String RS_MANAGER_MENU =
-        "com.refinedmods.refinedstorage.common.autocrafting.autocraftermanager.AutocrafterManagerContainerMenu";
-    private static final String RS_MANAGER_DATA =
-        "com.refinedmods.refinedstorage.common.autocrafting.autocraftermanager.AutocrafterManagerData";
 
     public enum Type {
         /** 普通版：需要电量，没电时界面禁用操作。 */
@@ -140,12 +118,8 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         final long capacity = type == Type.CREATIVE
             ? Integer.MAX_VALUE
             : Config.advancedRemoteTerminalEnergyCapacity;
-        final EnergyStorageImpl impl = new EnergyStorageImpl(capacity);
-        // 满电版 / 创造版：直接让存储满电，不依赖物品组件（组件可能因创建方式不同而未写入）
-        if (type != Type.NORMAL) {
-            impl.receive(capacity, com.refinedmods.refinedstorage.api.core.Action.EXECUTE);
-        }
-        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(impl, stack);
+        // 初始电量由 getDefaultInstance 写入的能量组件决定（满电/创造版默认满电，普通版无电）
+        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(new EnergyStorageImpl(capacity), stack);
     }
 
     @Override
@@ -178,6 +152,15 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         openModeScreen(player, stackOpt.get(), slotReference);
     }
 
+    /**
+     * 该模式是否有对应的 RS 原版无线界面可复用。
+     * 样板终端 / 合成仓管理器 / 序列装配没有 RS 原版无线版（data 版菜单服务端无法支撑，打开即关闭），
+     * 故只保留合成终端与合成仓监视两个可靠模式。
+     */
+    public static boolean isModeSupported(final int mode) {
+        return mode == MODE_GRID || mode == MODE_MONITOR;
+    }
+
     /** 根据物品当前模式打开对应 RS 原版界面。 */
     public void openModeScreen(final ServerPlayer player, final ItemStack stack, final SlotReference slotReference) {
         final int mode = getMode(stack);
@@ -189,9 +172,10 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             switch (mode) {
                 case MODE_MONITOR -> Items.INSTANCE.getWirelessAutocraftingMonitor()
                     .use(player, stack, slotReference);
-                case MODE_PATTERNS -> openPatternGrid(player, stack, slotReference, title);
-                case MODE_MANAGER -> openAutocrafterManager(player, stack, slotReference, title);
-                case MODE_SEQUENCE -> openPatternGrid(player, stack, slotReference, title);
+                case MODE_PATTERNS, MODE_MANAGER, MODE_SEQUENCE ->
+                    player.displayClientMessage(
+                        Component.translatable("item.rs_create_compat.advanced_remote_terminal.mode_unavailable"),
+                        true);
                 default -> Items.INSTANCE.getWirelessGrid().use(player, stack, slotReference);
             }
         } catch (final Throwable t) {
@@ -201,121 +185,4 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                 true);
         }
     }
-
-    // ========== 模式界面打开 ==========
-
-    /** MODE 0：合成终端（RS 原版无线合成终端）。直接复用，物品可存取。 */
-
-    /** MODE 1 / MODE 4：样板终端 / 序列装配（RS 原版样板终端界面，data 版构造）。 */
-    private void openPatternGrid(final ServerPlayer player,
-                                 final ItemStack stack,
-                                 final SlotReference slotReference,
-                                 final Component title) throws ReflectiveOperationException {
-        final NetworkItemContext context = RefinedStorageApi.INSTANCE.getNetworkItemHelper()
-            .createContext(stack, player, slotReference);
-        // WirelessGrid 为 RS 包私有类，无法直接 new，使用反射构造（构造器仅接受 NetworkItemContext）
-        final Class<?> wirelessGridClass = Class.forName(
-            "com.refinedmods.refinedstorage.common.grid.WirelessGrid");
-        final Constructor<?> wirelessGridCtor = wirelessGridClass.getDeclaredConstructor(NetworkItemContext.class);
-        wirelessGridCtor.setAccessible(true);
-        final Grid grid = (Grid) wirelessGridCtor.newInstance(context);
-
-        final Object gridData = GridData.of(grid);
-
-        // PatternGridData(GridData, PatternType, ProcessingInputData, ResourceContainerData, int)
-        final Class<?> patternTypeClass = Class.forName(RS_PATTERN_TYPE);
-        final Object patternType = patternTypeClass.getEnumConstants()[0]; // CRAFTING
-        final Object processingInput = createEmptyProcessingInputData();
-        final Object processingOutput = createEmptyResourceContainerData();
-        final Class<?> dataClass = Class.forName(RS_PATTERN_GRID_DATA);
-        final Constructor<?> dataCtor = dataClass.getDeclaredConstructor(
-            gridDataClass(), patternTypeClass,
-            Class.forName(RS_PROCESSING_INPUT_DATA),
-            Class.forName(RS_RESOURCE_CONTAINER_DATA),
-            int.class
-        );
-        dataCtor.setAccessible(true);
-        final Object data = dataCtor.newInstance(gridData, patternType, processingInput, processingOutput, -1);
-
-        openReflectedMenu(player, RS_PATTERN_GRID_MENU, dataClass, data, title);
-    }
-
-    private static Class<?> gridDataClass() {
-        return GridData.class;
-    }
-
-    private Object createEmptyProcessingInputData() throws ReflectiveOperationException {
-        final Object emptyContainer = createEmptyResourceContainerData();
-        final Class<?> clazz = Class.forName(RS_PROCESSING_INPUT_DATA);
-        final Constructor<?> ctor = clazz.getDeclaredConstructor(
-            Class.forName(RS_RESOURCE_CONTAINER_DATA), java.util.List.class);
-        ctor.setAccessible(true);
-        return ctor.newInstance(emptyContainer, java.util.List.of());
-    }
-
-    private Object createEmptyResourceContainerData() throws ReflectiveOperationException {
-        final Class<?> clazz = Class.forName(RS_RESOURCE_CONTAINER_DATA);
-        final Constructor<?> ctor = clazz.getDeclaredConstructor(java.util.List.class);
-        ctor.setAccessible(true);
-        return ctor.newInstance(java.util.List.of());
-    }
-
-    /** MODE 2：合成仓管理（RS 原版合成仓管理界面，data 版构造）。 */
-    private void openAutocrafterManager(final ServerPlayer player,
-                                        final ItemStack stack,
-                                        final SlotReference slotReference,
-                                        final Component title) throws ReflectiveOperationException {
-        final Class<?> dataClass = Class.forName(RS_MANAGER_DATA);
-        final Constructor<?> dataCtor = dataClass.getDeclaredConstructor(java.util.List.class, boolean.class);
-        dataCtor.setAccessible(true);
-        final Object data = dataCtor.newInstance(java.util.List.of(), true);
-        openReflectedMenu(player, RS_MANAGER_MENU, dataClass, data, title);
-    }
-
-    /** 用 RS 原版 MenuType + StreamCodec 打开 data 版菜单（客户端自动渲染对应原版 Screen）。 */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void openReflectedMenu(final ServerPlayer player,
-                                          final String menuClassName,
-                                          final Class<?> dataClass,
-                                          final Object data,
-                                          final Component title) throws ReflectiveOperationException {
-        final Class<?> menuClass = Class.forName(menuClassName);
-        final Constructor<?> menuCtor = menuClass.getDeclaredConstructor(
-            int.class, net.minecraft.world.entity.player.Inventory.class, dataClass);
-        menuCtor.setAccessible(true);
-        final java.lang.reflect.Field streamCodecField = dataClass.getField("STREAM_CODEC");
-        final Object streamCodec = streamCodecField.get(null);
-
-        final ExtendedMenuProvider<Object> provider = new ExtendedMenuProvider<>() {
-            @Override
-            public Object getMenuData() {
-                return data;
-            }
-
-            @Override
-            public StreamCodec<RegistryFriendlyByteBuf, Object> getMenuCodec() {
-                return (StreamCodec) streamCodec;
-            }
-
-            @Override
-            public Component getDisplayName() {
-                return title;
-            }
-
-            @Nullable
-            @Override
-            public AbstractContainerMenu createMenu(final int syncId,
-                                                    final net.minecraft.world.entity.player.Inventory inv,
-                                                    final net.minecraft.world.entity.player.Player p) {
-                try {
-                    return (AbstractContainerMenu) menuCtor.newInstance(syncId, inv, data);
-                } catch (final ReflectiveOperationException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        };
-        Platform.INSTANCE.getMenuOpener().openMenu(player, provider);
-    }
-
-    /** MODE 3：合成仓监视（RS 原版无线自动合成监视器）。直接复用。 */
 }

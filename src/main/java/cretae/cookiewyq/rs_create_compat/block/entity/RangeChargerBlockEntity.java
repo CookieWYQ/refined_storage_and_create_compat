@@ -28,15 +28,10 @@ import java.util.List;
  * 为控制性能，范围方块按"分片"逐步扫描，每 tick 只检查一部分。
  */
 public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlockEntity<RangeChargerNetworkNode> {
-    /** 每 tick 最多检查的方块数量（分片大小）。 */
-    private static final int SCAN_SLICE_SIZE = 512;
-
     private final EnergyStorage energyStorage;
     private int rangeX = 50;
     private int rangeY = 50;
     private int rangeZ = 50;
-    /** 分片扫描游标。 */
-    private int scanOffset;
 
     public RangeChargerBlockEntity(final BlockPos pos, final BlockState state) {
         super(RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(), pos, state, new RangeChargerNetworkNode());
@@ -185,50 +180,42 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
     }
 
     /**
-     * 分片扫描范围内方块：从 scanOffset 开始检查 SCAN_SLICE_SIZE 个坐标。
+     * 扫描范围内所有已加载方块实体并充电。
+     * 每 tick 全量遍历（只迭代实际存在的方块实体，性能好），
+     * 最多给 maxTargets 个目标充电 —— 解决分片扫描导致方块充电过慢的问题。
      */
     private void scanBlocks(final Level level) {
-        final int sizeX = rangeX + 1;
-        final int sizeY = rangeY + 1;
-        final int sizeZ = rangeZ + 1;
-        final long total = (long) sizeX * sizeY * sizeZ;
-        if (total <= 0 || total > Integer.MAX_VALUE - 1) {
-            return;
-        }
-        final int baseX = worldPosition.getX() - rangeX / 2;
-        final int baseY = worldPosition.getY() - rangeY / 2;
-        final int baseZ = worldPosition.getZ() - rangeZ / 2;
+        final int halfX = rangeX / 2;
+        final int halfY = rangeY / 2;
+        final int halfZ = rangeZ / 2;
+        final int minX = worldPosition.getX() - halfX;
+        final int maxX = worldPosition.getX() + halfX;
+        final int minY = worldPosition.getY() - halfY;
+        final int maxY = worldPosition.getY() + halfY;
+        final int minZ = worldPosition.getZ() - halfZ;
+        final int maxZ = worldPosition.getZ() + halfZ;
 
-        int checked = 0;
         int targets = 0;
-        long index = scanOffset;
-        while (checked < SCAN_SLICE_SIZE && checked < total) {
-            final long i = index % total;
-            final int x = (int) (i / ((long) sizeY * sizeZ));
-            final int rem = (int) (i % ((long) sizeY * sizeZ));
-            final int y = rem / sizeZ;
-            final int z = rem % sizeZ;
-            if (chargeBlock(level, baseX + x, baseY + y, baseZ + z)) {
+        for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : level.getBlockEntities().entrySet()) {
+            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                return;
+            }
+            final BlockPos pos = entry.getKey();
+            if (pos.getX() < minX || pos.getX() > maxX
+                || pos.getY() < minY || pos.getY() > maxY
+                || pos.getZ() < minZ || pos.getZ() > maxZ) {
+                continue;
+            }
+            if (pos.equals(worldPosition)) {
+                continue; // 跳过自身
+            }
+            if (chargeBlock(level, pos, entry.getValue())) {
                 targets++;
             }
-            index++;
-            checked++;
-            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                break;
-            }
         }
-        scanOffset = (int) ((scanOffset + SCAN_SLICE_SIZE) % total);
     }
 
-    private boolean chargeBlock(final Level level, final int x, final int y, final int z) {
-        if (x == worldPosition.getX() && y == worldPosition.getY() && z == worldPosition.getZ()) {
-            return false; // 跳过自身
-        }
-        final BlockPos pos = new BlockPos(x, y, z);
-        final BlockEntity blockEntity = level.getBlockEntity(pos);
-        if (blockEntity == null) {
-            return false;
-        }
+    private boolean chargeBlock(final Level level, final BlockPos pos, final BlockEntity blockEntity) {
         final IEnergyStorage storage = level.getCapability(
             Capabilities.EnergyStorage.BLOCK, pos, blockEntity.getBlockState(), blockEntity, null
         );

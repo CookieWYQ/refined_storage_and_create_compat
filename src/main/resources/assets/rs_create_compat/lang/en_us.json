@@ -53,5 +53,6 @@
   "item.rs_create_compat.universal_storage_disk.help": "A universal storage disk that can store items, fluids and gases at the same time.",
   "itemGroup.rs_create_compat": "RS & Create Compat",
   "item.rs_create_compat.advanced_remote_terminal.mode_failed": "Unable to open that mode",
-  "gui.rs_create_compat.quantity_keeper.target_label": "Target"
+  "gui.rs_create_compat.quantity_keeper.target_label": "Target",
+  "item.rs_create_compat.advanced_remote_terminal.mode_unavailable": "Mode unavailable (no vanilla wireless interface)"
 }

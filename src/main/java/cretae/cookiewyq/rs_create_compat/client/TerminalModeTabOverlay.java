@@ -78,10 +78,20 @@ public final class TerminalModeTabOverlay {
             final int x = containerScreen.getGuiLeft() + guiW - 21;
             final int y = containerScreen.getGuiTop() + guiH
                 - (TAB_H * count) + (TAB_H * i);
+            final boolean supported = AdvancedRemoteTerminalItem.isModeSupported(mode);
             event.addListener(new TerminalModeTabButton(
-                x, y, mode, currentMode == mode,
+                x, y, mode, supported, currentMode == mode,
                 Component.translatable(MODE_KEYS[mode]),
-                () -> sendSwitch(player, slotReference, mode)));
+                () -> {
+                    // 不可用模式：本地提示即可，不发 packet（避免界面重开/鼠标跳中心）
+                    if (!supported) {
+                        player.displayClientMessage(
+                            Component.translatable("item.rs_create_compat.advanced_remote_terminal.mode_unavailable"),
+                            true);
+                        return;
+                    }
+                    sendSwitch(player, slotReference, mode);
+                }));
         }
     }
 
@@ -125,20 +135,23 @@ public final class TerminalModeTabOverlay {
         PacketDistributor.sendToServer(new SwitchTerminalModePacket(slotReference, mode));
     }
 
-    /** 方块图标 Tab 按钮：选中高亮，悬停显示模式名。 */
+    /** 方块图标 Tab 按钮：选中高亮，悬停显示模式名；不可用模式置灰。 */
     private static final class TerminalModeTabButton extends AbstractWidget {
         private final int mode;
+        private final boolean supported;
         private final boolean selected;
         private final Runnable onClick;
 
         TerminalModeTabButton(final int x,
                               final int y,
                               final int mode,
+                              final boolean supported,
                               final boolean selected,
                               final Component tooltip,
                               final Runnable onClick) {
             super(x, y, TAB_W, TAB_H, tooltip);
             this.mode = mode;
+            this.supported = supported;
             this.selected = selected;
             this.onClick = onClick;
         }
@@ -163,9 +176,13 @@ public final class TerminalModeTabOverlay {
         protected void renderWidget(final GuiGraphics graphics, final int mouseX, final int mouseY, final float partialTick) {
             final int x = getX();
             final int y = getY();
-            // 背景：选中 = 白色边框 + 亮底；未选中 = 深色底
-            graphics.fill(x, y, x + TAB_W, y + TAB_H, selected ? 0x80303030 : 0x60101010);
-            if (selected) {
+            // 背景：不可用 = 深灰；选中 = 白色边框 + 亮底；未选中 = 深色底
+            if (!supported) {
+                graphics.fill(x, y, x + TAB_W, y + TAB_H, 0x40202020);
+            } else {
+                graphics.fill(x, y, x + TAB_W, y + TAB_H, selected ? 0x80303030 : 0x60101010);
+            }
+            if (selected && supported) {
                 graphics.fill(x, y, x + TAB_W, y + 1, 0xFFFFFFFF);
                 graphics.fill(x, y + TAB_H - 1, x + TAB_W, y + TAB_H, 0xFFFFFFFF);
                 graphics.fill(x, y, x + 1, y + TAB_H, 0xFFFFFFFF);
