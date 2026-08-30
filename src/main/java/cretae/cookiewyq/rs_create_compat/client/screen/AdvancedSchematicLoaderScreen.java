@@ -1,5 +1,6 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
+import com.refinedmods.refinedstorage.common.Platform;
 import com.refinedmods.refinedstorage.common.support.widget.ScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
@@ -9,9 +10,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.Slot;
-import net.minecraft.world.item.ItemStack;
 
 /**
  * 高级蓝图加农炮装填器界面：
@@ -55,6 +54,8 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     private static final int QUEUE_BTN_H = 16;
 
     private ScrollbarWidget scrollbar;
+    /** 四个开关按钮引用（render 时刷新勾/叉符号）。 */
+    private final Button[] toggleButtons = new Button[TOGGLE_IDS.length];
 
     public AdvancedSchematicLoaderScreen(final AdvancedSchematicLoaderMenu menu,
                                          final Inventory inventory,
@@ -83,9 +84,11 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         for (int i = 0; i < TOGGLE_IDS.length; i++) {
             final int id = TOGGLE_IDS[i];
             final int y = ROW0_Y + i * ROW_H;
-            addRenderableWidget(new Button.Builder(toggleState(id), btn -> sendButton(id))
+            final Button button = new Button.Builder(toggleState(id), btn -> sendButton(id))
                 .bounds(leftPos + BTN_X, topPos + y, BTN_W, BTN_H)
-                .build());
+                .build();
+            toggleButtons[i] = button;
+            addRenderableWidget(button);
         }
         addRenderableWidget(new Button.Builder(
             Component.translatable("gui.rs_create_compat.advanced_schematic_loader.start"),
@@ -110,7 +113,8 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         final int count = menu.getStorageSlotCount();
         for (int i = 0; i < count; i++) {
             final Slot slot = menu.getStorageSlot(i);
-            slot.y = menu.getStorageBaseY(i) - pxOffset;
+            // Slot.y 为 final，需通过 RS 的 Platform.setSlotY 修改（内部使用 access transformer）
+            Platform.INSTANCE.setSlotY(slot, menu.getStorageBaseY(i) - pxOffset);
         }
     }
 
@@ -136,8 +140,8 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     public void render(final GuiGraphics guiGraphics, final int mouseX, final int mouseY, final float partialTick) {
         // 刷新四个 toggle 按钮符号
         for (int i = 0; i < TOGGLE_IDS.length; i++) {
-            if (children().get(i) instanceof Button btn) {
-                btn.setMessage(toggleState(TOGGLE_IDS[i]));
+            if (toggleButtons[i] != null) {
+                toggleButtons[i].setMessage(toggleState(TOGGLE_IDS[i]));
             }
         }
         renderBackground(guiGraphics, mouseX, mouseY, partialTick);
@@ -190,10 +194,6 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         guiGraphics.drawString(font, playerInventoryTitle, 8, 204, 0xA0A0A0, false);
     }
 
-    private boolean isStorageSlotVisible(final Slot slot) {
-        return slot.y >= STORAGE_TOP && slot.y < STORAGE_TOP + STORAGE_H_PX;
-    }
-
     @Override
     public boolean isPauseScreen() {
         return false;
@@ -230,61 +230,11 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         return handled || super.mouseScrolled(x, y, z, delta);
     }
 
-    /** 不可见的 storage slot 直接跳过（当作空槽：不能点击、不能拖动取物）。 */
-    @Override
-    protected boolean isHovering(final Slot slot, final double sx, final double sy) {
-        if (super.isHovering(slot, sx, sy)) {
-            final boolean isStorage =
-                slot.index >= AdvancedSchematicLoaderMenu.STORAGE_START
-                    && slot.index < AdvancedSchematicLoaderMenu.STORAGE_START
-                        + AdvancedSchematicLoaderMenu.STORAGE_COUNT;
-            return !isStorage || isStorageSlotVisible(slot);
-        }
-        return false;
-    }
-
-    /** 阻止玩家从逻辑上取出"隐藏的 storage slot"里的物品（拖动取物兜底）。 */
-    @Override
-    protected boolean slotClicked(final Slot slot, final int slotId, final int mouseButton,
-                                  final net.minecraft.world.inventory.ClickType clickType,
-                                  final Player player) {
-        if (slot != null) {
-            final boolean isStorage =
-                slot.index >= AdvancedSchematicLoaderMenu.STORAGE_START
-                    && slot.index < AdvancedSchematicLoaderMenu.STORAGE_START
-                        + AdvancedSchematicLoaderMenu.STORAGE_COUNT;
-            if (isStorage && !isStorageSlotVisible(slot)) {
-                return false;
-            }
-        }
-        return super.slotClicked(slot, slotId, mouseButton, clickType, player);
-    }
-
-    /** 防止 hovering 计算把看不见的 storage slot 判定为 hovered（tooltip 用）。 */
-    @Override
-    public Slot findSlot(final double mx, final double my) {
-        final Slot s = super.findSlot(mx, my);
-        if (s != null
-            && s.index >= AdvancedSchematicLoaderMenu.STORAGE_START
-            && s.index < AdvancedSchematicLoaderMenu.STORAGE_START + AdvancedSchematicLoaderMenu.STORAGE_COUNT
-            && !isStorageSlotVisible(s)) {
-            return null;
-        }
-        return s;
-    }
-
-    /** 被拖动的 ghostItem / carried 也不要落入不可见 storage 槽。 */
-    @Override
-    protected void renderFloatingItem(final GuiGraphics guiGraphics, final int mx, final int my, final float partialTick) {
-        final ItemStack carried = menu.getCarried();
-        // 先让父类正常渲染
-        super.renderFloatingItem(guiGraphics, mx, my, partialTick);
-        // 这里无需额外处理：放置逻辑在 tryItemPlace 等中走 slotClicked
-    }
+    /** 不可见的 storage slot 已被滚动条移出可见区（slot.y 超出），渲染时由 scissor 裁剪掉，交互自然落在可见槽位上。 */
 
     @Override
     protected void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
-        // 父类 findSlot / hoveredSlot 已经跳过不可见 storage，这里直接绘制
+        // 父类 findSlot / hoveredSlot 已经跳过不可见 storage（坐标已在可见区外），这里直接绘制
         super.renderTooltip(guiGraphics, mouseX, mouseY);
         if (hoveredSlot != null
             && hoveredSlot.index >= AdvancedSchematicLoaderMenu.UPGRADE_START

@@ -207,7 +207,6 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         if (autoFillGunpowder) {
             restockGunpowderDirect(cannon, network);
         }
-
         // 自动回收：打印完成后回收空白蓝图（基础版放回蓝图槽，高级版放入队列）
         if (isAutoRecycleActive() && cannon.blocksToPlace > 0 && cannon.blocksPlaced >= cannon.blocksToPlace) {
             final ItemStack out = cannon.inventory.getStackInSlot(1);
@@ -281,8 +280,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         }
     }
 
-    protected void restockGunpowder(final Network network) {
-        if (countItem(Items.GUNPOWDER) >= 64) {
+    /** 火药直装蓝图加农炮的火药槽（slot 4），不回流装填器库存。 */
+    protected void restockGunpowderDirect(final SchematicannonBlockEntity cannon, final Network network) {
+        final ItemStack inCannon = cannon.inventory.getStackInSlot(4);
+        final int current = inCannon.isEmpty() ? 0 : inCannon.getCount();
+        if (current >= 64) {
             return;
         }
         final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
@@ -291,10 +293,12 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         if (inNetwork <= 0) {
             return;
         }
-        final long toFetch = Math.min(inNetwork, 64 - countItem(Items.GUNPOWDER));
+        final long toFetch = Math.min(inNetwork, 64 - current);
         final long extracted = storage.extract(resource, toFetch, Action.EXECUTE, Actor.EMPTY);
         if (extracted > 0) {
-            insertIntoInventory(new ItemResource(Items.GUNPOWDER, DataComponentPatch.EMPTY).toItemStack(extracted));
+            final int total = current + (int) extracted;
+            cannon.inventory.setStackInSlot(4, new ItemStack(Items.GUNPOWDER, total));
+            cannon.sendUpdate = true;
         }
     }
 

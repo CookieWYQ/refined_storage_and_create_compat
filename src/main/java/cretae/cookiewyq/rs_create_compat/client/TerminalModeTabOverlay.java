@@ -78,8 +78,8 @@ public final class TerminalModeTabOverlay {
         final int count = AdvancedRemoteTerminalItem.MODE_COUNT;
         for (int i = 0; i < count; i++) {
             final int mode = i;
-            final int x = containerScreen.getGuiLeft() + containerScreen.getImageWidth() - 21;
-            final int y = containerScreen.getGuiTop() + containerScreen.getImageHeight()
+            final int x = containerScreen.getGuiLeft() + containerScreen.imageWidth - 21;
+            final int y = containerScreen.getGuiTop() + containerScreen.imageHeight
                 - (TAB_H * count) + (TAB_H * i);
             event.addListener(new TerminalModeTabButton(
                 x, y, mode, currentMode == mode,

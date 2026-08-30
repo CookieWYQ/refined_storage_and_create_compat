@@ -12,7 +12,6 @@ import com.refinedmods.refinedstorage.common.api.support.network.item.NetworkIte
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import com.refinedmods.refinedstorage.common.content.Items;
 import com.refinedmods.refinedstorage.common.grid.GridData;
-import com.refinedmods.refinedstorage.common.grid.WirelessGrid;
 import com.refinedmods.refinedstorage.common.support.containermenu.ExtendedMenuProvider;
 import cretae.cookiewyq.rs_create_compat.Config;
 import java.lang.reflect.Constructor;
@@ -108,7 +107,7 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         if (type != Type.NORMAL) {
             final ItemStack stack = super.getDefaultInstance();
             final EnergyStorage energy = createEnergyStorage(stack);
-            energy.receiveEnergy(energy.getCapacity(), false);
+            energy.receive(energy.getCapacity(), com.refinedmods.refinedstorage.api.core.Action.EXECUTE);
             return stack;
         }
         return super.getDefaultInstance();
@@ -215,9 +214,13 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                                  final Component title) throws ReflectiveOperationException {
         final NetworkItemContext context = RefinedStorageApi.INSTANCE.getNetworkItemHelper()
             .createContext(stack, player, slotReference);
-        final Grid grid = new WirelessGrid(context);
+        // WirelessGrid 为 RS 包私有类，无法直接 new，使用反射构造（构造器仅接受 NetworkItemContext）
+        final Class<?> wirelessGridClass = Class.forName(
+            "com.refinedmods.refinedstorage.common.grid.WirelessGrid");
+        final Constructor<?> wirelessGridCtor = wirelessGridClass.getDeclaredConstructor(NetworkItemContext.class);
+        wirelessGridCtor.setAccessible(true);
+        final Grid grid = (Grid) wirelessGridCtor.newInstance(context);
 
-        final Class<?> gridDataClass = GridData.class;
         final Object gridData = GridData.of(grid);
 
         // PatternGridData(GridData, PatternType, ProcessingInputData, ResourceContainerData, int)
@@ -227,7 +230,7 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         final Object processingOutput = createEmptyResourceContainerData();
         final Class<?> dataClass = Class.forName(RS_PATTERN_GRID_DATA);
         final Constructor<?> dataCtor = dataClass.getDeclaredConstructor(
-            gridDataClass, patternTypeClass,
+            gridDataClass(), patternTypeClass,
             Class.forName(RS_PROCESSING_INPUT_DATA),
             Class.forName(RS_RESOURCE_CONTAINER_DATA),
             int.class
@@ -236,6 +239,10 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         final Object data = dataCtor.newInstance(gridData, patternType, processingInput, processingOutput, -1);
 
         openReflectedMenu(player, RS_PATTERN_GRID_MENU, dataClass, data, title);
+    }
+
+    private static Class<?> gridDataClass() {
+        return GridData.class;
     }
 
     private Object createEmptyProcessingInputData() throws ReflectiveOperationException {
