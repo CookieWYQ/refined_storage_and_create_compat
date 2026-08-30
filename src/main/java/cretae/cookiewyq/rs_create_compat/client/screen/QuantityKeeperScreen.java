@@ -15,8 +15,6 @@ import net.minecraft.world.entity.player.Inventory;
 public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeperMenu> {
     private static final ResourceLocation TEXTURE =
         ResourceLocation.fromNamespaceAndPath(RS_Create_Compat.MODID, "textures/gui/quantity_keeper.png");
-    private static final ResourceLocation SLOT_SPRITE =
-        ResourceLocation.withDefaultNamespace("container/slot");
 
     public QuantityKeeperScreen(final QuantityKeeperMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
@@ -50,12 +48,8 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
+        // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
         guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 176, 166);
-        // 标记槽与插件槽的槽位背景
-        guiGraphics.blitSprite(SLOT_SPRITE, leftPos + 7, topPos + 19, 18, 18);
-        for (int i = 0; i < 6; i++) {
-            guiGraphics.blitSprite(SLOT_SPRITE, leftPos + 61 + (i % 2) * 18, topPos + 19 + (i / 2) * 18, 18, 18);
-        }
     }
 
     @Override

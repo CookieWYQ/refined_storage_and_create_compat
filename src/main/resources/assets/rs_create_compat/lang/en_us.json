@@ -54,5 +54,6 @@
   "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "Failed to open the RS Autocrafting Monitor (version mismatch)",
   "item.rs_create_compat.advanced_remote_terminal_charged": "Advanced Remote Terminal (Charged)",
   "item.rs_create_compat.creative_advanced_remote_terminal": "Creative Advanced Remote Terminal",
-  "gui.rs_create_compat.advanced_remote_terminal.no_energy_hint": "Not enough energy, actions disabled"
+  "gui.rs_create_compat.advanced_remote_terminal.no_energy_hint": "Not enough energy, actions disabled",
+  "gui.rs_create_compat.advanced_schematic_loader.upgrades": "Upgrades"
 }

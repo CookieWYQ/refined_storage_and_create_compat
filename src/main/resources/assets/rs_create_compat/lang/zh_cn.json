@@ -54,5 +54,6 @@
   "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）",
   "item.rs_create_compat.advanced_remote_terminal_charged": "高级远程多功能终端（满电）",
   "item.rs_create_compat.creative_advanced_remote_terminal": "创造高级远程多功能终端",
-  "gui.rs_create_compat.advanced_remote_terminal.no_energy_hint": "能量不足，操作已禁用"
+  "gui.rs_create_compat.advanced_remote_terminal.no_energy_hint": "能量不足，操作已禁用",
+  "gui.rs_create_compat.advanced_schematic_loader.upgrades": "插件槽"
 }

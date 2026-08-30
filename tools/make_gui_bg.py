@@ -37,7 +37,10 @@ CENTER_RIGHT = 243  # 右边界 x（不含）
 CENTER_BOTTOM = 161  # 下边界 y（不含）
 BG_INV_Y = 165  # 背包区域起始 y
 
-SLOT_SIZE = 18
+# 素材槽位尺寸：slot.png 的完整槽位是 17x17（边框在 0 与 16 行列），
+# MC 槽位间距 18px，粘贴时相邻槽之间留 1px 背景空隙。
+SLOT_PX = 17    # 槽位素材像素尺寸
+SLOT_GAP = 18   # 槽位中心间距
 
 
 def stretch(dst: Image.Image, src: Image.Image, sx, sy, sw, sh, dx, dy, dw, dh):
@@ -76,26 +79,16 @@ def draw_container(dst: Image.Image, src: Image.Image, width: int, height: int):
 
 def draw_inventory(dst: Image.Image, src: Image.Image, width: int, top: int,
                    slot_img: Image.Image, sx, sy, cols, rows, gap):
-    """拼接 bg.png 165 以下背包区域，并绘制槽位网格。"""
-    inv_h = dst.height - top
-    if inv_h <= 0:
-        return
-    mid_w = CENTER_RIGHT - CENTER_LEFT - BORDER * 2
-    src_h = src.height - BG_INV_Y
-    # 中部横向拉伸
-    stretch(dst, src, CENTER_LEFT, BG_INV_Y, mid_w, src_h, BORDER, top, width - BORDER * 2, inv_h)
-    # 左右
-    stretch(dst, src, 0, BG_INV_Y, BORDER, src_h, 0, top, BORDER, inv_h)
-    stretch(dst, src, CENTER_RIGHT, BG_INV_Y, BORDER, src_h, width - BORDER, top, BORDER, inv_h)
-
-    # 槽位网格
+    """背包区域：直接用 bg.png 上半部分（0-165 有效内容）连续拉伸到整图高度，
+    再绘制槽位网格。bg.png 的 165 以下区域是透明的，不能作为背景。"""
+    # 容器主体已经由 draw_container 铺满全高，这里只负责画背包槽位网格
     for row in range(rows):
         y = sy + row * gap
-        if y + SLOT_SIZE > dst.height:
+        if y + SLOT_PX > dst.height:
             break
         for col in range(cols):
             x = sx + col * gap
-            if x + SLOT_SIZE > width:
+            if x + SLOT_PX > width:
                 break
             dst.paste(slot_img, (x, y))
 
@@ -120,11 +113,12 @@ def main():
     args = parser.parse_args()
 
     bg = Image.open(args.bg).convert("RGBA")
-    slot_img = Image.open(args.slot).convert("RGBA").crop((0, 0, SLOT_SIZE, SLOT_SIZE))
+    slot_img = Image.open(args.slot).convert("RGBA").crop((0, 0, SLOT_PX, SLOT_PX))
     container_h = args.container_height if args.container_height else args.height
 
     dst = Image.new("RGBA", (args.width, args.height), (0, 0, 0, 0))
-    draw_container(dst, bg, args.width, min(container_h, args.height))
+    # 整幅背景连续铺满（bg.png 0-165 有效区域 9-slice 拉伸），保证无透明洞
+    draw_container(dst, bg, args.width, args.height)
     if args.with_inventory:
         draw_inventory(dst, bg, args.width, min(container_h, args.height), slot_img,
                        args.slot_start_x, args.slot_start_y, args.slot_cols, args.slot_rows, args.slot_gap)
@@ -134,8 +128,8 @@ def main():
         sx, sy, cols, rows = (int(v) for v in spec.split(","))
         for row in range(rows):
             for col in range(cols):
-                x, y = sx + col * SLOT_SIZE, sy + row * SLOT_SIZE
-                if x + SLOT_SIZE > args.width or y + SLOT_SIZE > args.height:
+                x, y = sx + col * SLOT_GAP, sy + row * SLOT_GAP
+                if x + SLOT_PX > args.width or y + SLOT_PX > args.height:
                     continue
                 dst.paste(slot_img, (x, y))
 
