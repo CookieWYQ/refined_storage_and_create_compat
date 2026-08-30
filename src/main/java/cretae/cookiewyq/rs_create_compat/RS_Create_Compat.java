@@ -21,6 +21,7 @@ import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.mixin.AutocrafterAccessor;
+import cretae.cookiewyq.rs_create_compat.network.SwitchTerminalModePacket;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
@@ -45,6 +46,8 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
@@ -215,6 +218,9 @@ public class RS_Create_Compat {
         // 终端物品能量能力（普通/满电/创造）
         modEventBus.addListener(RS_Create_Compat::registerTerminalEnergyCapabilities);
 
+        // 网络包注册
+        modEventBus.addListener(RS_Create_Compat::registerPayloads);
+
         // 配置加载
         modEventBus.addListener(Config::onLoad);
 
@@ -270,6 +276,16 @@ public class RS_Create_Compat {
                 item
             );
         }
+    }
+
+    /** 网络包：终端模式切换（C2S）。 */
+    private static void registerPayloads(final RegisterPayloadHandlersEvent event) {
+        final PayloadRegistrar registrar = event.registrar(MODID);
+        registrar.playToServer(
+            SwitchTerminalModePacket.TYPE,
+            SwitchTerminalModePacket.STREAM_CODEC,
+            (packet, ctx) -> SwitchTerminalModePacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
     }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call

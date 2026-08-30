@@ -46,10 +46,11 @@
   "item.rs_create_compat.advanced_remote_terminal.bind_hint": "对准无线信号发射器 / RS 网络节点方块右键绑定（支持跨维度增强无线访问点）",
   "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）",
   "item.rs_create_compat.advanced_remote_terminal.not_bound": "未绑定网络！请对准无线信号发射器（或任意 RS 网络节点方块）右键绑定。",
-  "item.rs_create_compat.advanced_remote_terminal.usage": "右键使用；Shift+右键打开终端切换模式；监视器模式右键直接打开 RS 自动合成仓监视器",
-  "item.rs_create_compat.advanced_remote_terminal_charged": "高级远程多功能终端（满电）",
+  "item.rs_create_compat.advanced_remote_terminal.usage": "右键使用打开对应模式界面；界面右下角方块图标可切换模式（合成终端 / 样板终端 / 合成仓管理 / 合成仓监视 / 序列装配）",
+  "item.rs_create_compat.advanced_remote_terminal_charged": "高级远程多功能终端",
   "item.rs_create_compat.creative_advanced_remote_terminal": "创造高级远程多功能终端",
   "item.rs_create_compat.universal_storage_disk": "通用储存磁盘",
   "item.rs_create_compat.universal_storage_disk.help": "可同时存入物品、流体与气体的通用储存磁盘。",
-  "itemGroup.rs_create_compat": "精致存储&机械动力：兼容与改善"
+  "itemGroup.rs_create_compat": "精致存储&机械动力：兼容与改善",
+  "item.rs_create_compat.advanced_remote_terminal.mode_failed": "无法打开该模式界面"
 }

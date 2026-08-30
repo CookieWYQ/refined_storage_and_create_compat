@@ -5,17 +5,18 @@ import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetwo
 import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
+import javax.annotation.Nullable;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.item.ItemStack;
-import org.jetbrains.annotations.Nullable;
 
 /**
- * 高级远程多功能终端菜单：显示当前模式与网络信息，支持模式切换。
- * 监视器模式通过 RS 原版自动合成仓监视器界面实现（右键打开，见物品 use 逻辑）。
+ * 高级远程多功能终端菜单（保留用于客户端信息展示）。
+ * 模式切换已改为：客户端在 RS 原版界面上点 Tab → C2S 包 → 服务端重开对应 RS 原版界面。
  */
 public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
     private static final int DATA_COUNT = 9;
@@ -48,9 +49,9 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
         }
         final int mode = AdvancedRemoteTerminalItem.getMode(stack);
         data.set(0, mode);
-        // 物品自身电量（仿 RS 原版无线终端：界面显示物品电量，没电则操作禁用）
         if (stack.getItem() instanceof AdvancedRemoteTerminalItem item) {
-            final com.refinedmods.refinedstorage.api.network.energy.EnergyStorage energy = item.createEnergyStorage(stack);
+            final com.refinedmods.refinedstorage.api.network.energy.EnergyStorage energy =
+                item.createEnergyStorage(stack);
             data.set(1, (int) energy.getStored());
             data.set(2, (int) energy.getCapacity());
         }
@@ -61,13 +62,13 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
         final AutocraftingNetworkComponent auto = network.getComponent(AutocraftingNetworkComponent.class);
         data.set(6, auto.getOutputs().size());
         data.set(7, auto.getStatuses().size());
-        // 创造版标志（无视电量）
         data.set(8, stack.getItem() instanceof AdvancedRemoteTerminalItem item && item.isCreative() ? 1 : 0);
     }
 
     @Override
     public boolean clickMenuButton(final Player player, final int id) {
-        if (network != null && stack != null && !player.level().isClientSide()) {
+        // 旧界面兜底：直接切换到对应模式（一般不会走到，因为模式切换已由 Tab + C2S 包完成）
+        if (network != null && stack != null && !player.level().isClientSide() && player instanceof ServerPlayer sp) {
             final int mode = Math.clamp(id, 0, 4);
             AdvancedRemoteTerminalItem.setMode(stack, mode);
             refresh();
