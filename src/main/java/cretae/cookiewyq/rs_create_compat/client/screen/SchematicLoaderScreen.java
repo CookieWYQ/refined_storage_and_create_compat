@@ -126,10 +126,10 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         // 升级栏标签（右侧独立栏，仿 RS 原版）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.schematic_loader.upgrades"),
             176, 5, 0xA0A0A0, false);
-        // 开关标签（左侧文字）
+        // 开关标签（左侧文字，亮白提升可读性）
         for (int i = 0; i < BTN_LABEL_KEYS.length; i++) {
             guiGraphics.drawString(font, Component.translatable(BTN_LABEL_KEYS[i]),
-                LABEL_X, ROW0_Y + i * ROW_H + 2, 0xD0D0D0, false);
+                LABEL_X, ROW0_Y + i * ROW_H + 2, 0xFFFFFF, false);
         }
     }
 
@@ -167,12 +167,11 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         return handled || super.mouseScrolled(x, y, z, delta);
     }
 
-    /** 空升级槽悬停提示：升级槽（slot 1..6）为空时显示可放入的升级种类。 */
+    /** 空升级槽悬停提示：升级槽（UpgradeSlot 实例）为空时显示可放入的升级种类。 */
     @Override
     protected void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         super.renderTooltip(guiGraphics, mouseX, mouseY);
-        if (hoveredSlot != null
-            && hoveredSlot.index >= 1 && hoveredSlot.index <= 6
+        if (hoveredSlot instanceof cretae.cookiewyq.rs_create_compat.menu.UpgradeSlot
             && hoveredSlot.getItem().isEmpty()) {
             guiGraphics.renderComponentTooltip(font,
                 cretae.cookiewyq.rs_create_compat.menu.UpgradeSlot.getEmptyTooltip(),

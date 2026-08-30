@@ -39,11 +39,11 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     private static final int SCROLLBAR_Y = STORAGE_TOP + 1;
     private static final int SCROLLBAR_H = STORAGE_H_PX - 2;
 
-    // 开关：y=186..232 (4 行 × 14)，按钮 x=150, 标签 x=10（库存下方、玩家背包上方）
-    private static final int LABEL_X = 10;
-    private static final int BTN_X = 150;
-    private static final int ROW0_Y = 186;
-    private static final int ROW_H = 14;
+    // 开关：2 列 × 2 行紧凑布局（标签 x=10/100，按钮 x=68/158，行 y=180/196）
+    private static final int[] TOGGLE_LABEL_X = {10, 100};
+    private static final int[] TOGGLE_BTN_X = {68, 158};
+    private static final int ROW0_Y = 180;
+    private static final int ROW_H = 16;
     private static final int BTN_W = 14;
     private static final int BTN_H = 12;
     // 队列运行按钮：底部（玩家背包下方）
@@ -83,9 +83,11 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
 
         for (int i = 0; i < TOGGLE_IDS.length; i++) {
             final int id = TOGGLE_IDS[i];
-            final int y = ROW0_Y + i * ROW_H;
+            final int row = i / 2;
+            final int col = i % 2;
+            final int y = ROW0_Y + row * ROW_H;
             final Button button = new Button.Builder(toggleState(id), btn -> sendButton(id))
-                .bounds(leftPos + BTN_X, topPos + y, BTN_W, BTN_H)
+                .bounds(leftPos + TOGGLE_BTN_X[col], topPos + y, BTN_W, BTN_H)
                 .build();
             toggleButtons[i] = button;
             addRenderableWidget(button);
@@ -161,8 +163,6 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, 0xFFFFFF, false);
-        guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.queue"),
-            8, 0, 0xA0A0A0, false);
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.storage"),
             8, 62, 0xA0A0A0, false);
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.upgrades"),
@@ -171,8 +171,10 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
         guiGraphics.drawString(font, Component.literal(state),
             120, 6, menu.isQueueRunning() ? 0x55FF55 : 0xFF5555, false);
         for (int i = 0; i < TOGGLE_LABEL_KEYS.length; i++) {
+            final int row = i / 2;
+            final int col = i % 2;
             guiGraphics.drawString(font, Component.translatable(TOGGLE_LABEL_KEYS[i]),
-                LABEL_X, ROW0_Y + i * ROW_H + 2, 0xD0D0D0, false);
+                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, 0xFFFFFF, false);
         }
         // 玩家背包文字（库存下方按钮区之后）
         guiGraphics.drawString(font, playerInventoryTitle, 8, 234, 0xA0A0A0, false);

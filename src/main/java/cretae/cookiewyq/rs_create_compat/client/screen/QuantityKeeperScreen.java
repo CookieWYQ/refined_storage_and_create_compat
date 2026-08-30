@@ -139,13 +139,13 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         return false;
     }
 
-    /** 空升级槽悬停提示：升级槽（slot 1..6）为空时显示可放入的升级种类。 */
+    /** 空升级槽悬停提示：升级槽（slot 1..6 或 UpgradeSlot 实例）为空时显示可放入的升级种类。 */
     @Override
     protected void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         super.renderTooltip(guiGraphics, mouseX, mouseY);
-        if (hoveredSlot != null
-            && hoveredSlot.index >= 1 && hoveredSlot.index <= 6
-            && hoveredSlot.getItem().isEmpty()) {
+        if (hoveredSlot != null && hoveredSlot.getItem().isEmpty()
+            && (hoveredSlot instanceof cretae.cookiewyq.rs_create_compat.menu.UpgradeSlot
+                || hoveredSlot.index >= 1 && hoveredSlot.index <= 6)) {
             guiGraphics.renderComponentTooltip(font,
                 cretae.cookiewyq.rs_create_compat.menu.UpgradeSlot.getEmptyTooltip(),
                 mouseX, mouseY);
