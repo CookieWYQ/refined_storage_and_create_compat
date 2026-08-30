@@ -3,7 +3,6 @@ package cretae.cookiewyq.rs_create_compat.client;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import com.refinedmods.refinedstorage.common.content.Blocks;
-import com.refinedmods.refinedstorage.common.content.Menus;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
 import cretae.cookiewyq.rs_create_compat.network.SwitchTerminalModePacket;
@@ -53,15 +52,10 @@ public final class TerminalModeTabOverlay {
         if (!(screen instanceof AbstractContainerScreen<?> containerScreen)) {
             return;
         }
-        // 仅当打开的是我们终端对应的 RS 无线界面时叠加 Tab
-        // （合成终端 / 样板终端 / 合成仓管理 / 合成仓监视 的 data 版界面，由终端打开）
-        final var menuType = containerScreen.getMenu().getType();
-        final boolean isTerminalScreen =
-            menuType == Menus.INSTANCE.getWirelessGrid()
-                || menuType == Menus.INSTANCE.getPatternGrid()
-                || menuType == Menus.INSTANCE.getAutocrafterManager()
-                || menuType == Menus.INSTANCE.getWirelessAutocraftingMonitor();
-        if (!isTerminalScreen) {
+        // 仅当打开的是我们终端对应的 RS 原版界面时叠加 Tab。
+        // 注意：不能调用 getMenu().getType() —— RS 的 mixin 会让它在非 RS 菜单（如原版背包）上抛异常。
+        // 改为直接 instanceof RS 的 Screen 类型。
+        if (!isRsScreen(screen)) {
             return;
         }
         final Player player = Minecraft.getInstance().player;
@@ -89,6 +83,14 @@ public final class TerminalModeTabOverlay {
                 Component.translatable(MODE_KEYS[mode]),
                 () -> sendSwitch(player, slotReference, mode)));
         }
+    }
+
+    /** 判断是否为 RS 的网格 / 样板 / 合成仓管理 / 合成仓监视界面（仅客户端存在这些类）。 */
+    private static boolean isRsScreen(final Screen screen) {
+        return screen instanceof com.refinedmods.refinedstorage.common.grid.screen.AbstractGridScreen<?>
+            || screen instanceof com.refinedmods.refinedstorage.common.autocrafting.patterngrid.PatternGridScreen
+            || screen instanceof com.refinedmods.refinedstorage.common.autocrafting.autocraftermanager.AutocrafterManagerScreen
+            || screen instanceof com.refinedmods.refinedstorage.common.autocrafting.monitor.AutocraftingMonitorScreen;
     }
 
     /** 反射读取 AbstractContainerScreen 的 protected 尺寸字段，失败时返回默认值。 */
