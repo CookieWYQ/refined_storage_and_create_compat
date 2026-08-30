@@ -103,14 +103,16 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
 
     @Override
     public ItemStack getDefaultInstance() {
-        // 满电版 / 创造版默认满电；普通版默认无电
+        // 满电版 / 创造版默认满电（直接写入 RS 能量数据组件，最可靠）；
+        // 普通版默认无电
+        final ItemStack stack = super.getDefaultInstance();
         if (type != Type.NORMAL) {
-            final ItemStack stack = super.getDefaultInstance();
-            final EnergyStorage energy = createEnergyStorage(stack);
-            energy.receive(energy.getCapacity(), com.refinedmods.refinedstorage.api.core.Action.EXECUTE);
-            return stack;
+            final long capacity = type == Type.CREATIVE
+                ? Integer.MAX_VALUE
+                : Config.advancedRemoteTerminalEnergyCapacity;
+            stack.set(com.refinedmods.refinedstorage.common.content.DataComponents.INSTANCE.getEnergy(), capacity);
         }
-        return super.getDefaultInstance();
+        return stack;
     }
 
     // —— 创造版：不显示物品栏底部的电量条 ——
@@ -168,14 +170,7 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         if (stackOpt.isEmpty()) {
             return;
         }
-        final Optional<Network> network = context.resolveNetwork();
-        if (network.isEmpty()) {
-            player.displayClientMessage(
-                Component.translatable("item.rs_create_compat.advanced_remote_terminal.not_bound"),
-                true);
-            return;
-        }
-        // 仿 RS 原版：不检查电量，总是打开界面；没电时界面内操作禁用（由 RS 原版机制处理）。
+        // 仿 RS 原版：不检查网络绑定与电量，总是打开界面；未绑定/没电时界面内操作禁用（由 RS 原版机制处理）。
         openModeScreen(player, stackOpt.get(), slotReference);
     }
 

@@ -151,6 +151,44 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         if (Config.rangeChargerChargeItems) {
             scanItems(level);
         }
+        if (Config.rangeChargerChargePlayerItems) {
+            scanPlayers(level);
+        }
+    }
+
+    /** 扫描范围内玩家，给其手持与背包中的可充电物品供电（如无线终端）。 */
+    private void scanPlayers(final Level level) {
+        final int halfX = rangeX / 2;
+        final int halfY = rangeY / 2;
+        final int halfZ = rangeZ / 2;
+        final net.minecraft.world.phys.AABB box = new net.minecraft.world.phys.AABB(
+            worldPosition.getX() - halfX, worldPosition.getY() - halfY, worldPosition.getZ() - halfZ,
+            worldPosition.getX() + halfX + 1, worldPosition.getY() + halfY + 1, worldPosition.getZ() + halfZ + 1
+        );
+        final List<net.minecraft.world.entity.player.Player> players =
+            level.getEntitiesOfClass(net.minecraft.world.entity.player.Player.class, box, p -> !p.isSpectator());
+        int targets = 0;
+        for (final net.minecraft.world.entity.player.Player player : players) {
+            for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+                if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                    return;
+                }
+                final ItemStack stack = player.getInventory().getItem(slot);
+                if (stack.isEmpty()) {
+                    continue;
+                }
+                final IEnergyStorage storage = stack.getCapability(Capabilities.EnergyStorage.ITEM);
+                if (storage == null || storage.getEnergyStored() >= storage.getMaxEnergyStored()) {
+                    continue;
+                }
+                final int transfer = Math.min(Config.rangeChargerChargeRate, energyStorage.getEnergyStored());
+                final int accepted = storage.receiveEnergy(transfer, false);
+                if (accepted > 0) {
+                    energyStorage.extractEnergy(accepted, false);
+                    targets++;
+                }
+            }
+        }
     }
 
     /**

@@ -35,19 +35,19 @@ public class Config {
     // ========== 范围充电器 ==========
     private static final ModConfigSpec.IntValue RANGE_CHARGER_CHARGE_RATE = BUILDER
         .comment("范围充电器单个目标的充电速率（FE/tick）。")
-        .defineInRange("rangeChargerChargeRate", 20, 1, 1000000);
+        .defineInRange("rangeChargerChargeRate", 5000, 1, 1000000);
 
     private static final ModConfigSpec.IntValue RANGE_CHARGER_ENERGY_CAPACITY = BUILDER
         .comment("范围充电器的能量缓存上限（FE）。")
-        .defineInRange("rangeChargerEnergyCapacity", 1000000, 1000, Integer.MAX_VALUE);
+        .defineInRange("rangeChargerEnergyCapacity", 10000000, 1000, Integer.MAX_VALUE);
 
     private static final ModConfigSpec.IntValue RANGE_CHARGER_MAX_TRANSFER = BUILDER
         .comment("范围充电器接收外部能量的最大速率（FE/tick）。")
-        .defineInRange("rangeChargerMaxTransfer", 5000, 1, Integer.MAX_VALUE);
+        .defineInRange("rangeChargerMaxTransfer", 100000, 1, Integer.MAX_VALUE);
 
     private static final ModConfigSpec.IntValue RANGE_CHARGER_MAX_TARGETS = BUILDER
-        .comment("范围充电器每 tick 最多充电的对象数量（方块+物品合计）。")
-        .defineInRange("rangeChargerMaxTargets", 10, 1, 1000);
+        .comment("范围充电器每 tick 最多充电的对象数量（方块+物品+玩家物品合计）。")
+        .defineInRange("rangeChargerMaxTargets", 50, 1, 1000);
 
     private static final ModConfigSpec.BooleanValue RANGE_CHARGER_CHARGE_BLOCKS = BUILDER
         .comment("是否给范围内可充电方块供电。")
@@ -56,6 +56,10 @@ public class Config {
     private static final ModConfigSpec.BooleanValue RANGE_CHARGER_CHARGE_ITEMS = BUILDER
         .comment("是否给范围内掉落物中的可充电物品供电。")
         .define("rangeChargerChargeItems", true);
+
+    private static final ModConfigSpec.BooleanValue RANGE_CHARGER_CHARGE_PLAYER_ITEMS = BUILDER
+        .comment("是否给范围内玩家手持/背包中的可充电物品供电（如无线终端）。")
+        .define("rangeChargerChargePlayerItems", true);
 
     // ========== 定量保持器 ==========
     private static final ModConfigSpec.IntValue QUANTITY_KEEPER_ENERGY_USAGE = BUILDER
@@ -131,6 +135,7 @@ public class Config {
     public static int rangeChargerMaxTargets;
     public static boolean rangeChargerChargeBlocks;
     public static boolean rangeChargerChargeItems;
+    public static boolean rangeChargerChargePlayerItems;
     public static int quantityKeeperEnergyUsage;
     public static int quantityKeeperDefaultTarget;
     public static int quantityKeeperDestroyRate;
@@ -164,6 +169,7 @@ public class Config {
         rangeChargerMaxTargets = RANGE_CHARGER_MAX_TARGETS.get();
         rangeChargerChargeBlocks = RANGE_CHARGER_CHARGE_BLOCKS.get();
         rangeChargerChargeItems = RANGE_CHARGER_CHARGE_ITEMS.get();
+        rangeChargerChargePlayerItems = RANGE_CHARGER_CHARGE_PLAYER_ITEMS.get();
 
         quantityKeeperEnergyUsage = QUANTITY_KEEPER_ENERGY_USAGE.get();
         quantityKeeperDefaultTarget = QUANTITY_KEEPER_DEFAULT_TARGET.get();

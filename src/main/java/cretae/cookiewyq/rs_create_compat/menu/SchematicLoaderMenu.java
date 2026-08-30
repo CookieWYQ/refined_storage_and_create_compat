@@ -2,6 +2,8 @@ package cretae.cookiewyq.rs_create_compat.menu;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -9,17 +11,23 @@ import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.items.SlotItemHandler;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 蓝图加农炮装填器菜单：54 格库存 + 蓝图槽 + 6 插件槽 + 玩家背包。
+ * 蓝图加农炮装填器菜单：54 格库存（支持同类型装填器集群合并内存 + 滚动条翻页）
+ * + 蓝图槽 + 6 插件槽 + 玩家背包。
  */
 public class SchematicLoaderMenu extends AbstractContainerMenu {
     /** 按钮 id：0/1/2/3 = 自动打印/部署/回收/火药 开关。 */
     private final SchematicLoaderBlockEntity loader;
     private final ContainerData data;
+    /** 集群内所有装填器的库存（含自身）；客户端重建时仅自身一个空库存。 */
+    private final List<IItemHandler> clusterInventories = new ArrayList<>();
+    /** 当前行偏移（0 = 从第一个装填器第一行开始）。 */
+    private int rowOffset;
 
     public SchematicLoaderMenu(final int id, final Inventory inventory) {
         this(id, inventory, null);
@@ -33,31 +41,40 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
         this.data = loader != null ? loader.getContainerData() : new SimpleContainerData(4);
         addDataSlots(data);
 
-        // 客户端重建时使用空容器，保证槽位数与服务端一致（内容由数据包同步）
         final ItemStackHandler blueprint = loader != null ? loader.getBlueprintSlot() : new ItemStackHandler(1);
         final ItemStackHandler upgrades = loader != null ? loader.getUpgradeContainer() : new ItemStackHandler(6);
-        final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(54);
-        // 蓝图槽（Menu 槽位 x/y 各-1 以与背景 slot 精灵对齐）
-        addSlot(new SlotItemHandler(blueprint, 0, 7, 7));
-        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=186 y=5+i*18）
-        for (int i = 0; i < 6; i++) {
-            addSlot(new UpgradeSlot(upgrades, i, 186, 5 + i * 18));
+
+        // 集群库存：同类型装填器并排时合并显示（内存叠加），滚动条按行滚动浏览
+        if (loader != null) {
+            for (final SchematicLoaderBlockEntity ldr : loader.collectCluster()) {
+                clusterInventories.add(ldr.getInventory());
+            }
+        } else {
+            clusterInventories.add(new ItemStackHandler(54));
         }
-        // 主库存 54 格（6 行 × 9 列）
+
+        // 蓝图槽（Menu 槽位 x/y = 背景精灵坐标 +1，与背景 slot 精灵重合）
+        addSlot(new SlotItemHandler(blueprint, 0, 9, 9));
+        // 插件槽（6 格竖排，界面右侧独立栏，背景精灵 x=187 y=6+i*18 → Menu +1）
+        for (int i = 0; i < 6; i++) {
+            addSlot(new UpgradeSlot(upgrades, i, 188, 7 + i * 18));
+        }
+        // 主库存 54 格（6 行 × 9 列，背景精灵 (8,26) 起 → Menu (9,27) 起）
         for (int row = 0; row < 6; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new SlotItemHandler(loaderInv, col + row * 9, 7 + col * 18, 25 + row * 18));
+                addSlot(new ClusterSlot(clusterInventories, () -> rowOffset, 9, 54,
+                    col + row * 9, 9 + col * 18, 27 + row * 18));
             }
         }
-        // 玩家主物品栏
+        // 玩家主物品栏（背景精灵 (8,188) 起 → Menu (9,189) 起）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                addSlot(new Slot(inventory, col + row * 9 + 9, 7 + col * 18, 139 + row * 18));
+                addSlot(new Slot(inventory, col + row * 9 + 9, 9 + col * 18, 189 + row * 18));
             }
         }
-        // 快捷栏
+        // 快捷栏（背景精灵 (8,260) → Menu (9,261)）
         for (int col = 0; col < 9; col++) {
-            addSlot(new Slot(inventory, col, 7 + col * 18, 197));
+            addSlot(new Slot(inventory, col, 9 + col * 18, 261));
         }
     }
 
@@ -65,6 +82,21 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
                                              final Inventory inventory,
                                              final SchematicLoaderBlockEntity loader) {
         return new SchematicLoaderMenu(id, inventory, loader);
+    }
+
+    /** @return 集群内装填器数量（内存叠加后需要翻页的数量）。 */
+    public int getClusterSize() {
+        return clusterInventories.size();
+    }
+
+    /** @return 当前行偏移。 */
+    public int getRowOffset() {
+        return rowOffset;
+    }
+
+    public void setRowOffset(final int rowOffset) {
+        // 每个装填器 6 行；最大偏移 = 集群总行数 - 6
+        this.rowOffset = Math.max(0, Math.min(rowOffset, clusterInventories.size() * 6 - 6));
     }
 
     @Override

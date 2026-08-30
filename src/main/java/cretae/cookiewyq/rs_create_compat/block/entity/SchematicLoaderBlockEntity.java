@@ -252,17 +252,13 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     protected void restockFromNetwork(final SchematicannonBlockEntity cannon, final Network network) {
         final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
         final AutocraftingNetworkComponent autocrafting = network.getComponent(AutocraftingNetworkComponent.class);
+        // 以加农炮为中心 BFS 统计所有紧贴装填器（含自身）中该物品的已有量，
+        // 避免多个装填器分别贴加农炮两侧互不识别导致重复拉取。
         for (final Object2IntMap.Entry<Item> entry : cannon.checklist.required.object2IntEntrySet()) {
             final Item item = entry.getKey();
             final int needed = entry.getIntValue();
-            final int gathered = cannon.checklist.gathered.getInt(item);
-            final int missingForCannon = needed - gathered;
-            if (missingForCannon <= 0) {
-                continue;
-            }
-            // 多装填器防重复：统计所有相邻装填器（含自身）中该物品的已有量
-            final int allLoadersHave = countItemInCluster(item);
-            final int toFetch = missingForCannon - allLoadersHave;
+            final int clusterHave = countItemInClusterAroundCannon(cannon, item);
+            final int toFetch = needed - clusterHave;
             if (toFetch <= 0) {
                 continue;
             }
@@ -276,6 +272,32 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             } else if (hasAutocraftingUpgrade()) {
                 // 网络不足且安装了自动合成升级：请求自动合成
                 autocrafting.ensureTask(resource, toFetch - inNetwork, Actor.EMPTY, null);
+            }
+        }
+        // 打印完成后，库存中剩余的蓝图材料自动回流网络（不再多留）
+        recycleOverflowToNetwork(cannon, network);
+    }
+
+    /** 打印完成后，库存中属于当前蓝图的材料自动回流到网络。 */
+    private void recycleOverflowToNetwork(final SchematicannonBlockEntity cannon, final Network network) {
+        // 仅在打印完成（或没有进行中的打印任务）时清理，避免打印过程中误回收
+        final boolean printingDone = cannon.blocksToPlace > 0 && cannon.blocksPlaced >= cannon.blocksToPlace;
+        if (!printingDone) {
+            return;
+        }
+        final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
+        for (int i = 0; i < inventory.getSlots(); i++) {
+            final ItemStack stack = inventory.getStackInSlot(i);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            if (cannon.checklist.required.getInt(stack.getItem()) <= 0) {
+                continue; // 非蓝图材料不回流
+            }
+            final ItemStack toReturn = inventory.extractItem(i, stack.getCount(), false);
+            if (!toReturn.isEmpty()) {
+                final ResourceKey resource = new ItemResource(toReturn.getItem(), DataComponentPatch.EMPTY);
+                storage.insert(resource, toReturn.getCount(), Action.EXECUTE, Actor.EMPTY);
             }
         }
     }
@@ -377,6 +399,42 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             }
         }
         return count;
+    }
+
+    /**
+     * 收集与自身紧贴相连的<b>同类型</b>装填器集群（BFS）。
+     * 基础装填器只与基础装填器合并，高级装填器只与高级装填器合并（通过 isAdvanced 区分），
+     * 基础与高级之间不互相合并。
+     *
+     * @return 集群内所有装填器（含自身），按 BFS 顺序
+     */
+    public java.util.List<SchematicLoaderBlockEntity> collectCluster() {
+        final java.util.List<SchematicLoaderBlockEntity> result = new java.util.ArrayList<>();
+        final Level level = getLevel();
+        if (level == null) {
+            result.add(this);
+            return result;
+        }
+        final boolean selfAdvanced = this instanceof AdvancedSchematicLoaderBlockEntity;
+        final java.util.IdentityHashMap<SchematicLoaderBlockEntity, Boolean> seen =
+            new java.util.IdentityHashMap<>();
+        final java.util.Queue<SchematicLoaderBlockEntity> queue = new java.util.ArrayDeque<>();
+        seen.put(this, Boolean.TRUE);
+        queue.add(this);
+        while (!queue.isEmpty()) {
+            final SchematicLoaderBlockEntity ldr = queue.poll();
+            result.add(ldr);
+            for (final Direction direction : Direction.values()) {
+                final BlockEntity neighbor = level.getBlockEntity(ldr.worldPosition.relative(direction));
+                if (neighbor instanceof SchematicLoaderBlockEntity next
+                    && !seen.containsKey(next)
+                    && (next instanceof AdvancedSchematicLoaderBlockEntity) == selfAdvanced) {
+                    seen.put(next, Boolean.TRUE);
+                    queue.add(next);
+                }
+            }
+        }
+        return result;
     }
 
     /** 供菜单同步：0/1/2/3 = 自动打印/部署/回收/火药 开关。 */

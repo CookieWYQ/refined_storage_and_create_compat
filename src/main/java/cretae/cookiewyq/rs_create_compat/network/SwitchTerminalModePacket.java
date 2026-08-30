@@ -30,6 +30,10 @@ public record SwitchTerminalModePacket(SlotReference slotReference, int mode) im
         final Optional<ItemStack> stackOpt = packet.slotReference().resolve(player);
         if (stackOpt.isPresent() && stackOpt.get().getItem() instanceof AdvancedRemoteTerminalItem item) {
             final ItemStack stack = stackOpt.get();
+            // 已是目标模式则不重开（避免点击当前 Tab 导致界面关闭重开）
+            if (AdvancedRemoteTerminalItem.getMode(stack) == packet.mode()) {
+                return;
+            }
             AdvancedRemoteTerminalItem.setMode(stack, packet.mode());
             item.openModeScreen(player, stack, packet.slotReference());
         }

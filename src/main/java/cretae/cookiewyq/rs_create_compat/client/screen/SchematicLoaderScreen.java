@@ -1,5 +1,6 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
+import com.refinedmods.refinedstorage.common.support.widget.ScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import net.minecraft.client.gui.GuiGraphics;
@@ -10,7 +11,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 
 /**
- * 蓝图加农炮装填器界面：54 格库存 + 蓝图槽 + 插件槽 + 四个自动开关。
+ * 蓝图加农炮装填器界面：54 格库存（同类型装填器集群合并内存，滚动条翻页）
+ * + 蓝图槽 + 插件槽 + 四个自动开关。
  * 开关布局：左侧文字标签 + 右侧小按钮（开=绿✓ / 关=红✗）。
  */
 public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoaderMenu> {
@@ -25,30 +27,54 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
         "gui.rs_create_compat.schematic_loader.gunpowder"
     };
 
-    /** 每个 toggle 的位置：(labelX, labelY, btnX, btnY) —— 主区域下方，4 行 × 2 列，右侧独立栏上方。 */
+    /** 每个 toggle 的位置：(labelX, labelY, btnX, btnY) —— 库存下方（y=140..188），玩家背包上方。 */
     private static final int LABEL_X = 10;
-    private static final int BTN_X = 108;
-    private static final int ROW0_Y = 120;
-    private static final int ROW_H = 16;
+    private static final int BTN_X = 150;
+    private static final int ROW0_Y = 140;
+    private static final int ROW_H = 14;
     private static final int BTN_W = 14;
     private static final int BTN_H = 12;
+    /** 库存区滚动条：库存区 (9..171, 27..135)，滚动条放右侧。 */
+    private static final int SCROLLBAR_X = 171;
+    private static final int SCROLLBAR_Y = 28;
+    private static final int SCROLLBAR_H = 106;
+
+    private final Button[] toggleButtons = new Button[BTN_IDS.length];
+    private ScrollbarWidget clusterScrollbar;
 
     public SchematicLoaderScreen(final SchematicLoaderMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
         this.imageWidth = 210; // 176 主界面 + 34 右侧升级栏（仿 RS）
-        this.imageHeight = 222;
+        this.imageHeight = 268;
         this.inventoryLabelY = 10000; // 玩家背包标签已含在背景中
     }
 
     @Override
     protected void init() {
         super.init();
+
+        // 集群滚动条（同类型装填器合并内存时按行滚动浏览）
+        clusterScrollbar = new ScrollbarWidget(
+            leftPos + SCROLLBAR_X,
+            topPos + SCROLLBAR_Y,
+            ScrollbarWidget.Type.SMALL,
+            SCROLLBAR_H
+        );
+        clusterScrollbar.setListener(offset -> menu.setRowOffset((int) Math.round(offset)));
+        addWidget(clusterScrollbar);
+        // 每个装填器 6 行，可见 6 行：最大偏移 = 集群×6 - 6
+        final int maxOffset = menu.getClusterSize() * 6 - 6;
+        clusterScrollbar.setEnabled(maxOffset > 0);
+        clusterScrollbar.setMaxOffset(maxOffset);
+
         for (int i = 0; i < BTN_IDS.length; i++) {
             final int id = BTN_IDS[i];
             final int y = ROW0_Y + i * ROW_H;
-            addRenderableWidget(new Button.Builder(getStateFor(id), btn -> sendButton(id))
+            final Button button = new Button.Builder(getStateFor(id), btn -> sendButton(id))
                 .bounds(leftPos + BTN_X, topPos + y, BTN_W, BTN_H)
-                .build());
+                .build();
+            toggleButtons[i] = button;
+            addRenderableWidget(button);
         }
     }
 
@@ -72,17 +98,20 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     public void render(final GuiGraphics guiGraphics, final int mouseX, final int mouseY, final float partialTick) {
         // 刷新按钮上的 ✓/✗ 文字（状态改变后同步）
         for (int i = 0; i < BTN_IDS.length; i++) {
-            if (children().get(i) instanceof Button btn) {
-                btn.setMessage(getStateFor(BTN_IDS[i]));
+            if (toggleButtons[i] != null) {
+                toggleButtons[i].setMessage(getStateFor(BTN_IDS[i]));
             }
         }
         super.render(guiGraphics, mouseX, mouseY, partialTick);
+        if (clusterScrollbar != null) {
+            clusterScrollbar.render(guiGraphics, mouseX, mouseY, partialTick);
+        }
     }
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
         // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 222);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 268);
     }
 
     @Override
@@ -101,6 +130,35 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    @Override
+    public boolean mouseClicked(final double mouseX, final double mouseY, final int clickedButton) {
+        return clusterScrollbar != null && clusterScrollbar.mouseClicked(mouseX, mouseY, clickedButton)
+            || super.mouseClicked(mouseX, mouseY, clickedButton);
+    }
+
+    @Override
+    public void mouseMoved(final double mx, final double my) {
+        if (clusterScrollbar != null) {
+            clusterScrollbar.mouseMoved(mx, my);
+        }
+        super.mouseMoved(mx, my);
+    }
+
+    @Override
+    public boolean mouseReleased(final double mx, final double my, final int button) {
+        return clusterScrollbar != null && clusterScrollbar.mouseReleased(mx, my, button)
+            || super.mouseReleased(mx, my, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(final double x, final double y, final double z, final double delta) {
+        final boolean handled = clusterScrollbar != null
+            && !hasShiftDown()
+            && !hasControlDown()
+            && clusterScrollbar.mouseScrolled(x, y, z, delta);
+        return handled || super.mouseScrolled(x, y, z, delta);
     }
 
     /** 空升级槽悬停提示：升级槽（slot 1..6）为空时显示可放入的升级种类。 */
