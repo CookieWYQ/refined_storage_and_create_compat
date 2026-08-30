@@ -120,11 +120,8 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
             100, 78, 0xA0A0A0, false);
     }
 
-    /** 输入框内容变化后同步到 Menu（客户端展示），回车/失焦由父类处理。 */
-    @Override
-    public void tick() {
-        super.tick();
-        // 同步服务端目标数量到输入框（外部变化时）
+    /** 输入框内容变化后同步到 Menu（客户端展示），在 render 中处理（tick 为 final 不可覆写）。 */
+    private void syncTargetBox() {
         final int serverTarget = menu.getTargetAmount();
         if (targetBox != null && !targetBox.getValue().equals(Integer.toString(serverTarget))) {
             // 仅在未聚焦时更新，避免打断输入
@@ -132,6 +129,12 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
                 targetBox.setValue(Integer.toString(serverTarget));
             }
         }
+    }
+
+    @Override
+    public void render(final GuiGraphics guiGraphics, final int mouseX, final int mouseY, final float partialTick) {
+        syncTargetBox();
+        super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 
     @Override
