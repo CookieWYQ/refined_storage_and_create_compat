@@ -34,16 +34,16 @@ public class QuantityKeeperMenu extends AbstractContainerMenu {
 
         if (keeper != null) {
             addSlot(new Slot(keeper.getInventory(), 0, 8, 20));
-            // 插件槽（6 格，2 列 × 3 行）
+            // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
             for (int i = 0; i < 6; i++) {
-                addSlot(new Slot(keeper.getInventory(), 1 + i, 62 + (i % 2) * 18, 20 + (i / 2) * 18));
+                addSlot(new Slot(keeper.getInventory(), 1 + i, 187, 6 + i * 18));
             }
         } else {
             // 客户端重建：槽位数必须与服务端一致（内容由数据包同步）
             final net.minecraft.world.SimpleContainer empty = new net.minecraft.world.SimpleContainer(7);
             addSlot(new Slot(empty, 0, 8, 20));
             for (int i = 0; i < 6; i++) {
-                addSlot(new Slot(empty, 1 + i, 62 + (i % 2) * 18, 20 + (i / 2) * 18));
+                addSlot(new Slot(empty, 1 + i, 187, 6 + i * 18));
             }
         }
         // 玩家主物品栏（3 行 9 列）

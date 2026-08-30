@@ -39,9 +39,9 @@ public class SchematicLoaderMenu extends AbstractContainerMenu {
         final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(54);
         // 蓝图槽
         addSlot(new SlotItemHandler(blueprint, 0, 8, 8));
-        // 插件槽（6 格横排）
+        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
         for (int i = 0; i < 6; i++) {
-            addSlot(new SlotItemHandler(upgrades, i, 35 + i * 18, 8));
+            addSlot(new SlotItemHandler(upgrades, i, 187, 6 + i * 18));
         }
         // 主库存 54 格（6 行 × 9 列）
         for (int row = 0; row < 6; row++) {

@@ -66,12 +66,13 @@ def check(path, slots, buttons):
 
 
 check("src/main/resources/assets/rs_create_compat/textures/gui/schematic_loader.png",
-      [(8, 8, 1, 1), (35, 8, 6, 1), (8, 26, 9, 6), (8, 140, 9, 3), (8, 198, 9, 1)],
-      [])
+      [(8, 8, 1, 1), (8, 26, 9, 6), (8, 140, 9, 3), (8, 198, 9, 1), (187, 6, 1, 6)],
+      [(172, 120, 26, 14, "print"), (172, 136, 26, 14, "deploy"),
+       (172, 152, 26, 14, "recycle"), (172, 168, 26, 14, "gunpowder")])
 check("src/main/resources/assets/rs_create_compat/textures/gui/advanced_schematic_loader.png",
-      [(8, 30, 9, 3), (8, 98, 9, 12), (8, 326, 6, 1), (8, 348, 9, 3), (8, 406, 9, 1)],
+      [(8, 30, 9, 3), (8, 98, 9, 12), (8, 348, 9, 3), (8, 406, 9, 1), (187, 6, 1, 6)],
       [(8, 428, 18, 14, "A"), (28, 428, 18, 14, "D"), (48, 428, 18, 14, "R"),
        (68, 428, 18, 14, "G"), (100, 428, 68, 14, "Start")])
 check("src/main/resources/assets/rs_create_compat/textures/gui/quantity_keeper.png",
-      [(8, 20, 1, 1), (62, 20, 2, 3), (8, 84, 9, 3), (8, 142, 9, 1)],
+      [(8, 20, 1, 1), (8, 84, 9, 3), (8, 142, 9, 1), (187, 6, 1, 6)],
       [(128, 20, 20, 14, "-"), (150, 20, 20, 14, "+"), (110, 42, 60, 16, "destroy")])

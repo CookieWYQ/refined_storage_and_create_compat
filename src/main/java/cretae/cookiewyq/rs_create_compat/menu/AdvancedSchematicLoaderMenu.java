@@ -37,9 +37,9 @@ public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
         final ItemStackHandler upgrades = loader != null ? loader.getUpgradeContainer() : new ItemStackHandler(6);
         final ItemStackHandler queue = loader != null ? loader.getQueue() : new ItemStackHandler(27);
         final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(108);
-        // 插件槽（6 格横排，库存与背包之间的独立一行）
+        // 插件槽（6 格竖排，界面右侧独立栏，仿 RS 原版 x=187 y=6+i*18）
         for (int i = 0; i < 6; i++) {
-            addSlot(new SlotItemHandler(upgrades, i, 8 + i * 18, 326));
+            addSlot(new SlotItemHandler(upgrades, i, 187, 6 + i * 18));
         }
         // 蓝图队列 27 格（3 行 × 9 列）
         for (int row = 0; row < 3; row++) {

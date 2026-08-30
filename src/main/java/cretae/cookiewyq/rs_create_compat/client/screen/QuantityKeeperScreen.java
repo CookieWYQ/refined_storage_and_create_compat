@@ -18,7 +18,7 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
 
     public QuantityKeeperScreen(final QuantityKeeperMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
-        this.imageWidth = 176;
+        this.imageWidth = 210; // 176 主界面 + 34 右侧升级栏（仿 RS）
         this.imageHeight = 166;
         this.inventoryLabelY = 10000; // 玩家背包标签已含在背景中
     }
@@ -49,7 +49,7 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
         // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 176, 166);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 166);
     }
 
     @Override
@@ -58,12 +58,12 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         // 标记标签
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.marker"),
             8, 8, 0xA0A0A0, false);
-        // 插件标签
-        guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.upgrades"),
-            62, 8, 0xA0A0A0, false);
         // 目标数量
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.target",
             Integer.toString(menu.getTargetAmount())), 100, 24, 0xFFFFFF, false);
+        // 升级栏标签（右侧独立栏，仿 RS 原版）
+        guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.upgrades"),
+            176, 100, 0xA0A0A0, false);
         // 升级信息
         guiGraphics.drawString(font,
             Component.translatable("gui.rs_create_compat.quantity_keeper.speed", menu.getSpeedUpgradeCount()),

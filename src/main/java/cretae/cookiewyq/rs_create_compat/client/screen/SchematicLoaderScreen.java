@@ -18,7 +18,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
 
     public SchematicLoaderScreen(final SchematicLoaderMenu menu, final Inventory inventory, final Component title) {
         super(menu, inventory, title);
-        this.imageWidth = 208;
+        this.imageWidth = 210; // 176 主界面 + 34 右侧升级栏（仿 RS）
         this.imageHeight = 222;
         this.inventoryLabelY = 10000; // 玩家背包标签已含在背景中
     }
@@ -26,15 +26,15 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     protected void init() {
         super.init();
-        addToggleButton(0, 172, 110, "gui.rs_create_compat.schematic_loader.print");
-        addToggleButton(1, 172, 126, "gui.rs_create_compat.schematic_loader.deploy");
-        addToggleButton(2, 172, 142, "gui.rs_create_compat.schematic_loader.recycle");
-        addToggleButton(3, 172, 158, "gui.rs_create_compat.schematic_loader.gunpowder");
+        addToggleButton(0, 172, 120, "gui.rs_create_compat.schematic_loader.print");
+        addToggleButton(1, 172, 136, "gui.rs_create_compat.schematic_loader.deploy");
+        addToggleButton(2, 172, 152, "gui.rs_create_compat.schematic_loader.recycle");
+        addToggleButton(3, 172, 168, "gui.rs_create_compat.schematic_loader.gunpowder");
     }
 
     private void addToggleButton(final int id, final int x, final int y, final String labelKey) {
         addRenderableWidget(new Button.Builder(Component.translatable(labelKey), btn -> sendButton(id))
-            .bounds(leftPos + x, topPos + y, 30, 14)
+            .bounds(leftPos + x, topPos + y, 26, 14)
             .build());
     }
 
@@ -47,22 +47,20 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
         // 背景已包含全部槽位（由 make_gui_bg.py 生成，与 Menu 槽位一一对应）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 208, 222);
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, 210, 222);
     }
 
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, 0xFFFFFF, false);
-        // 蓝图槽 / 插件标签
-        guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.schematic_loader.blueprint"),
-            170, 5, 0xA0A0A0, false);
+        // 升级栏标签（右侧独立栏，仿 RS 原版）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.schematic_loader.upgrades"),
-            170, 28, 0xA0A0A0, false);
+            176, 100, 0xA0A0A0, false);
         // 开关状态
-        drawToggleState(guiGraphics, 110, 0);
-        drawToggleState(guiGraphics, 126, 1);
-        drawToggleState(guiGraphics, 142, 2);
-        drawToggleState(guiGraphics, 158, 3);
+        drawToggleState(guiGraphics, 120, 0);
+        drawToggleState(guiGraphics, 136, 1);
+        drawToggleState(guiGraphics, 152, 2);
+        drawToggleState(guiGraphics, 168, 3);
     }
 
     private void drawToggleState(final GuiGraphics guiGraphics, final int y, final int index) {
@@ -72,7 +70,7 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
             case 2 -> menu.isAutoRecycle();
             default -> menu.isAutoFillGunpowder();
         };
-        guiGraphics.drawString(font, Component.literal(on ? "ON" : "OFF"), 204, y + 3, on ? 0x55FF55 : 0xFF5555, false);
+        guiGraphics.drawString(font, Component.literal(on ? "开" : "关"), 200, y + 3, on ? 0x55FF55 : 0xFF5555, false);
     }
 
     @Override
