@@ -196,11 +196,11 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         final int maxZ = worldPosition.getZ() + halfZ;
 
         int targets = 0;
-        for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : level.getBlockEntities().entrySet()) {
+        for (final BlockEntity blockEntity : level.getBlockEntities()) {
             if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
                 return;
             }
-            final BlockPos pos = entry.getKey();
+            final BlockPos pos = blockEntity.getBlockPos();
             if (pos.getX() < minX || pos.getX() > maxX
                 || pos.getY() < minY || pos.getY() > maxY
                 || pos.getZ() < minZ || pos.getZ() > maxZ) {
@@ -209,7 +209,7 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
             if (pos.equals(worldPosition)) {
                 continue; // 跳过自身
             }
-            if (chargeBlock(level, pos, entry.getValue())) {
+            if (chargeBlock(level, pos, blockEntity)) {
                 targets++;
             }
         }
