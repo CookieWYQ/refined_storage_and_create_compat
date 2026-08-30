@@ -26,6 +26,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import com.refinedmods.refinedstorage.common.support.network.AbstractBaseNetworkNodeContainerBlockEntity;
 import net.neoforged.neoforge.capabilities.Capabilities;
@@ -33,35 +34,45 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.items.ItemStackHandler;
 
 import javax.annotation.Nullable;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * 蓝图加农炮装填器（基础版）：
- * 自动从 RS 网络获取相邻 Create 蓝图加农炮（Schematicannon）所需资源，
+ * 蓝图加农炮装填器（基础版）：自动从 RS 网络获取相邻 Create 蓝图加农炮（Schematicannon）所需资源，
  * 自身作为加农炮的合法容器（IItemHandler）供其提取。
  * <p>
- * 拥有 54 格库存、1 个蓝图槽、6 个插件槽（速度 / 自动合成）。
- * 多个装填器紧贴连接时形成集群，自动分配任务、不重复获取。
+ * 高级蓝图加农炮装填器继承本类并扩展队列功能（见子类）。
  */
 public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainerBlockEntity<SchematicLoaderNetworkNode> {
-    private static final ResourceLocation SPEED_UPGRADE = ResourceLocation.fromNamespaceAndPath("refinedstorage", "speed_upgrade");
-    private static final ResourceLocation AUTOCRAFTING_UPGRADE = ResourceLocation.fromNamespaceAndPath("refinedstorage", "autocrafting_upgrade");
+    protected static final ResourceLocation SPEED_UPGRADE =
+        ResourceLocation.fromNamespaceAndPath("refinedstorage", "speed_upgrade");
+    protected static final ResourceLocation AUTOCRAFTING_UPGRADE =
+        ResourceLocation.fromNamespaceAndPath("refinedstorage", "autocrafting_upgrade");
 
-    /** 主库存：54 格。 */
-    private final ItemStackHandler inventory = new ItemStackHandler(54);
+    /** 主库存（基础版 54 格，高级版 108 格）。 */
+    protected final ItemStackHandler inventory;
     /** 蓝图槽（无加农炮时手动放置已部署蓝图）。 */
-    private final ItemStackHandler blueprintSlot = new ItemStackHandler(1);
+    protected final ItemStackHandler blueprintSlot = new ItemStackHandler(1);
     /** 插件槽：6 格。 */
-    private final ItemStackHandler upgradeContainer = new ItemStackHandler(6);
+    protected final ItemStackHandler upgradeContainer = new ItemStackHandler(6);
+    /** 蓝图队列（仅高级版启用）。 */
+    protected final ItemStackHandler queue;
 
-    private boolean autoPrint;
-    private boolean autoDeploy;
-    private boolean autoRecycle;
-    private boolean autoFillGunpowder = true;
+    protected boolean autoPrint;
+    protected boolean autoDeploy;
+    protected boolean autoRecycle;
+    protected boolean autoFillGunpowder = true;
 
     public SchematicLoaderBlockEntity(final BlockPos pos, final BlockState state) {
-        super(RS_Create_Compat.SCHEMATIC_LOADER_BLOCK_ENTITY.get(), pos, state, new SchematicLoaderNetworkNode());
+        this(RS_Create_Compat.SCHEMATIC_LOADER_BLOCK_ENTITY.get(), pos, state, 54, false);
+    }
+
+    protected SchematicLoaderBlockEntity(final BlockEntityType<?> blockEntityType,
+                                         final BlockPos pos,
+                                         final BlockState state,
+                                         final int capacity,
+                                         final boolean withQueue) {
+        super((BlockEntityType<Object>) blockEntityType, pos, state, new SchematicLoaderNetworkNode());
+        this.inventory = new ItemStackHandler(capacity);
+        this.queue = withQueue ? new ItemStackHandler(27) : new ItemStackHandler(0);
         this.mainNetworkNode.setBlockEntity(this);
     }
 
@@ -75,6 +86,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
 
     public ItemStackHandler getUpgradeContainer() {
         return upgradeContainer;
+    }
+
+    /** 蓝图队列（高级版 27 格；基础版为空占位，供菜单统一引用）。 */
+    public ItemStackHandler getQueue() {
+        return queue;
     }
 
     public boolean isAutoPrint() {
@@ -117,11 +133,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return 10;
     }
 
-    private boolean hasAutocraftingUpgrade() {
+    protected boolean hasAutocraftingUpgrade() {
         return countUpgrades(AUTOCRAFTING_UPGRADE) > 0;
     }
 
-    private int countUpgrades(final ResourceLocation upgradeId) {
+    protected int countUpgrades(final ResourceLocation upgradeId) {
         final Item upgradeItem = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(upgradeId);
         int count = 0;
         for (int i = 0; i < upgradeContainer.getSlots(); i++) {
@@ -143,6 +159,15 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return getBlockState().getBlock().getName();
     }
 
+    /** 取出下一张待打印蓝图（基础版从蓝图槽取；高级版覆写从队列取）。 */
+    protected ItemStack getNextBlueprint() {
+        final ItemStack stack = blueprintSlot.getStackInSlot(0);
+        if (!stack.isEmpty()) {
+            blueprintSlot.setStackInSlot(0, ItemStack.EMPTY);
+        }
+        return stack;
+    }
+
     /** 由网络节点每 tick 驱动：为相邻蓝图加农炮补充资源。 */
     public void doLoaderWork(final Network network) {
         final Level level = getLevel();
@@ -156,12 +181,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             return; // 没有紧贴的加农炮，仅保留手动蓝图槽
         }
 
-        // 自动部署：将蓝图槽中的蓝图放入加农炮蓝图槽
-        if (autoDeploy) {
-            final ItemStack blueprint = blueprintSlot.getStackInSlot(0);
-            if (!blueprint.isEmpty() && cannon.inventory.getStackInSlot(0).isEmpty()) {
-                cannon.inventory.setStackInSlot(0, blueprint.copy());
-                blueprintSlot.setStackInSlot(0, ItemStack.EMPTY);
+        // 自动部署：将下一张蓝图放入加农炮蓝图槽
+        if (autoDeploy && cannon.inventory.getStackInSlot(0).isEmpty()) {
+            final ItemStack blueprint = getNextBlueprint();
+            if (!blueprint.isEmpty()) {
+                cannon.inventory.setStackInSlot(0, blueprint);
                 cannon.sendUpdate = true;
             }
         }
@@ -173,24 +197,39 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             restockGunpowder(network);
         }
 
-        // 自动回收：打印完成后将空白蓝图放回蓝图槽
-        if (autoRecycle && cannon.blocksToPlace > 0 && cannon.blocksPlaced >= cannon.blocksToPlace) {
+        // 自动回收：打印完成后回收空白蓝图（基础版放回蓝图槽，高级版放入队列）
+        if (isAutoRecycleActive() && cannon.blocksToPlace > 0 && cannon.blocksPlaced >= cannon.blocksToPlace) {
             final ItemStack out = cannon.inventory.getStackInSlot(1);
-            if (!out.isEmpty() && blueprintSlot.getStackInSlot(0).isEmpty()) {
-                blueprintSlot.setStackInSlot(0, out.copy());
+            if (!out.isEmpty()) {
+                recycleFinishedBlueprint(out.copy());
                 cannon.inventory.setStackInSlot(1, ItemStack.EMPTY);
                 cannon.sendUpdate = true;
             }
         }
 
         // 自动打印：资源足够时触发加农炮开始打印
-        if (autoPrint && cannon.state == State.STOPPED && cannon.printer.isLoaded() && isResourcesReady(cannon)) {
+        if (shouldAutoPrint() && cannon.state == State.STOPPED && cannon.printer.isLoaded() && isResourcesReady(cannon)) {
             cannon.state = State.RUNNING;
             cannon.sendUpdate = true;
         }
     }
 
-    private SchematicannonBlockEntity findAttachedCannon(final Level level) {
+    /** 是否启用自动回收（高级版队列运行时可覆写）。 */
+    protected boolean isAutoRecycleActive() {
+        return autoRecycle;
+    }
+
+    /** 处理打印完成的空白蓝图（高级版覆写放入队列）。 */
+    protected void recycleFinishedBlueprint(final ItemStack out) {
+        blueprintSlot.setStackInSlot(0, out);
+    }
+
+    /** 是否触发自动打印（高级版队列运行时可覆写）。 */
+    protected boolean shouldAutoPrint() {
+        return autoPrint;
+    }
+
+    protected SchematicannonBlockEntity findAttachedCannon(final Level level) {
         for (final Direction direction : Direction.values()) {
             final BlockEntity blockEntity = level.getBlockEntity(worldPosition.relative(direction));
             if (blockEntity instanceof SchematicannonBlockEntity cannon) {
@@ -200,7 +239,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return null;
     }
 
-    private void restockFromNetwork(final SchematicannonBlockEntity cannon, final Network network) {
+    protected void restockFromNetwork(final SchematicannonBlockEntity cannon, final Network network) {
         final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
         final AutocraftingNetworkComponent autocrafting = network.getComponent(AutocraftingNetworkComponent.class);
         for (final Object2IntMap.Entry<Item> entry : cannon.checklist.required.object2IntEntrySet()) {
@@ -231,7 +270,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         }
     }
 
-    private void restockGunpowder(final Network network) {
+    protected void restockGunpowder(final Network network) {
         if (countItem(Items.GUNPOWDER) >= 64) {
             return;
         }
@@ -248,7 +287,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         }
     }
 
-    private boolean isResourcesReady(final SchematicannonBlockEntity cannon) {
+    protected boolean isResourcesReady(final SchematicannonBlockEntity cannon) {
         for (final Object2IntMap.Entry<Item> entry : cannon.checklist.required.object2IntEntrySet()) {
             final int gathered = cannon.checklist.gathered.getInt(entry.getKey());
             if (gathered < entry.getIntValue()) {
@@ -258,14 +297,14 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return true;
     }
 
-    private void insertIntoInventory(final ItemStack stack) {
+    protected void insertIntoInventory(final ItemStack stack) {
         ItemStack remainder = stack;
         for (int i = 0; i < inventory.getSlots() && !remainder.isEmpty(); i++) {
             remainder = inventory.insertItem(i, remainder, false);
         }
     }
 
-    private int countItem(final Item item) {
+    protected int countItem(final Item item) {
         int count = 0;
         for (int i = 0; i < inventory.getSlots(); i++) {
             final ItemStack stack = inventory.getStackInSlot(i);
@@ -277,7 +316,7 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     }
 
     /** 统计所有紧贴连接的装填器（含自身）中该物品的数量，避免重复拉取。 */
-    private int countItemInCluster(final Item item) {
+    protected int countItemInCluster(final Item item) {
         int count = countItem(item);
         final Level level = getLevel();
         if (level == null) {
@@ -324,6 +363,9 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         tag.put("Inventory", inventory.serializeNBT(registries));
         tag.put("Blueprint", blueprintSlot.serializeNBT(registries));
         tag.put("Upgrades", upgradeContainer.serializeNBT(registries));
+        if (queue.getSlots() > 0) {
+            tag.put("Queue", queue.serializeNBT(registries));
+        }
         tag.putBoolean("AutoPrint", autoPrint);
         tag.putBoolean("AutoDeploy", autoDeploy);
         tag.putBoolean("AutoRecycle", autoRecycle);
@@ -342,13 +384,15 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         if (tag.contains("Upgrades")) {
             upgradeContainer.deserializeNBT(registries, tag.getCompound("Upgrades"));
         }
+        if (queue.getSlots() > 0 && tag.contains("Queue")) {
+            queue.deserializeNBT(registries, tag.getCompound("Queue"));
+        }
         autoPrint = tag.getBoolean("AutoPrint");
         autoDeploy = tag.getBoolean("AutoDeploy");
         autoRecycle = tag.getBoolean("AutoRecycle");
         autoFillGunpowder = tag.getBoolean("AutoGunpowder");
     }
 
-    /** 向 NeoForge 注册物品处理器（供加农炮识别为容器）与 RS 网络节点容器。 */
     public static void registerCapabilities(final RegisterCapabilitiesEvent event) {
         event.registerBlockEntity(
             Capabilities.ItemHandler.BLOCK,

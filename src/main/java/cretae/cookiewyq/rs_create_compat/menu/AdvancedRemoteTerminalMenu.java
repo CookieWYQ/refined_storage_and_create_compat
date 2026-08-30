@@ -2,7 +2,6 @@ package cretae.cookiewyq.rs_create_compat.menu;
 
 import com.refinedmods.refinedstorage.api.network.Network;
 import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetworkComponent;
-import com.refinedmods.refinedstorage.api.network.energy.EnergyNetworkComponent;
 import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
@@ -19,7 +18,7 @@ import org.jetbrains.annotations.Nullable;
  * 监视器模式通过 RS 原版自动合成仓监视器界面实现（右键打开，见物品 use 逻辑）。
  */
 public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
-    private static final int DATA_COUNT = 8;
+    private static final int DATA_COUNT = 9;
 
     private final ContainerData data;
     @Nullable
@@ -49,8 +48,12 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
         }
         final int mode = AdvancedRemoteTerminalItem.getMode(stack);
         data.set(0, mode);
-        data.set(1, (int) network.getComponent(EnergyNetworkComponent.class).getStored());
-        data.set(2, (int) network.getComponent(EnergyNetworkComponent.class).getCapacity());
+        // 物品自身电量（仿 RS 原版无线终端：界面显示物品电量，没电则操作禁用）
+        if (stack.getItem() instanceof AdvancedRemoteTerminalItem item) {
+            final com.refinedmods.refinedstorage.api.network.energy.EnergyStorage energy = item.createEnergyStorage(stack);
+            data.set(1, (int) energy.getStored());
+            data.set(2, (int) energy.getCapacity());
+        }
         data.set(3, 1);
         final long stored = network.getComponent(StorageNetworkComponent.class).getStored();
         data.set(4, (int) (stored & 0xFFFFFFFFL));
@@ -58,6 +61,8 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
         final AutocraftingNetworkComponent auto = network.getComponent(AutocraftingNetworkComponent.class);
         data.set(6, auto.getOutputs().size());
         data.set(7, auto.getStatuses().size());
+        // 创造版标志（无视电量）
+        data.set(8, stack.getItem() instanceof AdvancedRemoteTerminalItem item && item.isCreative() ? 1 : 0);
     }
 
     @Override
@@ -96,6 +101,11 @@ public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
 
     public int getTaskCount() {
         return data.get(7);
+    }
+
+    /** 创造版无视电量。 */
+    public boolean isCreative() {
+        return data.get(8) == 1;
     }
 
     @Override

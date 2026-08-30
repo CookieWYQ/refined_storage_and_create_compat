@@ -51,6 +51,8 @@ import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 
+import java.util.List;
+
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
 @Mod(RS_Create_Compat.MODID)
 public class RS_Create_Compat {
@@ -83,9 +85,16 @@ public class RS_Create_Compat {
     public static final DeferredItem<UniversalStorageDiskItem> UNIVERSAL_STORAGE_DISK =
         ITEMS.register("universal_storage_disk", UniversalStorageDiskItem::new);
 
-    // 高级远程多功能终端：带能量，可切换多种界面
+    // 高级远程多功能终端（普通 / 满电 / 创造三版本）
     public static final DeferredItem<AdvancedRemoteTerminalItem> ADVANCED_REMOTE_TERMINAL =
-        ITEMS.register("advanced_remote_terminal", AdvancedRemoteTerminalItem::new);
+        ITEMS.register("advanced_remote_terminal",
+            () -> new AdvancedRemoteTerminalItem(AdvancedRemoteTerminalItem.Type.NORMAL));
+    public static final DeferredItem<AdvancedRemoteTerminalItem> ADVANCED_REMOTE_TERMINAL_CHARGED =
+        ITEMS.register("advanced_remote_terminal_charged",
+            () -> new AdvancedRemoteTerminalItem(AdvancedRemoteTerminalItem.Type.CHARGED));
+    public static final DeferredItem<AdvancedRemoteTerminalItem> CREATIVE_ADVANCED_REMOTE_TERMINAL =
+        ITEMS.register("creative_advanced_remote_terminal",
+            () -> new AdvancedRemoteTerminalItem(AdvancedRemoteTerminalItem.Type.CREATIVE));
     public static final DeferredHolder<MenuType<?>, MenuType<AdvancedRemoteTerminalMenu>> ADVANCED_REMOTE_TERMINAL_MENU =
         MENUS.register("advanced_remote_terminal",
             () -> new MenuType<>((id, inventory) -> new AdvancedRemoteTerminalMenu(id, inventory),
@@ -161,6 +170,8 @@ public class RS_Create_Compat {
             .displayItems((parameters, output) -> {
                 output.accept(UNIVERSAL_STORAGE_DISK.get());
                 output.accept(ADVANCED_REMOTE_TERMINAL.get());
+                output.accept(ADVANCED_REMOTE_TERMINAL_CHARGED.get());
+                output.accept(CREATIVE_ADVANCED_REMOTE_TERMINAL.get());
                 output.accept(RANGE_CHARGER_ITEM.get());
                 output.accept(QUANTITY_KEEPER_ITEM.get());
                 output.accept(SCHEMATIC_LOADER_ITEM.get());
@@ -189,6 +200,8 @@ public class RS_Create_Compat {
         modEventBus.addListener(AdvancedSchematicLoaderBlockEntity::registerCapabilities);
         // 调整一：自动合成仓内部输出存储（物品 + 流体能力）
         modEventBus.addListener(RS_Create_Compat::registerAutocrafterCapabilities);
+        // 终端物品能量能力（普通/满电/创造）
+        modEventBus.addListener(RS_Create_Compat::registerTerminalEnergyCapabilities);
 
         // 配置加载
         modEventBus.addListener(Config::onLoad);
@@ -230,6 +243,21 @@ public class RS_Create_Compat {
                 ? accessor.rscc$getOutputTank()
                 : null
         );
+    }
+
+    /** 为高级远程多功能终端（普通/满电/创造）注册物品能量能力，仿 RS 无线终端。 */
+    private static void registerTerminalEnergyCapabilities(final RegisterCapabilitiesEvent event) {
+        for (final AdvancedRemoteTerminalItem item : List.of(
+            ADVANCED_REMOTE_TERMINAL.get(),
+            ADVANCED_REMOTE_TERMINAL_CHARGED.get(),
+            CREATIVE_ADVANCED_REMOTE_TERMINAL.get())) {
+            event.registerItem(
+                Capabilities.EnergyStorage.ITEM,
+                (stack, context) -> new com.refinedmods.refinedstorage.neoforge.support.energy.EnergyStorageAdapter(
+                    item.createEnergyStorage(stack)),
+                item
+            );
+        }
     }
 
     // You can use SubscribeEvent and let the Event Bus discover methods to call

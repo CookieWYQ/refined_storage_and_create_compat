@@ -9,6 +9,7 @@ import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.items.SlotItemHandler;
 import org.jetbrains.annotations.Nullable;
 
@@ -32,22 +33,24 @@ public class AdvancedSchematicLoaderMenu extends AbstractContainerMenu {
         this.data = loader != null ? loader.getContainerData() : new SimpleContainerData(5);
         addDataSlots(data);
 
-        if (loader != null) {
-            // 插件槽（6 格横排）
-            for (int i = 0; i < 6; i++) {
-                addSlot(new SlotItemHandler(loader.getUpgradeContainer(), i, 8 + i * 18, 8));
+        // 客户端重建时使用空容器，保证槽位数与服务端一致（内容由数据包同步）
+        final ItemStackHandler upgrades = loader != null ? loader.getUpgradeContainer() : new ItemStackHandler(6);
+        final ItemStackHandler queue = loader != null ? loader.getQueue() : new ItemStackHandler(27);
+        final ItemStackHandler loaderInv = loader != null ? loader.getInventory() : new ItemStackHandler(108);
+        // 插件槽（6 格横排）
+        for (int i = 0; i < 6; i++) {
+            addSlot(new SlotItemHandler(upgrades, i, 8 + i * 18, 8));
+        }
+        // 蓝图队列 27 格（3 行 × 9 列）
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+                addSlot(new SlotItemHandler(queue, col + row * 9, 8 + col * 18, 30 + row * 18));
             }
-            // 蓝图队列 27 格（3 行 × 9 列）
-            for (int row = 0; row < 3; row++) {
-                for (int col = 0; col < 9; col++) {
-                    addSlot(new SlotItemHandler(loader.getQueue(), col + row * 9, 8 + col * 18, 30 + row * 18));
-                }
-            }
-            // 主库存 108 格（12 行 × 9 列）
-            for (int row = 0; row < 12; row++) {
-                for (int col = 0; col < 9; col++) {
-                    addSlot(new SlotItemHandler(loader.getInventory(), col + row * 9, 8 + col * 18, 92 + row * 18));
-                }
+        }
+        // 主库存 108 格（12 行 × 9 列）
+        for (int row = 0; row < 12; row++) {
+            for (int col = 0; col < 9; col++) {
+                addSlot(new SlotItemHandler(loaderInv, col + row * 9, 8 + col * 18, 92 + row * 18));
             }
         }
         // 玩家主物品栏

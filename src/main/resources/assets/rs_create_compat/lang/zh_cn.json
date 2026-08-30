@@ -35,7 +35,6 @@
   "gui.rs_create_compat.advanced_schematic_loader.storage": "资源存储",
   "gui.rs_create_compat.advanced_schematic_loader.start": "开始/停止",
   "item.rs_create_compat.advanced_remote_terminal": "高级远程多功能终端",
-  "item.rs_create_compat.advanced_remote_terminal.no_energy": "能量不足！",
   "item.rs_create_compat.advanced_remote_terminal.not_bound": "未绑定网络！请对准无线信号发射器（或任意 RS 网络节点方块）右键绑定。",
   "item.rs_create_compat.advanced_remote_terminal.bind_hint": "对准无线信号发射器 / RS 网络节点方块右键绑定（支持跨维度增强无线访问点）",
   "item.rs_create_compat.advanced_remote_terminal.usage": "右键使用；Shift+右键打开终端切换模式；监视器模式右键直接打开 RS 自动合成仓监视器",
@@ -52,5 +51,8 @@
   "gui.rs_create_compat.advanced_remote_terminal.tasks.count": "自动合成任务：%s",
   "gui.rs_create_compat.advanced_remote_terminal.sequence.pending": "序列装配终端功能开发中",
   "gui.rs_create_compat.advanced_remote_terminal.monitor.hint": "右键打开 RS 自动合成仓监视器",
-  "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）"
+  "item.rs_create_compat.advanced_remote_terminal.monitor_failed": "无法打开 RS 自动合成仓监视器（版本不兼容）",
+  "item.rs_create_compat.advanced_remote_terminal_charged": "高级远程多功能终端（满电）",
+  "item.rs_create_compat.creative_advanced_remote_terminal": "创造高级远程多功能终端",
+  "gui.rs_create_compat.advanced_remote_terminal.no_energy_hint": "能量不足，操作已禁用"
 }

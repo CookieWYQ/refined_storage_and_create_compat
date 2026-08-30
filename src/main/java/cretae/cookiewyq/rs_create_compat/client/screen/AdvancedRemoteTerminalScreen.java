@@ -26,6 +26,8 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
         "gui.rs_create_compat.advanced_remote_terminal.mode.sequence"
     };
 
+    private final List<Button> modeButtons = new java.util.ArrayList<>();
+
     public AdvancedRemoteTerminalScreen(final AdvancedRemoteTerminalMenu menu,
                                         final Inventory inventory,
                                         final Component title) {
@@ -38,14 +40,27 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
     @Override
     protected void init() {
         super.init();
+        modeButtons.clear();
         for (int i = 0; i < 5; i++) {
             final int index = i;
             final int x = 8 + (index % 3) * 54;
             final int y = 24 + (index / 3) * 18;
-            addRenderableWidget(new Button.Builder(Component.translatable(MODE_KEYS[index]),
+            final Button button = new Button.Builder(Component.translatable(MODE_KEYS[index]),
                 btn -> sendButton(index))
                 .bounds(leftPos + x, topPos + y, 50, 16)
-                .build());
+                .build();
+            modeButtons.add(button);
+            addRenderableWidget(button);
+        }
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        // 仿 RS 原版：没电时界面打开但操作禁用（创造版无视电量）
+        final boolean noEnergy = menu.getEnergy() <= 0 && !menu.isCreative();
+        for (final Button button : modeButtons) {
+            button.active = !noEnergy;
         }
     }
 
@@ -73,33 +88,40 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
             Component.translatable("gui.rs_create_compat.advanced_remote_terminal.online",
                 menu.isOnline() ? "✓" : "✗"),
             8, 74, menu.isOnline() ? 0x55FF55 : 0xFF5555, false);
+        // 没电提示：仿 RS 原版，界面照常打开但操作被禁用
+        final boolean noEnergy = menu.getEnergy() <= 0 && !menu.isCreative();
+        if (noEnergy) {
+            guiGraphics.drawString(font,
+                Component.translatable("gui.rs_create_compat.advanced_remote_terminal.no_energy_hint"),
+                8, 86, 0xFF5555, false);
+        }
         // 当前模式信息
         final int mode = menu.getMode();
-        guiGraphics.drawString(font, Component.translatable(MODE_KEYS[mode]), 8, 90, 0xFFFFFF, false);
+        guiGraphics.drawString(font, Component.translatable(MODE_KEYS[mode]), 8, 96, 0xFFFFFF, false);
         switch (mode) {
             case AdvancedRemoteTerminalItem.MODE_GRID ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.grid.stored",
                         menu.getStored()),
-                    8, 102, 0xA0A0A0, false);
+                    8, 108, 0xA0A0A0, false);
             case AdvancedRemoteTerminalItem.MODE_PATTERNS ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.patterns.count",
                         menu.getPatternCount()),
-                    8, 102, 0xA0A0A0, false);
+                    8, 108, 0xA0A0A0, false);
             case AdvancedRemoteTerminalItem.MODE_MANAGER ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.tasks.count",
                         menu.getTaskCount()),
-                    8, 102, 0xA0A0A0, false);
+                    8, 108, 0xA0A0A0, false);
             case AdvancedRemoteTerminalItem.MODE_MONITOR ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.monitor.hint"),
-                    8, 102, 0xA0A0A0, false);
+                    8, 108, 0xA0A0A0, false);
             default ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.sequence.pending"),
-                    8, 102, 0xA0A0A0, false);
+                    8, 108, 0xA0A0A0, false);
         }
     }
 

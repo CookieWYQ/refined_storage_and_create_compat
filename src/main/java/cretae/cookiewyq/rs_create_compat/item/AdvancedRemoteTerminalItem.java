@@ -26,9 +26,13 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 高级远程多功能终端：手持设备，带能量（默认 10,000,000 FE），
- * 可切换打开合成终端 / 样板终端 / 自动合成仓管理器 / 自动合成仓监视器 / 序列装配样板终端界面。
- * 模式保存在物品 NBT 中。
+ * 高级远程多功能终端（仿 RS 原版无线终端实现）：
+ * <ul>
+ *     <li><b>普通版</b>：需要电量。没电时仍会打开界面，但所有操作按钮禁用（与 RS 原版行为一致）。</li>
+ *     <li><b>满电版</b>：默认满电，可正常消耗与充能。</li>
+ *     <li><b>创造版</b>：无视电量（容量极大 + 默认满电）。</li>
+ * </ul>
+ * 绑定目标为无线信号发射器 / 任意 RS 网络节点方块（含第三方跨维度增强无线访问点）。
  */
 public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     public static final String TAG_MODE = "Mode";
@@ -46,12 +50,28 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     private static final String RS_MONITOR_PROVIDER_CLASS =
         "com.refinedmods.refinedstorage.common.autocrafting.monitor.WirelessAutocraftingMonitorExtendedMenuProvider";
 
-    public AdvancedRemoteTerminalItem() {
+    public enum Type {
+        /** 普通版：需要电量，没电时界面禁用操作。 */
+        NORMAL,
+        /** 满电版：默认满电。 */
+        CHARGED,
+        /** 创造版：无视电量。 */
+        CREATIVE
+    }
+
+    private final Type type;
+
+    public AdvancedRemoteTerminalItem(final Type type) {
         super(
             new Item.Properties().stacksTo(1).fireResistant(),
             RefinedStorageApi.INSTANCE.getEnergyItemHelper(),
             RefinedStorageApi.INSTANCE.getNetworkItemHelper()
         );
+        this.type = type;
+    }
+
+    public boolean isCreative() {
+        return type == Type.CREATIVE;
     }
 
     public static int getMode(final ItemStack stack) {
@@ -64,11 +84,20 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             data -> data.update(tag -> tag.putInt(TAG_MODE, mode)));
     }
 
+    @Override
+    public ItemStack getDefaultInstance() {
+        // 满电版 / 创造版默认满电；普通版默认无电（用于演示没电时的禁用行为）
+        if (type != Type.NORMAL) {
+            return createAtEnergyCapacity();
+        }
+        return super.getDefaultInstance();
+    }
+
     public EnergyStorage createEnergyStorage(final ItemStack stack) {
-        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(
-            new EnergyStorageImpl(Config.advancedRemoteTerminalEnergyCapacity),
-            stack
-        );
+        final long capacity = type == Type.CREATIVE
+            ? Integer.MAX_VALUE
+            : Config.advancedRemoteTerminalEnergyCapacity;
+        return RefinedStorageApi.INSTANCE.asItemEnergyStorage(new EnergyStorageImpl(capacity), stack);
     }
 
     @Override
@@ -90,11 +119,6 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         if (stack.isEmpty()) {
             return;
         }
-        final EnergyStorage energy = createEnergyStorage(stack.get());
-        if (energy.getStored() <= 0) {
-            player.displayClientMessage(Component.translatable("item.rs_create_compat.advanced_remote_terminal.no_energy"), true);
-            return;
-        }
         final Optional<Network> network = context.resolveNetwork();
         if (network.isEmpty()) {
             player.displayClientMessage(
@@ -102,7 +126,11 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                 true);
             return;
         }
-        context.drainEnergy(10);
+        // 仿 RS 原版：不检查电量，总是打开界面；没电时界面内操作禁用（由 GUI 状态控制）。
+        // 创造版不消耗电量。
+        if (!isCreative()) {
+            context.drainEnergy(10);
+        }
 
         // 监视器模式：普通右键直接打开 RS 原版自动合成仓监视器（可观察任务进度并取消）。
         // Shift+右键强制打开终端界面以切换模式。
