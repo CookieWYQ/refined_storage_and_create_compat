@@ -39,9 +39,11 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
     protected void init() {
         super.init();
         for (int i = 0; i < 5; i++) {
-            final int x = 8 + (i % 3) * 54;
-            final int y = 24 + (i / 3) * 18;
-            addRenderableWidget(new Button.Builder(Component.translatable(MODE_KEYS[i]), btn -> sendButton(i))
+            final int index = i;
+            final int x = 8 + (index % 3) * 54;
+            final int y = 24 + (index / 3) * 18;
+            addRenderableWidget(new Button.Builder(Component.translatable(MODE_KEYS[index]),
+                btn -> sendButton(index))
                 .bounds(leftPos + x, topPos + y, 50, 16)
                 .build());
         }
