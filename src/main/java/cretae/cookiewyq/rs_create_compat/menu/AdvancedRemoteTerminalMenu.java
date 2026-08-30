@@ -2,8 +2,8 @@ package cretae.cookiewyq.rs_create_compat.menu;
 
 import com.refinedmods.refinedstorage.api.network.Network;
 import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetworkComponent;
-import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import com.refinedmods.refinedstorage.api.network.energy.EnergyNetworkComponent;
+import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
 import net.minecraft.world.entity.player.Inventory;
@@ -16,6 +16,7 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * 高级远程多功能终端菜单：显示当前模式与网络信息，支持模式切换。
+ * 监视器模式通过 RS 原版自动合成仓监视器界面实现（右键打开，见物品 use 逻辑）。
  */
 public class AdvancedRemoteTerminalMenu extends AbstractContainerMenu {
     private static final int DATA_COUNT = 8;

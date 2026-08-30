@@ -106,11 +106,11 @@ public class Config {
 
     private static final ModConfigSpec.IntValue AUTOCRAFTER_OUTPUT_SLOTS = BUILDER
         .comment("自动合成仓内部物品存储槽位数量。")
-        .defineInRange("autocrafterOutputSlots", 54, 1, 108);
+        .defineInRange("autocrafterOutputSlots", 256, 1, 256);
 
     private static final ModConfigSpec.IntValue AUTOCRAFTER_FLUID_CAPACITY = BUILDER
-        .comment("自动合成仓内部流体存储容量（mB）。")
-        .defineInRange("autocrafterFluidCapacity", 64000, 1000, 10000000);
+        .comment("自动合成仓内部流体/气体存储容量（mB）。")
+        .defineInRange("autocrafterFluidCapacity", 256000, 1000, 100000000);
 
     // ========== 调整二：输入/输出总线 Tag 过滤 ==========
     private static final ModConfigSpec.BooleanValue TAG_FILTER_ENABLED = BUILDER

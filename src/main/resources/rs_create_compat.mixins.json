@@ -6,7 +6,9 @@
   "mixins": [
     "FilterTagMixin",
     "AutocrafterStorageMixin",
-    "AutocrafterAccessor"
+    "AutocrafterAccessor",
+    "WirelessAutocraftingMonitorMixin",
+    "WirelessAutocraftingMonitorProviderMixin"
   ],
   "client": [
   ],

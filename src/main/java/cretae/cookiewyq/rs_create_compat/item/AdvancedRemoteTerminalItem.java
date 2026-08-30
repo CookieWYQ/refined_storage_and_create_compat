@@ -5,13 +5,17 @@ import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
 import com.refinedmods.refinedstorage.common.Platform;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
+import com.refinedmods.refinedstorage.common.api.autocrafting.AutocraftingMonitor;
 import com.refinedmods.refinedstorage.common.api.support.energy.AbstractNetworkEnergyItem;
 import com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemContext;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedRemoteTerminalMenu;
+import cretae.cookiewyq.rs_create_compat.mixin.WirelessAutocraftingMonitorMixin;
+import cretae.cookiewyq.rs_create_compat.mixin.WirelessAutocraftingMonitorProviderMixin;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -77,6 +81,20 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             return;
         }
         context.drainEnergy(10);
+
+        // 监视器模式：普通右键直接打开 RS 原版自动合成仓监视器（可观察任务进度并取消）。
+        // Shift+右键强制打开终端界面以切换模式。
+        final int mode = AdvancedRemoteTerminalItem.getMode(stack.get());
+        if (!player.isShiftKeyDown() && mode == MODE_MONITOR) {
+            final AutocraftingMonitor monitor = WirelessAutocraftingMonitorMixin.rscc$create(context);
+            final Component monitorName = name != null ? name
+                : Component.translatable("item.rs_create_compat.advanced_remote_terminal");
+            final MenuProvider provider =
+                WirelessAutocraftingMonitorProviderMixin.rscc$create(monitorName, monitor, slotReference);
+            Platform.INSTANCE.getMenuOpener().openMenu(player, provider);
+            return;
+        }
+
         player.openMenu(new SimpleMenuProvider(
             (id, inventory, p) -> new AdvancedRemoteTerminalMenu(id, inventory, network.get(), stack.get()),
             name != null ? name : Component.translatable("item.rs_create_compat.advanced_remote_terminal")

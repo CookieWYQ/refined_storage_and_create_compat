@@ -12,6 +12,7 @@ import net.minecraft.world.entity.player.Inventory;
 
 /**
  * 高级远程多功能终端界面：模式切换按钮 + 当前模式信息展示。
+ * 监视器模式为特殊入口：普通右键打开 RS 原版自动合成仓监视器（见物品 use 逻辑）。
  */
 public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<AdvancedRemoteTerminalMenu> {
     private static final ResourceLocation TEXTURE =
@@ -37,12 +38,10 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
     @Override
     protected void init() {
         super.init();
-        // 五个模式按钮（两行）
         for (int i = 0; i < 5; i++) {
             final int x = 8 + (i % 3) * 54;
             final int y = 24 + (i / 3) * 18;
-            addRenderableWidget(new Button.Builder(Component.translatable(MODE_KEYS[i]),
-                btn -> sendButton(i))
+            addRenderableWidget(new Button.Builder(Component.translatable(MODE_KEYS[i]), btn -> sendButton(i))
                 .bounds(leftPos + x, topPos + y, 50, 16)
                 .build());
         }
@@ -74,8 +73,7 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
             8, 74, menu.isOnline() ? 0x55FF55 : 0xFF5555, false);
         // 当前模式信息
         final int mode = menu.getMode();
-        final Component modeName = Component.translatable(MODE_KEYS[mode]);
-        guiGraphics.drawString(font, modeName, 8, 90, 0xFFFFFF, false);
+        guiGraphics.drawString(font, Component.translatable(MODE_KEYS[mode]), 8, 90, 0xFFFFFF, false);
         switch (mode) {
             case AdvancedRemoteTerminalItem.MODE_GRID ->
                 guiGraphics.drawString(font,
@@ -87,10 +85,14 @@ public class AdvancedRemoteTerminalScreen extends AbstractContainerScreen<Advanc
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.patterns.count",
                         menu.getPatternCount()),
                     8, 102, 0xA0A0A0, false);
-            case AdvancedRemoteTerminalItem.MODE_MANAGER, AdvancedRemoteTerminalItem.MODE_MONITOR ->
+            case AdvancedRemoteTerminalItem.MODE_MANAGER ->
                 guiGraphics.drawString(font,
                     Component.translatable("gui.rs_create_compat.advanced_remote_terminal.tasks.count",
                         menu.getTaskCount()),
+                    8, 102, 0xA0A0A0, false);
+            case AdvancedRemoteTerminalItem.MODE_MONITOR ->
+                guiGraphics.drawString(font,
+                    Component.translatable("gui.rs_create_compat.advanced_remote_terminal.monitor.hint"),
                     8, 102, 0xA0A0A0, false);
             default ->
                 guiGraphics.drawString(font,
