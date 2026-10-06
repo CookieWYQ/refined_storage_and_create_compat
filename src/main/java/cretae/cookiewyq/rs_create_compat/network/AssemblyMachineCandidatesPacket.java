@@ -38,9 +38,7 @@ public record AssemblyMachineCandidatesPacket(UUID taskId, int stepIndex, String
     /** 客户端：只在「当前打开的还是自动合成管理器」时弹选择器（避免玩家已离开界面时被强行切屏）。 */
     public static void handle(final AssemblyMachineCandidatesPacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext context) {
-        context.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.AssemblyAlertsClient
-            .openMachineSelect(packet.taskId(), packet.stepIndex(), packet.recipeType(),
-                packet.currentMachineName(), packet.candidates()));
+        context.enqueueWork(() -> ClientPayloadHooks.get().openMachineSelect(packet));
     }
 
     @Override

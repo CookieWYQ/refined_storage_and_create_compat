@@ -191,6 +191,11 @@ set_packet = read(SRC, "network", "SetShortageModePacket.java")
 req_packet = read(SRC, "network", "RequestShortageModePacket.java")
 sync_packet = read(SRC, "network", "SyncShortageModePacket.java")
 client_mirror = read(SRC, "client", "ShortageModeClient.java")
+# 第 47 轮（专服启动即崩修复）之后，载荷类里不许再出现客户端类型：S2C 处理体改成
+# 「投递到主线程 + 交给 network/ClientPayloadHooks 的客户端实现」，真正的写入点搬到
+# client/ClientPayloadSink#syncShortageMode。断言意图不变（唯一写入路径 = S2C 权威快照），
+# 故下面同时核对「路由」与「写入点」两处锚点。
+client_sink = read(SRC, "client", "ClientPayloadSink.java")
 monitor = read(SRC, "mixin", "client", "AutocraftingMonitorScreenMixin.java")
 main_src = read(SRC, "RS_Create_Compat.java")
 policy = read(SRC, "support", "RsccShortagePolicy.java")
@@ -212,7 +217,8 @@ check("打开界面主动拉一次快照（策略只在改动时回发，玩家�
       and "RsccShortagePolicy.get(server).getMode().ordinal()" in req_packet
       and "sendToServer" not in req_packet)
 check("S2C 写进只读镜像；镜像默认档 = 服务端默认档（快照未到时不会显示反的档位）",
-      "ctx.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.ShortageModeClient.set(" in sync_packet
+      "ctx.enqueueWork(() -> ClientPayloadHooks.get().syncShortageMode(packet));" in sync_packet
+      and "ShortageModeClient.set(packet.mode());" in client_sink
       and "Mode.SUSPEND.ordinal()" in client_mirror)
 check("三个包都在主类注册（漏注册会直接打断连接）",
       "SetShortageModePacket.TYPE" in main_src and "RequestShortageModePacket.TYPE" in main_src

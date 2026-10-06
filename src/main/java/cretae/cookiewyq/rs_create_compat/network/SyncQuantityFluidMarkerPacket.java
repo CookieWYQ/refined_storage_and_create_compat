@@ -40,13 +40,7 @@ public record SyncQuantityFluidMarkerPacket(int containerId, ResourceLocation id
 
     public static void handle(final SyncQuantityFluidMarkerPacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext ctx) {
-        ctx.enqueueWork(() -> {
-            if (net.minecraft.client.Minecraft.getInstance().screen
-                instanceof cretae.cookiewyq.rs_create_compat.client.screen.QuantityKeeperScreen screen
-                && screen.getMenu().containerId == packet.containerId()) {
-                screen.setFluidMarker(packet.id(), packet.nbt());
-            }
-        });
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncQuantityFluidMarker(packet));
     }
 
     @Override

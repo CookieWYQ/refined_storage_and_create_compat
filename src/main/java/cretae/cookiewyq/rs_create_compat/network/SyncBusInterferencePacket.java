@@ -45,9 +45,7 @@ public record SyncBusInterferencePacket(int containerId, boolean disabled, boole
     /** 客户端侧只读镜像 + 叠加层显隐状态（唯一一份，见 {@code client/BusInterferenceOverlay}）。 */
     public static void handle(final SyncBusInterferencePacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext ctx) {
-        ctx.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.BusInterferenceOverlay.apply(
-            packet.containerId(), packet.disabled(), packet.truncated(), packet.reachableCount(),
-            packet.cluster(), packet.chambers()));
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncBusInterference(packet));
     }
 
     @Override

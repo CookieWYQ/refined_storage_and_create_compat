@@ -28,7 +28,7 @@ public record SyncShortageModePacket(int mode) implements CustomPacketPayload {
         );
 
     public static void handle(final SyncShortageModePacket packet, final IPayloadContext ctx) {
-        ctx.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.ShortageModeClient.set(packet.mode()));
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncShortageMode(packet));
     }
 
     @Override

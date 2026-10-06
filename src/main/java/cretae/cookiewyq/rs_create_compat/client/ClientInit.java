@@ -65,6 +65,10 @@ public class ClientInit {
         // 因此由这里把客户端实现注入进去（专用服务端上该回调恒为 null，永不被调用）。
         cretae.cookiewyq.rs_create_compat.network.RefreshCamouflagePacket
             .setClientTracker(CamouflageShellDisplay::track);
+        // 所有 S2C 载荷的「客户端真身」：载荷类在注册期就会被专用服务端加载并链接，因此 network 包
+        // 里不允许出现任何客户端类型。这里把客户端实现注入到唯一的桥接层（服务端上永远是空实现）。
+        // 注入前的崩溃根因见 network/ClientPayloadHooks 的类文档。
+        cretae.cookiewyq.rs_create_compat.network.ClientPayloadHooks.install(new ClientPayloadSink());
         event.enqueueWork(() -> {
             final ResourceLocation diskModel =
                 ResourceLocation.fromNamespaceAndPath(RS_Create_Compat.MODID, "block/disk/disk");

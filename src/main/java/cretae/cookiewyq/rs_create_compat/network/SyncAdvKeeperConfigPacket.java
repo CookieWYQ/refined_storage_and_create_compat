@@ -57,13 +57,7 @@ public record SyncAdvKeeperConfigPacket(int containerId, List<KeeperSlotConfig> 
 
     public static void handle(final SyncAdvKeeperConfigPacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext ctx) {
-        ctx.enqueueWork(() -> {
-            if (net.minecraft.client.Minecraft.getInstance().screen
-                instanceof cretae.cookiewyq.rs_create_compat.client.screen.AdvancedQuantityKeeperScreen screen
-                && screen.getMenu().containerId == packet.containerId()) {
-                screen.setSyncedConfigs(packet.configs());
-            }
-        });
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncAdvKeeperConfig(packet));
     }
 
     @Override

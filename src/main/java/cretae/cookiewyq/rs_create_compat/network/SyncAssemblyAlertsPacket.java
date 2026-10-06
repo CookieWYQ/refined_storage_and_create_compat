@@ -166,8 +166,7 @@ public record SyncAssemblyAlertsPacket(List<Alert> alerts) implements CustomPack
     /** 客户端：缓存快照（由 AssemblyAlertsClient 持有；管理器界面读它的当前选中任务）。 */
     public static void handle(final SyncAssemblyAlertsPacket packet,
                              final net.neoforged.neoforge.network.handling.IPayloadContext context) {
-        context.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.AssemblyAlertsClient.setAlerts(
-            packet.alerts()));
+        context.enqueueWork(() -> ClientPayloadHooks.get().syncAssemblyAlerts(packet));
     }
 
     @Override

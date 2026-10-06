@@ -73,11 +73,8 @@ public record SyncChamberUnitsPacket(List<Entry> chambers, int page) implements 
         ctx.enqueueWork(() -> {
             lastReceived = List.copyOf(packet.chambers());
             lastReceivedPage = packet.page();
-            // 汇总子界面打开时，把最新快照写回界面展示
-            if (net.minecraft.client.Minecraft.getInstance().screen
-                instanceof cretae.cookiewyq.rs_create_compat.client.screen.ChamberUnitsSummaryScreen screen) {
-                screen.onServerSync(lastReceived, lastReceivedPage);
-            }
+            // 汇总子界面打开时，把最新快照写回界面展示（客户端实现在 client 包）
+            ClientPayloadHooks.get().syncChamberUnits(packet);
         });
     }
 

@@ -23,9 +23,11 @@ displayName = "${mod_name}" #mandatory
 # A URL to query for updates for this mod. See the JSON update specification https://docs.neoforge.net/docs/misc/updatechecker/
 #updateJSONURL="https://change.me.example.invalid/updates.json" #optional
 # A URL for the "homepage" for this mod, displayed in the mod UI
-#displayURL="https://change.me.to.your.mods.homepage.example.invalid/" #optional
+displayURL="https://github.com/CookieWYQ/refined_storage_and_create_compat" #optional
 # A file name (in the root of the mod JAR) containing a logo for display
-#logoFile="rs_create_compat.png" #optional
+# 已启用：图标来自 icon/icon_256.png（发布时复制为 src/main/resources/rs_create_compat.png）。
+# 为什么用 256：mod UI 与模组列表的实际显示尺寸都小于 256，放 512 只会白占 jar 体积。
+logoFile="rs_create_compat.png" #optional
 # A text field displayed in the mod UI
 #credits="" #optional
 # A text field displayed in the mod UI

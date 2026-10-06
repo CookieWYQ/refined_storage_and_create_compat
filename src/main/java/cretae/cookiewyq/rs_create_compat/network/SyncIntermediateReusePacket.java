@@ -25,7 +25,7 @@ public record SyncIntermediateReusePacket(boolean enabled) implements CustomPack
         );
 
     public static void handle(final SyncIntermediateReusePacket packet, final IPayloadContext ctx) {
-        ctx.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.IntermediateReuseClient.set(packet.enabled()));
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncIntermediateReuse(packet));
     }
 
     @Override

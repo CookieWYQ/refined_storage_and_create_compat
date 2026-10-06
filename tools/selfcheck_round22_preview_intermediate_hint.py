@@ -68,6 +68,8 @@ hint = read(os.path.join("client", "PreviewIntermediateHint.java"))
 mirror = read(os.path.join("client", "IntermediateReuseClient.java"))
 req_packet = read(os.path.join("network", "RequestIntermediateReusePacket.java"))
 sync_packet = read(os.path.join("network", "SyncIntermediateReusePacket.java"))
+# 第 47 轮：S2C 处理体的「客户端真身」统一搬到 client/ClientPayloadSink（载荷类不许出现客户端类型）
+sink = read(os.path.join("client", "ClientPayloadSink.java"))
 main = read("RS_Create_Compat.java")
 pattern_item = read(os.path.join("item", "SequenceAssemblyPatternItem.java"))
 import_strategy = read(os.path.join("support", "RsccChamberImportStrategy.java"))
@@ -111,8 +113,14 @@ check("2a 渲染注入的第一句是开关判断，且在取过渡件之前",
       < screen_mixin.index("rscc$transitional()"))
 has(mirror, "private static volatile boolean enabled = false;",
     "2b 客户端镜像默认档 = 服务端默认档 = 关（快照未到时显示的就是服务端实际行为）")
-has(sync_packet, "ctx.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.IntermediateReuseClient.set(",
-    "2c 只有 S2C 权威快照能写镜像；客户端从不自己改开关")
+# 第 47 轮（专服启动即崩修复）之后，载荷类里不许再出现客户端类型：S2C 处理体改成
+# 「投递到主线程 + 交给 network/ClientPayloadHooks 的客户端实现」，写入点搬到
+# client/ClientPayloadSink#syncIntermediateReuse。断言意图不变（只有 S2C 权威快照能写镜像，
+# 客户端从不自己改开关），故同时核对「路由」与「唯一写入点」两处锚点。
+check("2c 只有 S2C 权威快照能写镜像；客户端从不自己改开关",
+      "ctx.enqueueWork(() -> ClientPayloadHooks.get().syncIntermediateReuse(packet));" in sync_packet
+      and "IntermediateReuseClient.set(packet.enabled());" in sink
+      and "IntermediateReuseClient.set(" not in screen_mixin)
 check("2d 界面 Mixin 只注入 init / render（目标类自身声明的方法；本工程硬规则）",
       sorted(__import__("re").findall(r'@Inject\(method = "([a-zA-Z]+)"', screen_mixin)) == ["init", "render"])
 has(screen_mixin, "PacketDistributor.sendToServer(new RequestIntermediateReusePacket());",

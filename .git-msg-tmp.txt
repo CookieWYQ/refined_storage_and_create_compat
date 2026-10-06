@@ -1,0 +1,33 @@
+fix: 修复专用服务端加载崩溃（客户端类在注册期被加载）+ 接入模组图标
+
+崩溃（用户实测，装到专用服务端即崩）
+  RegisterPayloadHandlersEvent 期间 NoClassDefFoundError:
+  net.minecraft.client.gui.components.toasts.Toast
+
+根因（全工程唯一一处）
+  network/CompletionBannerPayload 的 handle 方法体里把 new 出来的客户端类
+  CompatCompletionToast 交给客户端类型形参 ToastComponent#addToast(Toast)。
+  注册表达式读取 CompletionBannerPayload.TYPE 会触发该类【初始化 + 链接】，
+  而链接期校验器必须解析实参与形参这两个不同类型的可赋值性 =>
+  加载 CompatCompletionToast（其父接口就是 Toast）=> 专用服务端没有该类 => 崩。
+  其余注册点只用静态调用 / instanceof，链接期不解析目标类，因此只有这一处会引爆。
+
+修复
+  - 新增 network/ClientPayloadHooks：服务端安全的间接层（13 个 default 空实现的 Sink，
+    形参一律是 network 包的载荷 record），注册期不出现任何客户端类型。
+  - 新增 client/ClientPayloadSink：真正的界面 / 渲染 / GLFW 逻辑逐字搬到这里，
+    由 client/ClientInit（Dist.CLIENT）注入。
+  - 13 个载荷类的 handle 改为 ctx.enqueueWork(() -> ClientPayloadHooks.get().xxx(packet))，
+    线程语义与搬迁前逐字一致。
+  - 不用 try/catch NoClassDefFoundError 掩盖：链接期报错后类状态不可信，
+    且下一个包还会再炸一次。
+  - 顺带修掉同一类隐患共 13 处（见 tools/selfcheck_round47_dedicated_server_safety.py）。
+  - 新增自检 round47：断言 registerPayloads 与 network/** 均不引用客户端类型；
+    修复前该脚本报 13 个文件命中，修复后为 0。
+
+图标
+  - 新增 icon/（512 / 256 / 128 / 64，整数倍最近邻，无平滑、无文字）
+  - src/main/resources/rs_create_compat.png（256 版）
+  - mods.toml 启用 logoFile 并补 displayURL
+  - .gitignore 追加 !icon/：GitHub 模板自带的 Icon 规则在 Windows 上
+    大小写不敏感，会把 icon/ 整个目录静默忽略

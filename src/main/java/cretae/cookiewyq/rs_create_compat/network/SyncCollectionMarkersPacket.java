@@ -59,28 +59,10 @@ public record SyncCollectionMarkersPacket(int windowStart, List<MarkerEntry> ent
             CollectionBlockedSnapshot.of(items, fluids, itemTags, fluidTags));
     }
 
-    /** 客户端：把条目配置、销毁标志与流体缓存快照写入当前打开的归流缓存仓界面。 */
+    /** 客户端：把条目配置、销毁标志与流体缓存快照写入当前打开的归流缓存仓界面（实现在 client 包）。 */
     public static void handle(final SyncCollectionMarkersPacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext ctx) {
-        ctx.enqueueWork(() -> {
-            final CollectionBlockedSnapshot blocked =
-                packet.blocked() == null ? CollectionBlockedSnapshot.EMPTY : packet.blocked();
-            final net.minecraft.client.gui.screens.Screen current =
-                net.minecraft.client.Minecraft.getInstance().screen;
-            if (current instanceof cretae.cookiewyq.rs_create_compat.client.screen.CollectionCacheScreen screen) {
-                screen.setMarkerEntries(packet.windowStart(), packet.entries(), packet.destroyFlags());
-                screen.setCacheFluidEntries(packet.fluidCache());
-                screen.setBlocked(blocked.items(), blocked.fluids(), blocked.itemTags(), blocked.fluidTags());
-            } else if (current
-                instanceof cretae.cookiewyq.rs_create_compat.client.screen.CollectionMarkerConfigScreen child) {
-                // 「匹配条目配置」子窗口开在最前时，主界面收不到包 —— 路由给它做三件事：
-                // ① 刷新子窗口自己的「阻塞」开关为服务端权威值；② 转交父界面，主界面红色标识一起同步；
-                // ③ 把匹配窗口（含「直接销毁」标志）也转交父界面，关闭子窗口后主界面显示不落后。
-                child.applyBlockedSync(blocked.items(), blocked.fluids(),
-                    blocked.itemTags(), blocked.fluidTags());
-                child.applyMarkerWindowSync(packet.windowStart(), packet.entries(), packet.destroyFlags());
-            }
-        });
+        ctx.enqueueWork(() -> ClientPayloadHooks.get().syncCollectionMarkers(packet));
     }
 
     /** 取指定下标的条目（越界或未标记返回空条目）。 */

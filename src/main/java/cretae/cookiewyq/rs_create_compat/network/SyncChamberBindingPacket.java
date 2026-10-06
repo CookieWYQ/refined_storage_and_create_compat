@@ -114,11 +114,8 @@ public record SyncChamberBindingPacket(BlockPos pos, String recipeType, String n
                               final net.neoforged.neoforge.network.handling.IPayloadContext ctx) {
         ctx.enqueueWork(() -> {
             lastReceived = packet;
-            // 面配置子界面打开时，用它把六个面的权威模式 + 输出模式刷新回界面
-            if (net.minecraft.client.Minecraft.getInstance().screen
-                instanceof cretae.cookiewyq.rs_create_compat.client.screen.ChamberFaceConfigScreen screen) {
-                screen.onServerSync(packet.faceModes(), packet.outputMode());
-            }
+            // 面配置子界面打开时，用它把六个面的权威模式 + 输出模式刷新回界面（客户端实现在 client 包）
+            ClientPayloadHooks.get().syncChamberBinding(packet);
         });
     }
 

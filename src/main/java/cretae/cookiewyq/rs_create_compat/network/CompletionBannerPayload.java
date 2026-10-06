@@ -122,16 +122,19 @@ public record CompletionBannerPayload(List<CompletionBannerPayload.Row> rows) im
             }
         };
 
-    /** 客户端：把横幅作为 Toast 弹出（enqueueWork 保证在主线程执行）。 */
+    /**
+     * S2C 处理器：<b>只负责「投递到客户端主线程 + 交给客户端实现」</b>，本类因此不含任何客户端类型。
+     *
+     * <p><b>为什么不能像以前那样把 Toast 直接弹在这里</b>：本类在<b>注册期</b>就被专用服务端加载
+     * 并链接（注册表达式读了本类的 {@code TYPE} 静态字段），而
+     * {@code addToast(new CompatCompletionToast(...))} 这种「把客户端类交给客户端形参」的写法会让
+     * 链接期校验器做跨类可赋值性检查 ⇒ 被迫加载 {@code ...toasts.Toast}（服务端没有这个类）⇒
+     * {@code NoClassDefFoundError}，模组装到专服上启动即崩。真正的弹出逻辑见
+     * {@code client/ClientPayloadSink#showCompletionBanner}，桥接层见 {@link ClientPayloadHooks}。</p>
+     */
     public static void handle(final CompletionBannerPayload payload,
                               final net.neoforged.neoforge.network.handling.IPayloadContext context) {
-        context.enqueueWork(() -> {
-            if (net.minecraft.client.Minecraft.getInstance().level == null) {
-                return;
-            }
-            net.minecraft.client.Minecraft.getInstance().getToasts().addToast(
-                new cretae.cookiewyq.rs_create_compat.client.CompatCompletionToast(payload.rows()));
-        });
+        context.enqueueWork(() -> ClientPayloadHooks.get().showCompletionBanner(payload));
     }
 
     @Override

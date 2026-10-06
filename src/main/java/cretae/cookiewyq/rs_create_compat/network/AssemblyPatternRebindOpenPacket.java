@@ -67,7 +67,7 @@ public record AssemblyPatternRebindOpenPacket(int handOrdinal, UUID patternId, L
      */
     public static void handle(final AssemblyPatternRebindOpenPacket packet,
                               final net.neoforged.neoforge.network.handling.IPayloadContext context) {
-        context.enqueueWork(() -> cretae.cookiewyq.rs_create_compat.client.AssemblyPatternRebindClient.open(packet));
+        context.enqueueWork(() -> ClientPayloadHooks.get().openPatternRebind(packet));
     }
 
     @Override
