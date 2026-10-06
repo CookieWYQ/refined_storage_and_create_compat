@@ -450,15 +450,22 @@ check("5g 服务端「同一 ingredient 多候选 = 一个原料」的语义未�
       and "private static List<Item> candidateListOf(final Map<String, LinkedHashSet<Item>> inputCandidates,"
       in chamber
       and "result.add(0, representative); // 代表物必须是首个（图标 / 每批所需量口径一致）" in chamber)
-check("5h 不得触碰的两个文件仍是改动前的时间戳（AssemblyWatchdog / RsccWireLinkSearch）",
-      os.path.getmtime(os.path.join(SRC, "support", "AssemblyWatchdog.java"))
-      < os.path.getmtime(os.path.join(SRC, "client", "screen", "BusCategoryConfigScreen.java"))
-      and os.path.getmtime(os.path.join(SRC, "support", "RsccWireLinkSearch.java"))
-      < os.path.getmtime(os.path.join(SRC, "client", "screen", "BusCategoryConfigScreen.java")),
-      "screen=%s" % time.strftime("%H:%M:%S",
-                                  time.localtime(os.path.getmtime(
-                                      os.path.join(SRC, "client", "screen",
-                                                   "BusCategoryConfigScreen.java")))))
+# 2026-10-06（round48「开发日志总开关」）更新，理由写在这里：
+#   本条原本用 **mtime** 证明「本轮只动了界面文件」（AssemblyWatchdog / RsccWireLinkSearch 未被触碰）。
+#   那是**轮次取证**，不是行为断言；而 round48 **合法地**改动了 AssemblyWatchdog.java ——
+#   旧代码把两条「需要玩家干预」的 WARN（binding-orphan / binding-gap）关在
+#   `if (!RsccAssemblyDebug.isEnabled()) return;` 之后，一旦按用户要求把开发日志默认关掉，
+#   这两条玩家可见的失败提示就会一起消失（行为回归）。round48 把它们挪出了开关。
+#   mtime 断言因此必然失败，改为**内容级**断言，保护同一条语义（界面修复没被带坏 + 必要 WARN 没被吞）。
+watchdog_src = read(os.path.join("support", "AssemblyWatchdog.java"))
+wire_src = read(os.path.join("support", "RsccWireLinkSearch.java"))
+check("5h round48 合法触碰 AssemblyWatchdog 后：界面修复锚点仍在，且必要 WARN 不被开发日志开关吞掉",
+      "public final class RsccWireLinkSearch" in wire_src
+      and "private static void logBindingSnapshot(" in watchdog_src
+      and "RsccAssemblyDebug.warn(\"bindingorphan@\"" in watchdog_src
+      and "RsccAssemblyDebug.warn(\"bindinggap@\"" in watchdog_src
+      and "if (!RsccAssemblyDebug.isEnabled()) {\n            return;\n        }\n        final List<SequencePatternData.UnitEntry> units"
+      not in watchdog_src)
 check("5i 服务端类别实体（本轮的显示口径依据）也没被改：代表物 = 候选首个",
       "final List<Item> candidates = candidateListOf(inputCandidates, entry.getKey(), stack.getItem());"
       in chamber

@@ -161,14 +161,19 @@ public class Config {
         .comment("允许输入/输出总线的过滤器使用 Tag 过滤（在过滤槽中放入带 tag_filter 数据组件的物品，值如 #minecraft:stone）。")
         .define("tagFilterEnabled", true);
 
-    // ========== 序列装配链路诊断日志 ==========
-    private static final ModConfigSpec.BooleanValue RSCC_ASSEMBLY_DEBUG = BUILDER
-        .comment("序列装配链路诊断日志（默认 true）。开启后按统一前缀 [rscc-assembly] 输出执行舱 / 输出总线 /"
-            + "输入总线的结构化打点（状态翻转各一条 + 每 5 秒一条聚合摘要），用于排查"
-            + "「最终产物不回流 / 中间产物不回收」类问题。",
-            "关闭方法（二选一）：① 把本项设为 false；② 游戏内执行指令 /rs_create_compat debug assembly off"
-                + "（等价别名 /rs_create_compat assemblydebug off；运行时开关，关掉后除「开关状态变化」那一条外不再输出任何日志）。")
-        .define("rsccAssemblyDebug", true);
+    // ========== 开发日志总开关（唯一的开关，默认关闭） ==========
+    private static final ModConfigSpec.BooleanValue DEV_LOGS = BUILDER
+        .comment("开发日志总开关（默认 false = 发布版安静）。这是给开发/排查用的：开启后会输出大量逐件搬运、"
+            + "计数、门控、账本、蓝图加载器等诊断行（前缀 [rscc-assembly] / [rscc-trace] / [rscc-ledger] /"
+            + "[loader] / [rscc-range-charger] 等），用于定位「最终产物不回流 / 中间产物不回收 / 料在哪一段停住」"
+            + "这类问题；日常游玩建议保持关闭，否则日志会明显变多。",
+            "关闭时保留的日志（一条都不会少）：启动那一行版本指纹 [rscc-build]、会话锚点 [rscc]、"
+                + "全部 WARN / ERROR、以及真正需要玩家知道的失败（例如读档丢弃条目、终端定位失败）。",
+            "运行时切换：游戏内执行 /rs_create_compat devlogs on|off（等价旧写法 /rs_create_compat assemblydebug"
+                + " on|off 与 /rs_create_compat debug assembly on|off）立即生效，不需要重启。",
+            "本项与旧的 rsccAssemblyDebug 是同一个开关（已合并，不再保留两个语义重叠的配置项）；"
+                + "改动配置文件后由配置重载事件自动同步，但重载以配置文件为准，会覆盖指令设置。")
+        .define("devLogs", false);
 
     // ========== 序列装配：停滞 / 掉线检测（定时器） ==========
     private static final ModConfigSpec.IntValue ASSEMBLY_STALL_TIMEOUT_TICKS = BUILDER
@@ -265,8 +270,8 @@ public class Config {
     public static boolean advancedRemoteTerminalEnableMonitor;
     public static boolean advancedRemoteTerminalEnableSequence;
     public static boolean tagFilterEnabled;
-    /** 「序列装配链路诊断日志」的当前值（配置为初值，运行时可被指令覆盖）。 */
-    public static boolean rsccAssemblyDebug;
+    /** 「开发日志总开关」的当前值（配置为初值，运行时可被指令覆盖；运行时实现见 {@link cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug#isEnabled()}）。 */
+    public static boolean devLogs;
     /** 序列装配任务停滞判定的阈值（tick），默认 100 = 5 秒。 */
     public static int assemblyStallTimeoutTicks;
     /** 序列装配任务记录的过期 tick 数（兜底回收上限），默认 12000 = 10 分钟。 */
@@ -331,9 +336,9 @@ public class Config {
         advancedRemoteTerminalEnableSequence = ADVANCED_REMOTE_TERMINAL_SEQUENCE.get();
 
         tagFilterEnabled = TAG_FILTER_ENABLED.get();
-        rsccAssemblyDebug = RSCC_ASSEMBLY_DEBUG.get();
-        // 诊断日志的运行时开关以配置为初值（之后可由指令覆盖）
-        cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug.initFromConfig(rsccAssemblyDebug);
+        devLogs = DEV_LOGS.get();
+        // 开发日志的运行时开关以配置为初值（之后可由指令覆盖；配置重载会再次以文件为准同步）
+        cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug.initFromConfig(devLogs);
         assemblyStallTimeoutTicks = ASSEMBLY_STALL_TIMEOUT_TICKS.get();
         assemblyRecordExpiryTicks = ASSEMBLY_RECORD_EXPIRY_TICKS.get();
         assemblyOfflinePersistTicks = ASSEMBLY_OFFLINE_PERSIST_TICKS.get();

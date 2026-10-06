@@ -443,20 +443,19 @@ def session_start(path, lines):
 
 
 def debug_switch_note(lines):
-    """从日志里读出「序列装配诊断日志」开关的真实状态（供报告自解释）。
+    """从日志里读出「开发日志总开关」的真实状态（供报告自解释）。
 
-    事实（回答用户「我每一次都是开着的」）：{@code RsccAssemblyDebug} 的初值来自配置
-    {@code rsccAssemblyDebug}，<b>默认就是 true</b> —— 因此<b>重开游戏本来就是开着的</b>，
-    不需要每次重下指令；指令只在「玩家手动关过」之后才需要重新打开。本函数把这个事实
-    在日志里找出来（{@code [rscc-assembly] debug=on/off (source=config|command)}），
-    找不到时按「默认开启」处理（因为默认值就是 on）。
+    2026-10-06（round48）更新：开关已统一为配置 {@code devLogs}，<b>默认 false（发布版安静）</b>，
+    因此「日志里没有诊断行」现在最常见的解释就是「开关没开」——玩家需要执行
+    {@code /rs_create_compat devlogs on} 或把配置改成 true，再重跑产线。
+    开关行本身有两种历史写法（新 {@code devLogs=} / 旧 {@code debug=}），两种都认。
     """
     for line in lines:
-        if PREFIX_LINE in line and "debug=" in line:
-            m = re.search(r"debug=(on|off) \(source=([a-z]+)\)", line)
+        if PREFIX_LINE in line and ("devLogs=" in line or "debug=" in line):
+            m = re.search(r"(?:devLogs|debug)=(on|off) \(source=([a-z]+)\)", line)
             if m:
-                return "debug=%s（来自 %s）" % (m.group(1), m.group(2))
-    return "未在日志里检出开关行 ⇒ 按默认处理（默认 on，重开游戏也是开）"
+                return "devLogs=%s（来自 %s）" % (m.group(1), m.group(2))
+    return "未在日志里检出开关行 ⇒ 按默认处理（默认 off，需 /rs_create_compat devlogs on）"
 
 
 PREFIX_LINE = "[rscc-assembly]"
@@ -600,7 +599,7 @@ elif stale:
 if not rscc:
     print("[FAIL] 选中的日志里没有 rscc 诊断行（%s 一次都没出现）—— 没有可判的运行期证据。" % PREFIX_LINE)
     print("       排查顺序：① 这一份是不是「刚启动、还没跑产线」的会话（看上面的候选表）；")
-    print("       ② 诊断开关是否被手动关过（配置 rsccAssemblyDebug 默认 true，重开游戏=on）；")
+    print("       ② 开发日志总开关是否还关着（配置 devLogs 默认 false ⇒ 先 /rs_create_compat devlogs on）；")
     print("       ③ 若确无数据，请照 docs/SEQUENCE_ASSEMBLY_LOG_GUIDE.md 的步骤重跑一次产线。")
     print("       旧实现在这里打印 SELFCHECK OK 并 exit 0（假绿），现在判 FAIL；")
     print("       若确实只想跑源码锚点，显式加 --allow-empty。")

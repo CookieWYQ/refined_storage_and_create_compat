@@ -8914,39 +8914,50 @@ public class SequenceExecutionChamberBlockEntity
         // 非过渡件（原料 / 成品 / 废料）不受影响，保持既有行为。
         final ItemStack probeStack = resource.toItemStack(1);
         if (!isNextForMyMachines(probeStack)) {
-            if (RsccAssemblyDebug.isEnabled()) {
-                final SequencedAssembly assembly = probeStack.get(AllDataComponents.SEQUENCED_ASSEMBLY);
-                final int nextStep = nextStepOf(level, assembly);
-                // 理由分档（用户要能一眼看懂「为什么这份件被收回网络」）：
-                //   step_not_mine        = 别的在线执行仓显式认领了这一步 → 交给它（正常换机器）；
-                //   no_machine_owns_step = 同类型没有任何在线仓能承担这一步 → 需要玩家干预（显式 WARN）。
-                final String owner = nextStep < 0 ? "-" : stepOwnerDetail(level, assembly, nextStep);
-                final String reason = "NOBODY".equals(owner) ? "no_machine_owns_step" : "step_not_mine";
+            final SequencedAssembly assembly = probeStack.get(AllDataComponents.SEQUENCED_ASSEMBLY);
+            final int nextStep = nextStepOf(level, assembly);
+            // 理由分档（用户要能一眼看懂「为什么这份件被收回网络」）：
+            //   step_not_mine        = 别的在线执行仓显式认领了这一步 → 交给它（正常换机器）；
+            //   no_machine_owns_step = 同类型没有任何在线仓能承担这一步 → 需要玩家干预（显式 WARN）。
+            final String owner = nextStep < 0 ? "-" : stepOwnerDetail(level, assembly, nextStep);
+            final String reason = "NOBODY".equals(owner) ? "no_machine_owns_step" : "step_not_mine";
+            final boolean nobody = "NOBODY".equals(owner);
+            if (nobody) {
+                // <b>用户第 2/3 条：这条「没机器认领」必须让看门狗看见，从而弹出明确提示</b>
+                //（实测它每 5 秒 8 次却全程没有任何横幅 ⇒ 玩家「下单毫无反应却没有任何弹窗」）。
+                //
+                // 2026-10-06：这两句是**玩家可见的功能**（横幅 + 停滞判定），不是日志 ——
+                // 因此必须留在 devLogs 开关之外。旧实现把它们与日志一起包在 isEnabled() 里，
+                // 一旦把开发日志默认关掉，「没机器认领」的横幅就会跟着消失（行为回归）。
+                stepOwnerMissingAt = level.getGameTime();
+                // 2026-10-05：把「原因」也记下来 —— 它与「下游机器满」是两件完全不同的事，
+                // 旧实现只有一个布尔值，于是两种原因在横幅上都显示成「执行器掉线」。
+                noteStall(StallReason.STEP_OWNER_MISSING,
+                    RsccAssemblyDebug.itemId(resource.item()));
+            }
+            final boolean devLogs = RsccAssemblyDebug.isEnabled();
+            if (nobody || devLogs) {
                 final String body = RsccAssemblyDebug.machine("chamber", worldPosition)
                     + " reject {item=" + RsccAssemblyDebug.itemId(resource.item())
                     + " step=" + (assembly == null ? "-" : assembly.step())
                     + " next=" + (nextStep < 0 ? "-" : nextStep) + "}"
                     + " reason=" + reason
                     + " stepOwner=" + owner;
-                // 同因合并：首次立即打一条，之后每 5 秒汇总一次（不再每秒刷屏），保留可诊断性。
-                RsccAssemblyDebug.reject("notmine@" + RsccAssemblyDebug.at(worldPosition)
-                    + "#item:" + RsccAssemblyDebug.itemId(resource.item()), body);
-                if ("NOBODY".equals(owner)) {
-                    // <b>用户第 2/3 条：这条「没机器认领」必须让看门狗看见，从而弹出明确提示</b>
-                    //（实测它每 5 秒 8 次却全程没有任何横幅 ⇒ 玩家「下单毫无反应却没有任何弹窗」）。
-                    stepOwnerMissingAt = level.getGameTime();
-                    // 2026-10-05：把「原因」也记下来 —— 它与「下游机器满」是两件完全不同的事，
-                    // 旧实现只有一个布尔值，于是两种原因在横幅上都显示成「执行器掉线」。
-                    noteStall(StallReason.STEP_OWNER_MISSING,
-                        RsccAssemblyDebug.itemId(resource.item()));
-                    // 「下一步没有任何机器认领」是真正需要玩家干预的情形 → 一次性 WARN（每个「仓 + 件」一条）
+                if (devLogs) {
+                    // 同因合并：首次立即打一条，之后每 5 秒汇总一次（不再每秒刷屏），保留可诊断性。
+                    RsccAssemblyDebug.reject("notmine@" + RsccAssemblyDebug.at(worldPosition)
+                        + "#item:" + RsccAssemblyDebug.itemId(resource.item()), body);
+                    tracePull(resource, available, "pull_rejected",
+                        reason + " step=" + (assembly == null ? "-" : assembly.step())
+                            + " next=" + (nextStep < 0 ? "-" : nextStep) + " stepOwner=" + owner, available);
+                }
+                if (nobody) {
+                    // 「下一步没有任何机器认领」是真正需要玩家干预的情形 → WARN。
+                    // 必要日志：<b>不受 devLogs 开关控制</b>（warn() 自己按「仓 + 件」只报一次，不刷屏）。
                     RsccAssemblyDebug.warn("unowned@" + RsccAssemblyDebug.at(worldPosition)
                             + "#item:" + RsccAssemblyDebug.itemId(resource.item()),
                         body + " (该步没有任何在线执行仓认领；这份件只能留在网络，等玩家补机器 / 补样板)");
                 }
-                tracePull(resource, available, "pull_rejected",
-                    reason + " step=" + (assembly == null ? "-" : assembly.step())
-                        + " next=" + (nextStep < 0 ? "-" : nextStep) + " stepOwner=" + owner, available);
             }
             suppressStepRefusal(resource, now);
             return false;

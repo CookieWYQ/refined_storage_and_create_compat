@@ -119,10 +119,13 @@ public final class RsccIntermediateFlow {
             // 修好后这一行应当只在「池外还有中间产物」时出现，并显示
             // {@code poolStored(after)} 真的涨了（例如 0 → 11）；等池外那份搬完就不再多打。
             final long poolStoredAfter = RsccSharedCache.poolStored(level, network);
-            org.slf4j.LoggerFactory.getLogger("rs_create_compat/intermediate-flow").info(
-                "[rscc-intermediate-flow] moved={} poolFree(before)={} poolStored(after)={}"
-                    + " networkTotal={}（存量迁移：网络里的中间产物 → 缓存盘）",
-                moved, poolFree, poolStoredAfter, networkIntermediateTotal(storage));
+            // 开发诊断（INFO）：受 devLogs 总开关控制（前缀 [rscc-intermediate-flow]）。
+            if (RsccAssemblyDebug.isEnabled()) {
+                org.slf4j.LoggerFactory.getLogger("rs_create_compat/intermediate-flow").info(
+                    "[rscc-intermediate-flow] moved={} poolFree(before)={} poolStored(after)={}"
+                        + " networkTotal={}（存量迁移：网络里的中间产物 → 缓存盘）",
+                    moved, poolFree, poolStoredAfter, networkIntermediateTotal(storage));
+            }
         }
         return moved;
     }

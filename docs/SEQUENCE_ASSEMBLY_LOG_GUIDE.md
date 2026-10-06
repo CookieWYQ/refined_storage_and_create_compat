@@ -18,9 +18,13 @@ python tools\verify_build_stamp.py
 
 ## 0. 先记住三句话（这三句解释了以前为什么老是「日志不够」）
 
-1. **诊断日志默认就是开着的。** `RsccAssemblyDebug` 的初值来自配置 `rsccAssemblyDebug`，**默认 `true`**。
-   因此**重开游戏它也是开着的**，不需要每次重下指令；指令只用于「你手动关过之后想再打开」。
-   想看当前状态：在游戏里输入 `/rs_create_compat assemblydebug`（不带 on/off）就会回报当前是 on 还是 off。
+1. **诊断日志从 2026-10-06 起默认是关着的**（用户要求「发布版默认不该刷开发日志」）。
+   `RsccAssemblyDebug` 的初值来自配置 `devLogs`，**默认 `false`** —— 所以现在要抓一份带证据的日志，
+   得先显式打开：游戏内 `/rs_create_compat devlogs on`（旧写法 `/rs_create_compat assemblydebug on`、
+   `/rs_create_compat debug assembly on` 等价），或把配置文件里的 `devLogs` 改成 `true` 后重载配置。
+   想看当前状态：输入不带 on/off 的同一条指令即可回报 on / off。
+   **必要日志不受这个开关影响**：全部 WARN / 错误、启动版本行 `[rscc-build]`、会话锚点 `[rscc]`
+   始终输出 —— 所以「日志里一条诊断行都没有」现在首先意味着「开关没开」，不是「链路没问题」。
 2. **日志分两个文件，判定脚本两个都要。**
    * `run/logs/latest.log`：INFO 级（`[rscc-assembly]` / `[rscc-trace]` 生产事件都在这里）；
    * `run/logs/debug.log`：DEBUG 级，**RS 自己的任务行在这里**（`Created task …`、

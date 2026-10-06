@@ -142,11 +142,20 @@ check("锚点⑫ 既有语义未变：isTabOnly 7 处跳过点、一类别一属
       and "public List<ChainBusCategory> chainCategories() {" in chamber
       and "chainBusOwners()" in chamber
       and "chainCategories()" not in screen)
-check("锚点⑬ 不得触碰的三个文件仍是改动前的时间戳（mtime 早于本轮改动的两个界面文件）",
-      all(os.path.getmtime(os.path.join(SRC, *parts)) < os.path.getmtime(os.path.join(SRC, *WIDGET))
-          for parts in (("support", "AssemblyWatchdog.java"),
-                        ("support", "RsccWireLinkSearch.java"),
-                        ("block", "entity", "SequenceExecutionChamberBlockEntity.java"))))
+# 2026-10-06（round48「开发日志总开关」）更新，理由：
+#   本条原本用 **mtime** 证明「本轮只动了两个界面文件」（AssemblyWatchdog / RsccWireLinkSearch /
+#   SequenceExecutionChamberBlockEntity 未被触碰）。那是**轮次取证**，不是行为断言；而 round48
+#   **合法地**改动了其中两个文件：
+#     * AssemblyWatchdog.java —— 把两条必要 WARN 从 `if (!isEnabled()) return;` 之后挪出来；
+#     * SequenceExecutionChamberBlockEntity.java —— 把 noteStall / stepOwnerMissingAt 从
+#       `if (isEnabled())` 块里挪出来（否则关掉开发日志后「没机器认领」的横幅会消失），
+#       并给各高频开发日志加上总开关。
+#   改为内容级断言：本条真正要保护的是「条上图标与详细配置同相位」这套修法没被带坏。
+check("锚点⑬ 条上/详细配置同相位的修法未被本轮改动带坏（mtime 断言已被 round48 合法触碰取代）",
+      "public static ItemStack barStackOf(" in screen
+      and "return displayStackOf(category);" in screen
+      and "barNameOf(" in widget
+      and "cycleCandidate(" in read(*GHOST))
 
 
 # ======================================================================

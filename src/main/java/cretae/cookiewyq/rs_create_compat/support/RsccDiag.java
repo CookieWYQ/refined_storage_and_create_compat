@@ -60,6 +60,9 @@ import java.util.regex.Pattern;
  * <h2>不刷屏</h2>
  * 计数器只在内存里累加，<b>不</b>额外打日志；唯一的新增日志行是「导出时的分节标记」与
  * 「服务器启动时的锚点行」{@code [rscc] diag logging ON (default)}（各一条）。
+ * <p>注意：喂给计数表的事件来自 {@link RsccAssemblyDebug} 的输出通道，而该通道自 2026-10-06 起
+ * 默认关闭（配置 {@code devLogs=false}）⇒ 关闭状态下计数表不会有新数据；但
+ * {@code /rs_create_compat diag run} 会先把开发日志打开再导出，一键诊断能力不受影响。</p>
  * 快照文件本身按<b>固定插入顺序 + 显式排序</b>写出，同一状态两次导出除时间戳外逐字节一致。
  */
 public final class RsccDiag {
@@ -126,8 +129,11 @@ public final class RsccDiag {
         // 确定的 revision（见 TECHNICAL_HANDOFF.md §7.3 结论 ⑥：旧日志无 git hash / 编译时间，
         // 只能靠 mtime 猜，于是把一份晚于修复代码的日志误当成了验证证据）。
         RsccBuildInfo.logOnce();
-        LOGGER.info("{} diag logging ON (default) session={} exportDir={}",
-            ANCHOR_PREFIX, sessionStartedAt, exportRoot());
+        // 锚点行保持原文开头不变（tools/verify_build_stamp.py 用它定位会话起点），末尾追加 devLogs 实际档位：
+        // 「采集」默认是开的（本类只累加计数、不刷日志），但「开发日志输出」默认是关的 —— 两者必须能分辨。
+        LOGGER.info("{} diag logging ON (default) session={} exportDir={} devLogs={}",
+            ANCHOR_PREFIX, sessionStartedAt, exportRoot(),
+            RsccAssemblyDebug.isEnabled() ? "on" : "off");
         // 把「当前缺料处置档位」默认落一条日志（用户不敲任何指令也能在日志里核对 ⑧ 档位与行为是否一致）。
         try {
             LOGGER.info("{} shortage-mode={} (session default, source=save)",

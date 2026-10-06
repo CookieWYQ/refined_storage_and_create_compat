@@ -85,13 +85,22 @@ has(importer, "DataComponentPatch.EMPTY", "锚点: 剥标记后以「原始原�
 has(exporter, "Result.DESTINATION_DOES_NOT_ACCEPT", "锚点: 输出总线收不下就不动（不销毁不复制）")
 
 has(debug, "public static void setEnabled(", "锚点: 诊断运行时可切换")
-has(debug, "enabled = true;", "锚点: 诊断默认开启")
+# 2026-10-06 更新（旧断言是 has(debug, "enabled = true;") = 「诊断默认开启」）：
+# 用户明确要求「发布版默认不该刷开发日志」，因此默认值已翻转为 false，旧断言固化的正是被修掉的行为。
+has(debug, "private static volatile boolean enabled = false;", "锚点: 开发日志总开关默认关闭（devLogs 默认 false）")
 has(debug, "SUMMARY_INTERVAL_NANOS = 5_000_000_000L", "锚点: 5 秒聚合摘要")
 has(debug, "REASON_WINDOW_NANOS = 1_000_000_000L", "锚点: 原因去重 1 秒")
+# 必要日志（WARN）不随开关关闭：warn() 不得再被 enabled 守卫。
+check("锚点: warn() 不受开发日志开关控制（WARN 一个都不能少）",
+      "!enabled || !changed(\"warn:\"" not in debug and "public static void warn(" in debug)
 
-has(config, "define(\"rsccAssemblyDebug\", true)", "锚点: 配置开关 rsccAssemblyDebug 默认 true")
-has(config, "public static boolean rsccAssemblyDebug;", "锚点: Config 有 rsccAssemblyDebug 字段")
+# 2026-10-06 更新（旧断言是 define("rsccAssemblyDebug", true) / 字段 rsccAssemblyDebug）：
+# 开关已统一为**一个** devLogs（默认 false），旧的 rsccAssemblyDebug 不再作为独立配置项存在，
+# 否则会出现两个语义重叠的开关。
+has(config, "define(\"devLogs\", false)", "锚点: 配置开关 devLogs 默认 false")
+has(config, "public static boolean devLogs;", "锚点: Config 有 devLogs 字段")
 has(config, "RsccAssemblyDebug.initFromConfig(", "锚点: 配置载入时同步到运行时开关")
+has(commands, 'Commands.literal("devlogs")', "锚点: 指令 /rs_create_compat devlogs")
 has(commands, 'Commands.literal("debug")', "锚点: 指令 /rs_create_compat debug")
 has(commands, 'Commands.literal("assembly")', "锚点: 指令 debug assembly")
 has(commands, 'Commands.literal("assemblydebug")', "锚点: 旧写法 assemblydebug 仍可用")
@@ -102,7 +111,8 @@ for lang in ("zh_cn.json", "en_us.json"):
     with io.open(os.path.join(lang_dir, lang), "r", encoding="utf-8") as handle:
         data = json.load(handle)
     usage = data.get("message.rs_create_compat.assemblydebug.usage", "")
-    check("语言键 %s: usage 提到 debug assembly" % lang, "debug assembly" in usage, usage)
+    check("语言键 %s: usage 提到 devlogs 与旧别名" % lang,
+          "devlogs" in usage and "assemblydebug" in usage, usage)
 
 # ==================== 1. 原料标记逻辑推演 ====================
 

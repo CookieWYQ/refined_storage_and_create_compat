@@ -166,6 +166,12 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     private long guiOrderCacheTick = Long.MIN_VALUE;
 
     protected void logState(final String key, final String message) {
+        // 蓝图加载器这一族（前缀 [loader]）实测是**最大的刷屏源**：单会话 3.9 万行、峰值 80 行/秒
+        // （因为「状态翻转」的判定里带着数量 / 坐标，稳态也会不停翻转，外加每 10 秒一条保活）。
+        // 它属于纯开发诊断 ⇒ 受 devLogs 总开关控制，默认关闭；需要排查时打开开关，明细一字不少。
+        if (!cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug.isEnabled()) {
+            return;
+        }
         final Level lvl = getLevel();
         if (lvl == null) {
             return;

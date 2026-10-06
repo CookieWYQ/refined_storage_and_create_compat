@@ -1883,18 +1883,22 @@ public final class AssemblyWatchdog {
                                            final Map<BlockPos, SequenceExecutionChamberBlockEntity> chambers,
                                            final PatternRef pattern, final UUID taskId,
                                            final Record record) {
-        if (!RsccAssemblyDebug.isEnabled()) {
-            return;
-        }
+        // 2026-10-06：本方法里除了开发日志，还夹着<b>两条必要 WARN</b>（「这一步没有任何在线机器认领」
+        // /「样板没覆盖配方全部步骤」）。旧实现在方法开头 `if (!isEnabled()) return;`，一旦把开发日志
+        // 默认关掉，这两条玩家可见的失败提示就会一起消失 —— 所以现在只把关卡套在 event() 上，
+        // WARN 照常执行（它们各自按 taskId 只报一次）。
+        final boolean devLogs = RsccAssemblyDebug.isEnabled();
         final List<SequencePatternData.UnitEntry> units = pattern.assembly().units();
         final int totalSteps = totalStepsOf(level, units);
-        RsccAssemblyDebug.event("binding task=" + taskId
-            + " product=" + record.productName + " x" + record.amount
-            + " steps=" + units.size()
-            + (totalSteps > 0 ? " sequence=" + totalSteps
-                : " sequence=? recipe=" + rawRecipeId(units))
-            + " loops=" + pattern.assembly().loops()
-            + " executor=" + RsccAssemblyDebug.at(pattern.executorPos()));
+        if (devLogs) {
+            RsccAssemblyDebug.event("binding task=" + taskId
+                + " product=" + record.productName + " x" + record.amount
+                + " steps=" + units.size()
+                + (totalSteps > 0 ? " sequence=" + totalSteps
+                    : " sequence=? recipe=" + rawRecipeId(units))
+                + " loops=" + pattern.assembly().loops()
+                + " executor=" + RsccAssemblyDebug.at(pattern.executorPos()));
+        }
         for (int step = 0; step < units.size(); step++) {
             final SequencePatternData.UnitEntry unit = units.get(step);
             final BlockPos pos = unit.machinePos();
@@ -1902,13 +1906,15 @@ public final class AssemblyWatchdog {
             final String machine = pos == null ? "unassigned" : RsccAssemblyDebug.at(pos);
             final String recipeType = unit.recipeType() == null || unit.recipeType().isEmpty()
                 ? "-" : unit.recipeType();
-            RsccAssemblyDebug.event("binding step=" + step
-                + " machine=" + machine
-                + " chamberExists=" + (chamber != null)
-                + " recipeType=" + recipeType
-                + " chamberSteps=[" + (chamber == null ? "-" : chamber.debugOwnedSteps()) + "]"
-                + " nextStepOwner=" + nextStepOwnerOf(units, chambers, step, totalSteps,
-                    pattern.assembly().loops()));
+            if (devLogs) {
+                RsccAssemblyDebug.event("binding step=" + step
+                    + " machine=" + machine
+                    + " chamberExists=" + (chamber != null)
+                    + " recipeType=" + recipeType
+                    + " chamberSteps=[" + (chamber == null ? "-" : chamber.debugOwnedSteps()) + "]"
+                    + " nextStepOwner=" + nextStepOwnerOf(units, chambers, step, totalSteps,
+                        pattern.assembly().loops()));
+            }
             if (chamber == null) {
                 // 只有「这一步确实存在」才可能被服务：没机器 / 机器不在网络里都收不回来再加工
                 RsccAssemblyDebug.warn("bindingorphan@" + taskId + "#" + step,

@@ -312,9 +312,12 @@ public final class RsccFlowLedger {
         final Audit audit = AUDITS.get(origin);
         if (bad.isEmpty()) {
             if (audit != null && (audit.reported || audit.samples > 0)) {
-                LOGGER.info("{} {} balanced again (was {} sample(s) of imbalance, peak={} on {})",
-                    PREFIX, origin, audit.suppressed + audit.samples, audit.peak,
-                    audit.peakKey.isEmpty() ? "-" : audit.peakKey);
+                // 开发诊断（INFO）：受 devLogs 总开关控制；下面的 sustained 是 WARN，属于必要日志，始终输出。
+                if (RsccAssemblyDebug.isEnabled()) {
+                    LOGGER.info("{} {} balanced again (was {} sample(s) of imbalance, peak={} on {})",
+                        PREFIX, origin, audit.suppressed + audit.samples, audit.peak,
+                        audit.peakKey.isEmpty() ? "-" : audit.peakKey);
+                }
             }
             if (audit != null) {
                 AUDITS.remove(origin);
@@ -340,8 +343,11 @@ public final class RsccFlowLedger {
             state.reported = false;
             state.suppressed = 0L;
             state.lastReportMillis = millis;
-            LOGGER.info("{} {} unbalanced (first) peak={} on {} :: {}",
-                PREFIX, origin, state.peak, state.peakKey, signature);
+            // 开发诊断（INFO）：受 devLogs 总开关控制。
+            if (RsccAssemblyDebug.isEnabled()) {
+                LOGGER.info("{} {} unbalanced (first) peak={} on {} :: {}",
+                    PREFIX, origin, state.peak, state.peakKey, signature);
+            }
             return;
         }
         state.samples++;
@@ -354,8 +360,11 @@ public final class RsccFlowLedger {
         }
         state.suppressed++;
         if (millis - state.lastReportMillis >= REPEAT_WINDOW_MILLIS) {
-            LOGGER.info("{} {} unbalanced (same imbalance repeated {} times, peak={} on {}) :: {}",
-                PREFIX, origin, state.suppressed, state.peak, state.peakKey, signature);
+            // 开发诊断（INFO）：受 devLogs 总开关控制。
+            if (RsccAssemblyDebug.isEnabled()) {
+                LOGGER.info("{} {} unbalanced (same imbalance repeated {} times, peak={} on {}) :: {}",
+                    PREFIX, origin, state.suppressed, state.peak, state.peakKey, signature);
+            }
             state.lastReportMillis = millis;
             state.suppressed = 0L;
         }

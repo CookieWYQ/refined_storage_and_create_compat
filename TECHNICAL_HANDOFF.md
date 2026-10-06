@@ -919,7 +919,10 @@ tools\manual_compile.ps1  →  关掉游戏重开  →  重复「补货 → 下�
 
 ### 9.3 `RsccAssemblyDebug` 的启用与使用
 
-- **默认开启**（`Config#rsccAssemblyDebug` 默认 `true`），重开游戏也是开的，不需每次重下指令。
+- **默认关闭**（2026-10-06 起：`Config#devLogs` 默认 `false`）。用户实测这一族日志在没敲任何指令时
+  一直输出（`[rscc-assembly]` 单会话 1.2 万行 / 峰值 128 行每秒，`[loader]` 单会话 3.9 万行），
+  发布版必须安静 ⇒ 要抓诊断日志得先 `/rs_create_compat devlogs on`（等价旧写法 `assemblydebug` /
+  `debug assembly`）。开关**关闭时 WARN / 错误、启动版本行 `[rscc-build]`、会话锚点 `[rscc]` 照常输出**。
 
 - 查看当前状态：游戏内 `/rs_create_compat assemblydebug`（不带 on/off）
 

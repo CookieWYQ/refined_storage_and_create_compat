@@ -44,9 +44,17 @@ import java.util.Map;
  * <p><b>性能</b>：所有调用点都必须先判 {@link #isEnabled()}（关闭时一行不打、且<b>不进行任何字符串拼接</b>）；
  * 本类的计数 / 去重表只在开启时更新。开关状态本身的变化<b>始终</b>打一条 INFO（含关闭那一次）。</p>
  *
- * <p><b>开关</b>：初值来自配置 {@code rsccAssemblyDebug}（默认 {@code true}），
- * 运行时可用指令 {@code /rs_create_compat debug assembly <on|off>}（等价别名
- * {@code /rs_create_compat assemblydebug <on|off>}）切换。</p>
+ * <p><b>开关</b>：<b>开发日志总开关</b>的唯一运行时实现，初值来自配置 {@code devLogs}（默认 {@code false} ⇒
+ * 发布版默认安静），运行时可用指令 {@code /rs_create_compat devlogs <on|off>}（等价别名
+ * {@code /rs_create_compat assemblydebug <on|off>} 与 {@code /rs_create_compat debug assembly <on|off>}）切换。
+ * <b>本类名保留了历史名字（序列装配），但 {@link #isEnabled()} 现在是「全部开发/诊断日志」的总闸</b> ——
+ * 蓝图加载器（{@code [loader]}）、定量保持器（{@code [rscc-keeper]}）、流量账本（{@code [rscc-ledger]}）、
+ * 范围充电器（{@code [rscc-range-charger]}）、中间产物缓存（{@code [rscc-cache-source]}）等都读同一个闸，
+ * 避免出现两个语义重叠的开关。</p>
+ *
+ * <p><b>必要日志不受本开关控制</b>：{@link #warn}（需要玩家干预的 WARN）即使关闭开发日志也照常输出
+ * （仍按 key 只报一次）；{@link #changed} 也因此在关闭时继续维护状态表，否则「同一问题只报一次」的
+ * 判定会随开关一起失效。</p>
  */
 public final class RsccAssemblyDebug {
     /** 统一前缀：所有诊断行都以它开头（便于 grep）。 */
@@ -77,8 +85,14 @@ public final class RsccAssemblyDebug {
     /** 状态 / 原因表的软上限（键通常是方块坐标，正常远小于它；超限即整表清空，避免无界增长）。 */
     private static final int TABLE_LIMIT = 512;
 
-    /** 运行时开关；初值取自 {@code Config.rsccAssemblyDebug}。 */
-    private static volatile boolean enabled = true;
+    /**
+     * 运行时总开关（= 配置 {@code devLogs}）；<b>默认 false</b>。
+     *
+     * <p><b>为什么默认必须是 false</b>：用户实测这一族日志在没有任何指令的情况下一直输出
+     * （{@code [rscc-assembly]} 单会话 1.2 万行、峰值 128 行/秒；{@code [loader]} 单会话 3.9 万行），
+     * 发布版不该有人没开就刷日志。诊断能力不删：需要时打开开关，所有明细一字不少。</p>
+     */
+    private static volatile boolean enabled = false;
 
     /** key → 上次状态（{@link #transition} 用）。 */
     private static final Map<String, String> LAST_STATE = new HashMap<>();
@@ -117,7 +131,7 @@ public final class RsccAssemblyDebug {
             return;
         }
         enabled = value;
-        LOGGER.info("{} debug={} (source=config)", PREFIX, value ? "on" : "off");
+        LOGGER.info("{} devLogs={} (source=config)", PREFIX, value ? "on" : "off");
     }
 
     /** 运行时开关（指令调用）。状态变化本身打一条 INFO —— 即使切换到「关」也只打这一条。 */
@@ -126,7 +140,7 @@ public final class RsccAssemblyDebug {
             return;
         }
         enabled = value;
-        LOGGER.info("{} debug={} (source=command)", PREFIX, value ? "on" : "off");
+        LOGGER.info("{} devLogs={} (source=command)", PREFIX, value ? "on" : "off");
     }
 
     // ==================== 字段格式化 ====================
@@ -173,11 +187,13 @@ public final class RsccAssemblyDebug {
     /**
      * 状态翻转判定：{@code key} 的上次状态与 {@code state} 相同 → 返回 {@code false}（不打）；
      * 不同 → 记录新状态并返回 {@code true}（调用方据此再调 {@link #event}，细节字符串只在翻转时才拼）。
+     *
+     * <p><b>为什么不在这里判开关（2026-10-06 改）</b>：{@link #warn} 的「同一个问题只报一次」也走这张表，
+     * 而 WARN 属于必要日志、<b>不随开关关闭</b>。若关闭时直接返回 false，WARN 的去重判定会在关闭状态下
+     * 失效（要么永久丢失、要么每次都报）。因此状态表始终维护（键的基数有界，见 {@link #TABLE_LIMIT}），
+     * 由 {@link #event} / {@link #transition} 各自负责「关掉时不输出」。</p>
      */
     public static boolean changed(final String key, final String state) {
-        if (!enabled) {
-            return false;
-        }
         if (state.equals(LAST_STATE.get(key))) {
             return false;
         }
@@ -185,8 +201,11 @@ public final class RsccAssemblyDebug {
         return true;
     }
 
-    /** {@link #changed} + {@link #event} 的合并便捷写法。 */
+    /** {@link #changed} + {@link #event} 的合并便捷写法（开关关闭时一行不打）。 */
     public static void transition(final String key, final String state, final String body) {
+        if (!enabled) {
+            return;
+        }
         if (changed(key, state)) {
             LOGGER.info("{} {}", PREFIX, body);
         }
@@ -323,9 +342,12 @@ public final class RsccAssemblyDebug {
      * 一次性 WARN（同一 {@code key} 只打一条，状态复位由 {@link #changed} 的同一张表负责）：
      * 用于<b>需要玩家干预</b>的异常（例如「这一步没有任何在线机器认领」）—— 这类信息不该只出现在
      * 每秒刷屏的 INFO 里，也不该每节拍重复。
+     *
+     * <p><b>必要日志：不受 {@link #setEnabled} 的总开关控制</b>（用户硬要求「开关关掉时 WARN 一个都不能少」）。
+     * 关闭开发日志时它照样输出，但仍是「同一 key 只一条」，因此不会变成新的刷屏源。</p>
      */
     public static void warn(final String key, final String body) {
-        if (!enabled || !changed("warn:" + key, "warned")) {
+        if (!changed("warn:" + key, "warned")) {
             return;
         }
         RsccDiag.observe(body);

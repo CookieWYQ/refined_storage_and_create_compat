@@ -196,10 +196,12 @@ public final class CompatCommands {
                 context.getSource().sendFailure(Component.translatable(KEY_REUSE_USAGE));
                 return 0;
             }));
-        // 「序列装配链路诊断日志」开关（运行时，无权限）：
-        //   /rs_create_compat debug assembly on|off   （推荐写法，用户验收要求的形式）
+        // 「开发日志总开关」（运行时，无权限）：
+        //   /rs_create_compat devlogs on|off          （推荐写法：这是**全部**开发/诊断日志的总闸）
         //   /rs_create_compat assemblydebug on|off    （等价别名，保持旧写法可用）
-        // 关掉后除「开关状态变化」那一条外不再输出任何日志（见 RsccAssemblyDebug#setEnabled）。
+        //   /rs_create_compat debug assembly on|off   （等价别名）
+        // 关掉后除「开关状态变化」那一条外不再输出任何开发日志（见 RsccAssemblyDebug#setEnabled）；
+        // 但**必要日志一条都不会少**：WARN / ERROR、启动版本行 [rscc-build]、会话锚点 [rscc] 照常输出。
         addAssemblyDebugToggle(root);
         // 「一键诊断快照」（无权限，普通玩家可用）：
         //   /rs_create_compat diag       把当前全部相关状态导出为 run/rscc_diag/<时间戳>/snapshot.json
@@ -234,8 +236,16 @@ public final class CompatCommands {
         return 1;
     }
 
-    /** 挂载「序列装配诊断日志」开关的两种写法（同一处理器，行为完全一致）。 */
+    /** 挂载「开发日志总开关」的三种写法（同一处理器，行为完全一致；不产生第二套语义）。 */
     private static void addAssemblyDebugToggle(final LiteralArgumentBuilder<CommandSourceStack> root) {
+        // 推荐写法：devlogs（＝配置 devLogs，默认 false）
+        root.then(Commands.literal("devlogs")
+            .then(Commands.literal("on")
+                .executes(context -> setAssemblyDebug(context, true)))
+            .then(Commands.literal("off")
+                .executes(context -> setAssemblyDebug(context, false)))
+            .executes(context -> reportAssemblyDebug(context)));
+        // 兼容写法 ①：assemblydebug（0.x 起就有）
         root.then(Commands.literal("assemblydebug")
             .then(Commands.literal("on")
                 .executes(context -> setAssemblyDebug(context, true)))
@@ -243,6 +253,7 @@ public final class CompatCommands {
                 .executes(context -> setAssemblyDebug(context, false)))
             // 只输入到 assemblydebug 一层：回报当前状态 + 用法提示
             .executes(context -> reportAssemblyDebug(context)));
+        // 兼容写法 ②：debug assembly
         root.then(Commands.literal("debug")
             .then(Commands.literal("assembly")
                 .then(Commands.literal("on")
@@ -262,7 +273,7 @@ public final class CompatCommands {
         return 0;
     }
 
-    /** 设置「序列装配诊断日志」运行时开关（状态变化本身会打一条 INFO，见 {@link RsccAssemblyDebug#setEnabled}）。 */
+    /** 设置「开发日志总开关」运行时开关（状态变化本身会打一条 INFO，见 {@link RsccAssemblyDebug#setEnabled}）。 */
     private static int setAssemblyDebug(final CommandContext<CommandSourceStack> context, final boolean enable) {
         RsccAssemblyDebug.setEnabled(enable);
         context.getSource().sendSuccess(

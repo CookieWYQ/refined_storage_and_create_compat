@@ -119,15 +119,24 @@ public final class KeeperOverflow {
                     this.who = who;
                     this.resource = resource;
                     this.target = target;
-                    LOGGER.info("{} {} 开始销毁过量：{} 保留目标 {}，超出的部分将被销毁",
-                        LOG_PREFIX, who, resource, target);
+                    // 开发诊断（INFO）：受 devLogs 总开关控制。
+                    // 实测这一族会「开始 / 清完」来回抖动（单会话 1658 条，峰值 12 条/秒），
+                    // 属于典型的高频直出，不该在发布版默认刷屏。
+                    if (RsccAssemblyDebug.isEnabled()) {
+                        LOGGER.info("{} {} 开始销毁过量：{} 保留目标 {}，超出的部分将被销毁",
+                            LOG_PREFIX, who, resource, target);
+                    }
                 }
                 destroyed += amount;
-                LOGGER.debug("{} {} 销毁 {} x{}（仍超出 {}）", LOG_PREFIX, who, resource, amount, remainingExcess);
+                if (RsccAssemblyDebug.isEnabled()) {
+                    LOGGER.debug("{} {} 销毁 {} x{}（仍超出 {}）", LOG_PREFIX, who, resource, amount, remainingExcess);
+                }
             }
             if (active && remainingExcess <= 0L) {
-                LOGGER.info("{} {} 过量已清完：{} 共销毁 {}（目标 {}）",
-                    LOG_PREFIX, who, resource, destroyed, target);
+                if (RsccAssemblyDebug.isEnabled()) {
+                    LOGGER.info("{} {} 过量已清完：{} 共销毁 {}（目标 {}）",
+                        LOG_PREFIX, who, resource, destroyed, target);
+                }
                 reset();
             }
         }
@@ -135,8 +144,11 @@ public final class KeeperOverflow {
         /** 本次 tick 没有销毁（开关关闭 / 已达标 / 让位给同网络更权威的同伴）：把未收尾的事件收尾。 */
         public void idle() {
             if (active) {
-                LOGGER.info("{} {} 停止销毁过量：{} 本段共销毁 {}（目标 {}）",
-                    LOG_PREFIX, who, resource, destroyed, target);
+                // 开发诊断（INFO）：受 devLogs 总开关控制（与上面两条同一族，见 record 的说明）。
+                if (RsccAssemblyDebug.isEnabled()) {
+                    LOGGER.info("{} {} 停止销毁过量：{} 本段共销毁 {}（目标 {}）",
+                        LOG_PREFIX, who, resource, destroyed, target);
+                }
             }
             reset();
         }

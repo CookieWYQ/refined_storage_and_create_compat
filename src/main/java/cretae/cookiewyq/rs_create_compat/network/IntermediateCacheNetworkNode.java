@@ -102,7 +102,10 @@ public class IntermediateCacheNetworkNode extends AbstractNetworkNode implements
         // <b>取证日志（2026-10-05）</b>：这一条是判断「网络源到底注册成功没有」的唯一凭据。
         // 快照只告诉我们「盘在线但存量 0」，到底是 refreshSources 没被调用、
         // 还是被调用了但 added=0、还是注册了却没生效 —— 三者只能靠这行区分。
-        if (added > 0 || RsccAssemblyDebug.isEnabled()) {
+        //
+        // 2026-10-06：改由 devLogs 总开关控制（原条件是「added > 0 就无条件打」，等于开关关掉后
+        // 每次网络源刷新仍会刷 —— 那是开发诊断，不是玩家需要知道的失败）。
+        if (RsccAssemblyDebug.isEnabled()) {
             org.slf4j.LoggerFactory.getLogger("rs_create_compat/cache-source").info(
                 "[rscc-cache-source] refreshSources disks={} added={} exposedStored={}",
                 disks.size(), added, exposed.getStored());

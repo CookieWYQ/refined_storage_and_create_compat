@@ -206,7 +206,7 @@
 | --- | --- | --- |
 | `wrenchCableDisconnectMode` | `seam` | 扳手断开 RS 线缆的生效方式：`seam` = 右键两根线缆之间的接缝断开 / 恢复这一处；`face` = 逐面切换「该面是否自动连接」；`off` = 本模组完全不接管。改动需重启 |
 | `frameArbitraryBlocks` | `false` | 是否允许框架套在任意完整方块上（机器 / 容器等）；`false` 时只允许 RS 线缆族与 Create 流体管道族。改动需重启 |
-| `rsccAssemblyDebug` | `true` | 序列装配链路诊断日志总开关 |
+| `devLogs` | `false` | 开发日志总开关（诊断用，日常游玩建议关闭）。开启后输出 `[rscc-assembly]` / `[rscc-trace]` / `[loader]` / `[rscc-ledger]` 等大量诊断行；关闭时 WARN/错误与启动版本行仍会输出。可在游戏内用 `/rs_create_compat devlogs on\|off` 即时切换（旧写法 `assemblydebug` / `debug assembly` 等价） |
 | `autocrafterStorageEnabled` | `true` | 自动合成仓内部存储总开关。关掉后 `/rs_create_compat autocrafter storage on` 会被拒绝，避免把产物困在仓里 |
 | `autocrafterOutputSlots` / `autocrafterFluidCapacity` | `256` / `256000` | 自动合成仓与执行仓内部存储的槽位数与流体容量 |
 | `universalDiskAllowMixedTypes` | `true` | 是否允许一块通用储存磁盘混存不同类型 |

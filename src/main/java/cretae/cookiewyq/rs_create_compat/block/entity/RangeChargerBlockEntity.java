@@ -3,6 +3,7 @@ package cretae.cookiewyq.rs_create_compat.block.entity;
 import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.RangeChargerNetworkNode;
+import cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -642,10 +643,13 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         final long nowTick = level == null ? 0L : level.getGameTime();
         if (level != null && !level.isClientSide() && nowTick - lastEnergySaveLogAt >= 1200L) {
             lastEnergySaveLogAt = nowTick;
-            org.slf4j.LoggerFactory.getLogger("rs_create_compat/range-charger").info(
-                "[rscc-range-charger] save @{},{},{} Energy={} capacity={}",
-                worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
-                energyStorage.getEnergyStored(), energyStorage.getMaxEnergyStored());
+            // 开发日志（电量持久化取证）：每台每 60 秒一条，受 devLogs 总开关控制。
+            if (RsccAssemblyDebug.isEnabled()) {
+                org.slf4j.LoggerFactory.getLogger("rs_create_compat/range-charger").info(
+                    "[rscc-range-charger] save @{},{},{} Energy={} capacity={}",
+                    worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
+                    energyStorage.getEnergyStored(), energyStorage.getMaxEnergyStored());
+            }
         }
     }
 
@@ -660,9 +664,12 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         // 两行一定成对出现 ⇒ 能直接区分「没进这个方法」与「进了但没读到」。
         final boolean hasEnergyTag = tag.contains("Energy");
         final int savedEnergy = Math.max(0, tag.getInt("Energy"));
-        ORG_SLF4J.info("[rscc-range-charger] load-enter @{},{},{} hasEnergyTag={} savedEnergy={}",
-            worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
-            hasEnergyTag, savedEnergy);
+        // 开发日志（每次区块 / 世界加载一对）：受 devLogs 总开关控制。
+        if (RsccAssemblyDebug.isEnabled()) {
+            ORG_SLF4J.info("[rscc-range-charger] load-enter @{},{},{} hasEnergyTag={} savedEnergy={}",
+                worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
+                hasEnergyTag, savedEnergy);
+        }
 
         super.loadAdditional(tag, registries);
 
@@ -685,11 +692,13 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         // 「当前存储量 + 请求量 ≤ 上限」时才接受，否则原样返回 0 —— 它一次字节都不写。
         // 因此先把内部存储抽干（只抽当前存量，不依赖上限），再把存档值收进去，此时必然成功。
         energyStorage.restoreEnergy(savedEnergy);
-        ORG_SLF4J.info("[rscc-range-charger] load-done @{},{},{} savedEnergy={} loadedEnergy={} "
-                + "capacity={} maxReceive={}",
-            worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
-            savedEnergy, energyStorage.getEnergyStored(), energyStorage.getMaxEnergyStored(),
-            Config.rangeChargerMaxTransfer);
+        if (RsccAssemblyDebug.isEnabled()) {
+            ORG_SLF4J.info("[rscc-range-charger] load-done @{},{},{} savedEnergy={} loadedEnergy={} "
+                    + "capacity={} maxReceive={}",
+                worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
+                savedEnergy, energyStorage.getEnergyStored(), energyStorage.getMaxEnergyStored(),
+                Config.rangeChargerMaxTransfer);
+        }
     }
 
     /** 向 NeoForge 注册能量与网络节点容器能力（MOD 总线事件）。 */

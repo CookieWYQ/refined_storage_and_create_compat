@@ -206,7 +206,7 @@ The config file groups its options by purpose; only the ones that change gamepla
 | --- | --- | --- |
 | `wrenchCableDisconnectMode` | `seam` | How the wrench disconnects RS cables: `seam` = right-click the seam between two cables to disconnect/restore that one connection; `face` = toggle "this face auto-connects" per face; `off` = this mod does not interfere at all. Requires a restart |
 | `frameArbitraryBlocks` | `false` | Whether frames may wrap arbitrary full blocks (machines, containers, …). When `false` only RS cable-family blocks and Create fluid pipe-family blocks are accepted. Requires a restart |
-| `rsccAssemblyDebug` | `true` | Master switch for the sequenced assembly diagnostic log |
+| `devLogs` | `false` | Master switch for developer/diagnostic logs (keep off for normal play). When on it prints large volumes of `[rscc-assembly]` / `[rscc-trace]` / `[loader]` / `[rscc-ledger]` lines; when off, warnings/errors and the startup build line are still printed. Toggle in game with `/rs_create_compat devlogs on\|off` (aliases: `assemblydebug`, `debug assembly`) |
 | `autocrafterStorageEnabled` | `true` | Master switch for autocrafter internal storage. When disabled, `/rs_create_compat autocrafter storage on` is refused so products cannot get stuck inside |
 | `autocrafterOutputSlots` / `autocrafterFluidCapacity` | `256` / `256000` | Slot count and fluid capacity of the internal storage used by autocrafters and chambers |
 | `universalDiskAllowMixedTypes` | `true` | Whether one Universal Storage Disk may hold different resource types at the same time |
