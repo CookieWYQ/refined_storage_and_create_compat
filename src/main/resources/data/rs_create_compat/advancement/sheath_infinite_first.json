@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "sheath_infinite_first": {
+      "trigger": "rs_create_compat:sheath_applied_infinite"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.sheath_infinite_first.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:infinite_separation_frame"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.sheath_infinite_first.title"
+    }
+  },
+  "parent": "rs_create_compat:infinite_separation_frame",
+  "requirements": [
+    [
+      "sheath_infinite_first"
+    ]
+  ]
+}

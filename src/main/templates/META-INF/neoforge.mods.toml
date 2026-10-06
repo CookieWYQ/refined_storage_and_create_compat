@@ -73,10 +73,12 @@ ordering = "NONE"
 side = "BOTH"
 
 # 机械动力 Create：必装前置
+# 版本范围只设下界、**不设上界**（用户要求）：6.x 各小版本都放行，避免 6.0.7 / 6.1 这类
+# 新版本被 [6.0,6.1) 挡在门外。
 [[dependencies."${mod_id}"]]
 modId = "create"
 type = "required"
-versionRange = "[6.0,6.1)"
+versionRange = "[6.0,)"
 ordering = "NONE"
 side = "BOTH"
 
@@ -88,6 +90,39 @@ versionRange = "[2.0.0,3.0.0)"
 ordering = "NONE"
 side = "BOTH"
 
+# Curios（饰品栏 API）：必装前置
+# modId 就是 "curios"（Curios API 的真实 modId；它自己的包名是 top.theillusivec4.curios，与 modId 无关）
+# 1.21.1 对应 Curios 9.x（本地 Gradle 缓存里解析到的真实版本：9.2.3+1.21.1）
+# 用途：高级远程终端放进饰品槽后可用终端快捷键（默认 G）打开。饰品槽本体由下面那个前置
+#       「Refined Storage - Curios Integration」提供；本模组只登记物品标签，**不**自建槽位
+# 版本范围只设下界、**不设上界**（用户要求）：9.x 各小版本都放行（贴图路径与 API 用法在 9.x 内稳定），
+# 上界留空避免把 9.5/9.6 这类新版本挡在门外。
+[[dependencies."${mod_id}"]]
+modId = "curios"
+type = "required"
+versionRange = "[9.0.0,)"
+ordering = "AFTER"
+side = "BOTH"
+reason = "Required for the terminal Curios slot and the open-terminal keybinding."
+
+# Refined Storage - Curios Integration（饰品槽集成）：必装前置
+# modId 取自该模组自己的资源命名空间（assets|data/refinedstorage_curios_integration）
+# 用途（唯一来源）：它就是「能把终端放进 Curios 饰品槽」的那个模组 —— 槽位本体
+#         （data/<ns>/curios/slots|entities/*.json）、槽位背景精灵
+#         （refinedstorage_curios_integration:slot/curios）与语言键全部由它提供；
+#         本模组只把三件高级远程终端登记进它的槽位物品标签
+#         （data/curios/tags/item/refinedstorage_curios_integration.json，replace:false 只做追加），
+#         并**不再**注册自己的饰品槽（用户要求：前置已有，没必要再搞一个）。
+# 数据文件无法做条件判断：它不在场时槽位会整块缺失，故此处标为必装
+# 版本范围取宽松下界，避免它自己的版本节奏卡住加载
+[[dependencies."${mod_id}"]]
+modId = "refinedstorage_curios_integration"
+type = "required"
+versionRange = "[1.0.0,)"
+ordering = "AFTER"
+side = "BOTH"
+reason = "Provides the Curios slot that holds this mod's remote terminals."
+
 # JEI：可选前置（查看合成配方）
 [[dependencies."${mod_id}"]]
 modId = "jei"
@@ -95,6 +130,39 @@ type = "optional"
 versionRange = "[19.0,20.0)"
 ordering = "NONE"
 side = "CLIENT"
+
+# FTB Ultimine（连锁采矿）：联动模组 / 可选前置（连锁套壳）
+# 用途：手持任一种框架（分隔框架 普通版 / 无限版，或伪装框架）时，按住 FTB Ultimine 的连锁键
+#       右键一格可套的线缆 / 流体管道，一次把「同族的整段」（FTB 给出的候选 + 与该格相连的同族方块，
+#       上限沿用它的 max_blocks）成片套上框架。不按连锁键时右键永远只作用于命中那一格。
+# 为什么是 optional：用户明确要求「不装 FTB Ultimine 也必须照常加载、照常工作」——
+#       本模组只用反射调用它的公开 API（dev.ftb.mods.ftbultimine.api.rightclick，见
+#       support/RsccUltimineIntegration），编译期不引用它的任何类；未安装时
+#       OptionalDeps.isFtbUltimineLoaded() 先返回 false，连 Class.forName 都不会执行，行为 = 单格套壳。
+# 版本：1.21.1 对应它的 2101.x 线（maven 上的 2101.1.1 ~ 2101.1.15）；与其它可选前置一致，只设下界不设上界。
+[[dependencies."${mod_id}"]]
+modId = "ftbultimine"
+type = "optional"
+versionRange = "[2101.1.0,)"
+ordering = "NONE"
+side = "BOTH"
+reason = "Optional integration (link mod): hold the FTB Ultimine key to frame a whole same-family cable/pipe run at once."
+
+# Jade（指向信息模组）：可选联动（client/jade/RsccJadePlugin）
+# 用途：装了 Jade 时，瞄准被伪装的方块会显示「图标 = 填充方块、文本 = 原部件类型 +（被伪装）」，
+#       详细信息的 ID 仍按原部件（三条口径都取自 support/RsccCamouflageDisplay）。
+# 为什么是 optional：本模组只实现 Jade 的公开 API 并注册一个插件类；未安装时该插件类没有任何调用方
+#       （Jade 的注解扫描不会扫到我们，别处也不引用它），本模组照常加载、照常工作。
+#       构建上它是本地文件依赖（libs/jade-15.10.5+neoforge.jar，compileOnly + runtimeOnly；
+#       制品随工程走，不经过任何 Maven 远程解析）。
+# 版本：1.21.1 / NeoForge 线的 15.x（本工程实测可用 15.10.5+neoforge）；与其它可选前置一致只设下界。
+[[dependencies."${mod_id}"]]
+modId = "jade"
+type = "optional"
+versionRange = "[15.0.0,)"
+ordering = "NONE"
+side = "CLIENT"
+reason = "Optional integration: shows the camouflaged block's real name and icon when aimed at."
 
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
 # that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't

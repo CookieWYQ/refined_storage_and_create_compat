@@ -1,0 +1,23 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "ZPZ",
+    "PCP",
+    "ZPZ"
+  ],
+  "key": {
+    "Z": {
+      "item": "create:zinc_ingot"
+    },
+    "P": {
+      "item": "create:copycat_panel"
+    },
+    "C": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:camouflage_frame",
+    "count": 32
+  }
+}

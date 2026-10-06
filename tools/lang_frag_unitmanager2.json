@@ -1,0 +1,93 @@
+{
+  "gui.rs_create_compat.unit_pattern_manager.group.terminal": {
+    "en": "Terminal unit library (legacy)",
+    "zh": "终端单元样板库（旧）"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.name": {
+    "en": "Chamber: %s",
+    "zh": "执行舱：%s"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.recipe": {
+    "en": "Recipe: %s",
+    "zh": "配方：%s"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.no_recipe": {
+    "en": "No recipe type bound",
+    "zh": "未绑定配方类型"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.extract_only": {
+    "en": "This group is extract-only (take out, cannot insert)",
+    "zh": "该组只出不进（可取出、不可放入）"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.read_write": {
+    "en": "This group accepts and yields patterns",
+    "zh": "该组可放可取"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.hint.no_match": {
+    "en": "No matching unit pattern",
+    "zh": "没有匹配的单元样板"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.search.tip": {
+    "en": "Filter unit patterns by recipe name, pattern name, or input item name/id",
+    "zh": "过滤单元样板：按配方名称 / 单元样板名 / 输入物名或物品 id"
+  },
+  "item.rs_create_compat.sequence_unit_pattern.input": {
+    "en": "Input: %s",
+    "zh": "输入原料：%s"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.moved.1": {
+    "en": "Unit library has moved to",
+    "zh": "样板库已移至"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.moved.2": {
+    "en": "the Unit Pattern Manager",
+    "zh": "单元样板管理舱"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.moved.3": {
+    "en": "(old patterns kept)",
+    "zh": "旧样板仍可取出"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.moved.tip": {
+    "en": "The unit library is no longer part of this terminal: unit patterns of every chamber are managed in the Unit Pattern Manager. Patterns stored here before are kept as-is and can be taken out there.",
+    "zh": "单元样板库不再由本终端承载：单元样板统一在「单元样板管理舱」里按执行仓分组管理。此前存在本终端里的样板原样保留，可在管理舱里直接取出。"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.slot.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.none": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.unmatched": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.unmatched.sub": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.push.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.count": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.empty": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.tab.unit": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.tab.assembly": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.tab.unit.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.tab.assembly.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.generate_unit.tip": {
+    "delete": true
+  }
+}

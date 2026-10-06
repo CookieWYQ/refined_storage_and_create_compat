@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "advanced_quantity_keeper": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:advanced_quantity_keeper"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.advanced_quantity_keeper.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_quantity_keeper"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.advanced_quantity_keeper.title"
+    }
+  },
+  "parent": "rs_create_compat:quantity_keeper",
+  "requirements": [
+    [
+      "advanced_quantity_keeper"
+    ]
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " P ",
+    "GBC",
+    " I "
+  ],
+  "key": {
+    "P": {
+      "item": "refinedstorage:advanced_processor"
+    },
+    "G": {
+      "item": "refinedstorage:pattern_grid"
+    },
+    "B": {
+      "item": "create:brass_casing"
+    },
+    "C": {
+      "item": "create:brass_casing"
+    },
+    "I": {
+      "item": "minecraft:iron_block"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:sequence_pattern_terminal"
+  }
+}

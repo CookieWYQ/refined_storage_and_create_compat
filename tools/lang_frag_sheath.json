@@ -1,0 +1,30 @@
+{
+  "block.rs_create_compat.separation_frame.help": {
+    "zh": "右键线缆/流体管道即套住那一格（该格不再与邻居连接）；潜行右键取下。",
+    "en": "Right-click a cable or fluid pipe to sheath that cell (it stops connecting to its neighbours); sneak + right-click to take it off."
+  },
+  "block.rs_create_compat.infinite_separation_frame.help": {
+    "zh": "同分隔框架，但套上不消耗、取下不回收，外壳带附魔光泽。",
+    "en": "Same as the Separation Frame, but it is never consumed and cannot be recovered, and its shell glints."
+  },
+  "block.rs_create_compat.camouflage_frame.hint.pipe_only": {
+    "zh": "伪装框架只能装在管道或线缆上",
+    "en": "(hint) The Camouflage Frame can only go on a pipe or cable"
+  },
+  "message.rs_create_compat.frame_need_pipe": {
+    "zh": "只能套在线缆或流体管道上",
+    "en": "(hint) Only cables and fluid pipes can be framed"
+  },
+  "message.rs_create_compat.frame_sheathed": {
+    "zh": "已套上分隔框架：这一格不再与邻居连接",
+    "en": "Frame applied: this cell no longer connects to its neighbours"
+  },
+  "message.rs_create_compat.frame_remove_hint": {
+    "zh": "这一格已套住；潜行右键可取回框架",
+    "en": "Already framed - sneak + right-click to take the frame back"
+  },
+  "message.rs_create_compat.frame_unsheathed": {
+    "zh": "已取下分隔框架：连接已恢复",
+    "en": "Frame removed: connections restored"
+  }
+}

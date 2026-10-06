@@ -1,0 +1,11 @@
+{
+  "item.rs_create_compat.disallow_inputting_by_step.tip": {
+    "delete": true
+  },
+  "item.rs_create_compat.raw_material.tip": {
+    "delete": true
+  },
+  "item.rs_create_compat.sequence_incomplete.tip": {
+    "delete": true
+  }
+}

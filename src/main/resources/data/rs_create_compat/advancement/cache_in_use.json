@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "cache_in_use": {
+      "trigger": "rs_create_compat:cache_in_use"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.cache_in_use.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:intermediate_cache"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.cache_in_use.title"
+    }
+  },
+  "parent": "rs_create_compat:intermediate_cache",
+  "requirements": [
+    [
+      "cache_in_use"
+    ]
+  ]
+}

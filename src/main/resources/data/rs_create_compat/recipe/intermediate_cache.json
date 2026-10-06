@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QPQ",
+    "CMC",
+    "IQI"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "P": {
+      "item": "create:precision_mechanism"
+    },
+    "C": {
+      "item": "create:iron_sheet"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "I": {
+      "item": "refinedstorage:construction_core"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:intermediate_cache"
+  }
+}

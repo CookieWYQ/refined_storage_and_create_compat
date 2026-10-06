@@ -1,0 +1,57 @@
+{
+  "gui.rs_create_compat.sequence_execution_chamber.config.recipe_type.locked": {
+    "en": "Locked: a chamber in this chain still holds unit patterns. Remove them all to change the recipe type.",
+    "zh": "已锁定：本链上还有执行仓放着单元样板。全部取走后才能更改配方类型。"
+  },
+  "message.rs_create_compat.chamber_recipe_locked": {
+    "en": "Unit patterns are still inside a chamber of this chain; take them all out before changing the recipe type.",
+    "zh": "本链上还有执行仓放着单元样板：请先把它们全部取走，再更改配方类型。"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.no_item_input": {
+    "en": "No input item for this step",
+    "zh": "该步无输入原料"
+  },
+  "gui.rs_create_compat.widget.scroll_select.hint": {
+    "en": "Scroll to switch",
+    "zh": "滚轮切换"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.op.input.tip": {
+    "en": "Input marker (filled on import; click to set)",
+    "zh": "输入原料标记（导入时自动填入；点击可设置）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.pattern_slots.hint": {
+    "en": "Holds only this mod's assembly patterns, one per slot",
+    "zh": "只放本模组的序列装配总样板，一格一张"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.tip": {
+    "en": "Unit pattern library (click the title for the chamber summary)",
+    "zh": "单元样板库（左键标题打开执行仓汇总）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.generate.tip": {
+    "en": "Generate the assembly pattern into the slot at the bottom-right",
+    "zh": "生成总样板到右下角生成槽（取走即可）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.import.tip": {
+    "en": "Open the recipe picker and import a Create sequenced assembly recipe",
+    "zh": "打开配方选择界面，一键导入 Create 序列装配配方"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.section_readonly.tip": {
+    "en": "Read-only marker slot (cannot be taken or placed)",
+    "zh": "只读标记槽（不可取出 / 放入）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.generate.slot.take": {
+    "en": "Take it out to use",
+    "zh": "取走即可使用"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.recipe_type.hint": {
+    "en": "Scroll to switch the type; click the icon to change machine",
+    "zh": "滚轮切换配方类型；点图标换机器"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.recipe_type.tip": {
+    "en": "The recipe type this chamber handles",
+    "zh": "本执行仓负责的配方类型"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.hints": {
+    "delete": true
+  }
+}

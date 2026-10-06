@@ -1,22 +1,28 @@
 {
   "type": "minecraft:crafting_shaped",
   "pattern": [
-    " E ",
-    "WDP",
-    " E "
+    "ENE",
+    "TWT",
+    "CMC"
   ],
   "key": {
     "E": {
       "item": "minecraft:ender_eye"
     },
+    "N": {
+      "item": "refinedstorage:network_transmitter"
+    },
+    "T": {
+      "item": "create:precision_mechanism"
+    },
     "W": {
       "item": "refinedstorage:wireless_grid"
     },
-    "D": {
-      "item": "minecraft:diamond_block"
-    },
-    "P": {
+    "C": {
       "item": "refinedstorage:advanced_processor"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
     }
   },
   "result": {

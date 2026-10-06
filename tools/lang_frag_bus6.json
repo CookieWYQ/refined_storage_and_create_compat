@@ -1,0 +1,13 @@
+{
+  "gui.rs_create_compat.exporter_executor.inputs.tip": {
+    "en": "Exports this input-material category: takes that material from the chamber's own storage and pushes it to the machine this bus faces. If multiple buses select the same category, they share it round-robin.",
+    "zh": "导出这一类输入原料：从执行仓内部存储里，把本步所需的那种原料推给本总线面对的机器。同一种原料若被多台输出总线选中，会按轮询在它们之间均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.intermediate.label": {
+    "delete": true
+  },
+  "gui.rs_create_compat.exporter_executor.intermediates.tip": {
+    "en": "Exports the intermediate category: the cell shows the transitional item itself (an unfinished item with progress components), pushed from the chamber's own storage to the machine this bus faces. If multiple buses select it, they share it round-robin.",
+    "zh": "导出「中间产物」：格子里显示的就是该过渡件物品本身（带进度组件的未完成件），从执行仓内部存储推给本总线面对的机器。同一种过渡件若被多台输出总线选中，会按轮询均分。"
+  }
+}

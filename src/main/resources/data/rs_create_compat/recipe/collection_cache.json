@@ -1,0 +1,31 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QHQ",
+    "DMC",
+    "QPQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "H": {
+      "item": "minecraft:hopper"
+    },
+    "D": {
+      "item": "refinedstorage:destruction_core"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "C": {
+      "item": "refinedstorage:construction_core"
+    },
+    "P": {
+      "item": "refinedstorage:improved_processor"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:collection_cache"
+  }
+}

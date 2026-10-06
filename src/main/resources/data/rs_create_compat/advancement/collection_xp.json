@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "collection_xp": {
+      "trigger": "rs_create_compat:collection_xp"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.collection_xp.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:collection_cache"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.collection_xp.title"
+    }
+  },
+  "parent": "rs_create_compat:collection_cache",
+  "requirements": [
+    [
+      "collection_xp"
+    ]
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "rs_create_compat:block/unit_pattern_manager_front",
+    "north": "rs_create_compat:block/unit_pattern_manager_front",
+    "south": "rs_create_compat:block/unit_pattern_manager_back",
+    "east": "rs_create_compat:block/unit_pattern_manager_right",
+    "west": "rs_create_compat:block/unit_pattern_manager_left",
+    "up": "rs_create_compat:block/unit_pattern_manager_top",
+    "down": "rs_create_compat:block/unit_pattern_manager_bottom"
+  }
+}

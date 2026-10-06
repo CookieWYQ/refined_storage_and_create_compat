@@ -1,0 +1,14 @@
+{
+  "gui.rs_create_compat.exporter_executor.click": {
+    "en": "Left click: select/deselect (multi-select)",
+    "zh": "左键：勾选 / 取消（可多选）"
+  },
+  "gui.rs_create_compat.exporter_executor.gate.off.tip": {
+    "en": "Autocrafting is off: this bus exports nothing right now (start an autocrafting task first)",
+    "zh": "自动合成未开启：本总线当前不导出任何东西（先发起自动合成）"
+  },
+  "gui.rs_create_compat.exporter_executor.wheel": {
+    "en": "Wheel: browse · Shift+Wheel: toggle the cell under the cursor",
+    "zh": "滚轮：翻看 · Shift+滚轮：切换鼠标下那格"
+  }
+}

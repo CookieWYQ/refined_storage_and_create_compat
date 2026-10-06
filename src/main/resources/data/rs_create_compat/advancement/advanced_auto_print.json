@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "advanced_auto_print": {
+      "trigger": "rs_create_compat:blueprint_queue_printed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.advanced_auto_print.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_schematic_loader"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.advanced_auto_print.title"
+    }
+  },
+  "parent": "rs_create_compat:advanced_schematic_loader",
+  "requirements": [
+    [
+      "advanced_auto_print"
+    ]
+  ]
+}

@@ -1,6 +1,17 @@
 {
   "parent": "minecraft:item/generated",
-  "textures": {
-    "layer0": "rs_create_compat:item/advanced_remote_terminal_charged"
-  }
+  "overrides": [
+    {
+      "predicate": {
+        "refinedstorage:network_bound_active": 0
+      },
+      "model": "rs_create_compat:item/advanced_remote_terminal_charged_inactive"
+    },
+    {
+      "predicate": {
+        "refinedstorage:network_bound_active": 1
+      },
+      "model": "rs_create_compat:item/advanced_remote_terminal_charged_active"
+    }
+  ]
 }

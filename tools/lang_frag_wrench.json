@@ -1,0 +1,22 @@
+{
+  "message.rs_create_compat.cable_face_cut": {
+    "en": "This face no longer auto-connects",
+    "zh": "该面已停止自动连接"
+  },
+  "message.rs_create_compat.cable_face_restored": {
+    "en": "This face auto-connects again",
+    "zh": "该面已恢复自动连接"
+  },
+  "message.rs_create_compat.cable_seam_cut": {
+    "en": "Seam cut: this cable no longer connects here",
+    "zh": "已断开：此处不再连接"
+  },
+  "message.rs_create_compat.cable_seam_none": {
+    "en": "Nothing to cut here (no cable connection on this side)",
+    "zh": "这里没有可断开的连接"
+  },
+  "message.rs_create_compat.cable_seam_restored": {
+    "en": "Seam restored: this cable connects here again",
+    "zh": "已恢复：此处重新连接"
+  }
+}

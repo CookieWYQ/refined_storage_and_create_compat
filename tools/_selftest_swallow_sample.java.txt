@@ -1,0 +1,32 @@
+package tmp_selftest;
+
+/** 自检用：故意复刻修复前的吞资源写法，确认审计脚本能抓到（不参与编译，只在 tools/ 下做脚本自检）。 */
+class SwallowSelfTest {
+    private void recycle(StorageNetworkComponent storage, ItemStackHandler inventory) {
+        for (int i = 0; i < inventory.getSlots(); i++) {
+            final ItemStack stack = inventory.getStackInSlot(i);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            final ItemStack returned = inventory.extractItem(i, stack.getCount(), false);
+            if (!returned.isEmpty()) {
+                final ResourceKey resource = new ItemResource(returned.getItem(), DataComponentPatch.EMPTY);
+                storage.insert(resource, returned.getCount(), Action.EXECUTE, Actor.EMPTY);
+            }
+        }
+    }
+
+    private void recycleCannon(Network network, ItemStackHandler cannonSlot) {
+        final ItemStack out = cannonSlot.getStackInSlot(1);
+        if (!out.isEmpty()) {
+            returnToNetwork(network, out);
+            cannonSlot.setStackInSlot(1, ItemStack.EMPTY);
+        }
+    }
+
+    private void takeQueue(ItemStackHandler queue) {
+        final ItemStack taken = queue.getStackInSlot(0);
+        queue.setStackInSlot(0, ItemStack.EMPTY);
+        maybeUse(taken);
+    }
+}

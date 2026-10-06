@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "rs_create_compat:block/collection_cache_side_active",
+    "north": "rs_create_compat:block/collection_cache_side_active",
+    "east": "rs_create_compat:block/collection_cache_side_active",
+    "south": "rs_create_compat:block/collection_cache_side_active",
+    "west": "rs_create_compat:block/collection_cache_side_active",
+    "up": "rs_create_compat:block/collection_cache_top_active",
+    "down": "rs_create_compat:block/collection_cache_bottom_active"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "gui.rs_create_compat.sequence_pattern_terminal.card.machine_kind": {
+    "en": "Machine: %s",
+    "zh": "机器：%s"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.machine": {
+    "en": "Chamber: %s",
+    "zh": "执行仓：%s"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.chance.hint": {
+    "en": "Left-click: edit chance / amount; Shift+Left-click: clear this slot",
+    "zh": "左键：打开设置（概率 / 数量）；Shift+左键：清除该格"
+  }
+}

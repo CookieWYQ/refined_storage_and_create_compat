@@ -1,0 +1,15 @@
+{
+  "gui.rs_create_compat.sequence_execution_chamber.chain.suffix.directed": {
+    "en": "(chain %s, pointing %s)",
+    "zh": "（链 %s 台 · 指向%s）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.tip.link": {
+    "en": "This chamber points at: %s",
+    "zh": "本台指向：%s"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.tip.entry": {
+    "en": "To set the link: press the Config button above, then pick a direction in the Chain link picker at the bottom of that screen.",
+    "zh": "设置链指向：点本界面上方的「配置」按钮，在子界面底部的「链指向」里选方向。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.suffix": null
+}

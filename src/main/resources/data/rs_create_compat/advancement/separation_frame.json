@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "separation_frame": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:separation_frame"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.separation_frame.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:separation_frame"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.separation_frame.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "separation_frame"
+    ]
+  ]
+}

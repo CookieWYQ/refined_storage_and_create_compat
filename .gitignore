@@ -117,3 +117,27 @@ runs/
 
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
 !gradle-wrapper.jar
+
+# 例外：工程内自带的「可选依赖」制品（Jade，仅 compileOnly + dev 运行时；见 build.gradle 里 Jade 那一段）。
+# 为什么要放进工程并豁免忽略：用户机器到 Modrinth 的 TLS 证书链校验失败，远程解析无法完成，
+# 因此改为本地文件依赖；若不豁免，这个 jar 会被上面的 *.jar 规则静默忽略，
+# 别人 clone 之后 :classes 会直接失败（缺 Jade 类）。
+!libs/*.jar
+
+# ==================== 本工程补充忽略（2026-10-06 发布 1.0.0 时添加） ====================
+# 为什么加这些：发布前用 git add -A 时，这些**从未被 git 跟踪**的目录被一并扫了进来，
+# 其中 local_src/ 是**第三方源码**（Create 与 Refined Storage 的源码树，仅作本地查阅），
+# 把它推到公开仓库属于版权问题；其余是开发期的临时产物与审计脚本，不应随发行版发布。
+local_src/
+_audit_tmp/
+tmp_textures/
+tmp_rs_ref/
+tmp_rs_ref2/
+tmp_rs_ref3/
+tmp_scan_save.py
+adventure Texture/
+/com/
+/net/
+/ss/
+# 根目录散落的临时分析脚本/输出（开发期产物）
+/tmp_*

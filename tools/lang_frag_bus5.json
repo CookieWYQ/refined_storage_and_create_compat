@@ -1,0 +1,18 @@
+{
+  "gui.rs_create_compat.exporter_executor.fluids.tip": {
+    "en": "Exports this fluid input category: takes that fluid from the chamber's own storage and pushes it to the machine this bus faces. If multiple buses select the same category, they share it round-robin (batch-based, amount is conserved).",
+    "zh": "导出这一类流体输入：从执行仓内部存储里，把单元样板对应配方所需的那种流体推给本总线面对的机器。同一种流体若被多台输出总线选中，会按轮询在它们之间均分（水量按导出批次分配，总量守恒）。"
+  },
+  "gui.rs_create_compat.exporter_executor.inputs.tip": {
+    "en": "Exports this input category: takes that material from the chamber's own storage and pushes it to the machine this bus faces. If multiple buses select the same category, they share it round-robin.",
+    "zh": "导出这一类输入性产物：从执行仓内部存储里，把单元样板对应的这种原料推给本总线面对的机器。同一种原料若被多台输出总线选中，会按轮询在它们之间均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.intermediates.tip": {
+    "en": "Exports the intermediate category: takes sequenced-assembly intermediates (unfinished items with progress components) from the chamber's own storage and pushes them to the machine this bus faces. If multiple buses select the same category, they share it round-robin.",
+    "zh": "导出「中间产物」：从执行仓内部存储里，把序列装配的过渡件（带进度组件的未完成件）推给本总线面对的机器。同一种过渡件若被多台输出总线选中，会按轮询在它们之间均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.source.tip": {
+    "en": "Source: the chamber's own storage (materials are moved in first, then pushed out).",
+    "zh": "取料：先把原料搬进执行仓内部存储，再从执行舱按勾选类别推出。"
+  }
+}

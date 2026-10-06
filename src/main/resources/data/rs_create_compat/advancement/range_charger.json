@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "range_charger": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:range_charger"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.range_charger.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:range_charger"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.range_charger.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "range_charger"
+    ]
+  ]
+}

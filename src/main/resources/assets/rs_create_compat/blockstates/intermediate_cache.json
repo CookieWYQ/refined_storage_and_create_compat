@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "active=false": {
+      "model": "rs_create_compat:block/intermediate_cache"
+    },
+    "active=true": {
+      "model": "rs_create_compat:block/intermediate_cache_active"
+    }
+  }
+}

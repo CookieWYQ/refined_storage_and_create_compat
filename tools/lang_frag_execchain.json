@@ -1,0 +1,114 @@
+{
+  "gui.rs_create_compat.sequence_execution_chamber.chain.suffix": {
+    "en": "(chain: %s)",
+    "zh": "（链 %s 台）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.tip.standalone": {
+    "en": "Not in a chain: this chamber holds its own name and recipe type.",
+    "zh": "未接入链：本台独立持有一份名字与配方类型。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.tip.head": {
+    "en": "Chain head: %s",
+    "zh": "链头：%s"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.tip.shared": {
+    "en": "Name and recipe type are shared by the whole chain: editing any member applies to all.",
+    "zh": "名字与配方类型整链共享：在链上任意一台修改，整条链一起生效。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.head.self": {
+    "en": "this chamber (chain head)",
+    "zh": "本台（链头）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.chain.head.unknown": {
+    "en": "unknown position",
+    "zh": "未知坐标"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link": {
+    "en": "Chain link",
+    "zh": "链指向"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.hint": {
+    "en": "Scroll to pick a side; pointing at another chamber links you into one chain.",
+    "zh": "滚轮切换指向；指向另一台执行仓即串成一条链。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.none": {
+    "en": "Not linked (standalone)",
+    "zh": "不指向（独立执行仓）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.none.tip": {
+    "en": "Leaves the chain: this chamber keeps its own name and recipe type (current value is kept).",
+    "zh": "脱离链：本台自行持有名字与配方类型（保留当前值）。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.dir": {
+    "en": "Pointing: %s",
+    "zh": "指向：%s"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.target": {
+    "en": "Target: %s (rejected if no chamber is there)",
+    "zh": "目标：%s（该方向上没有执行仓时会被拒绝）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.link.rule": {
+    "en": "The link forms a directed ray: no fork, no loop; the endpoint is the chain head.",
+    "zh": "指向连成一条有方向的射线：不分叉、不成环，端点即链首。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.status": {
+    "en": "Chain: %s chambers, head %s",
+    "zh": "链：%s 台 · 链头 %s"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.status.standalone": {
+    "en": "Chain: standalone (not connected to any chamber)",
+    "zh": "链：独立（未与其它执行仓相连）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.shared.tip": {
+    "en": "Name and recipe type are stored only on the chain head and shared by every member.",
+    "zh": "名字与配方类型只存在链头那一份上，链上每台共用。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.head.tip": {
+    "en": "The head is the chamber reached by following the chain links; there is no \"edit just this one\".",
+    "zh": "链头 = 沿「链指向」走到的那一台；链上没有「只改这一台」。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.chain.units.tip": {
+    "en": "A chamber in this chain still holds unit patterns: the recipe type is locked until they are removed.",
+    "zh": "本链上还有执行仓放着单元样板：配方类型已锁定，取走样板后才能改。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.tip": {
+    "en": "Open the config screen: chain link, recipe type and name (chain-wide, applied to every member)",
+    "zh": "打开配置子界面：设置本执行仓的链指向、配方类型与名字（链上改动整链生效）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.config.confirm.tip": {
+    "en": "Send chain link / recipe type / name to the server; the authoritative value is sent back.",
+    "zh": "把链指向 / 配方类型 / 名字发给服务端保存，服务端校验后回发权威值。"
+  },
+  "message.rs_create_compat.chamber_link_no_target": {
+    "en": "No chamber on that side: cannot link.",
+    "zh": "该方向上没有执行仓，无法指向。"
+  },
+  "message.rs_create_compat.chamber_link_cycle": {
+    "en": "Cannot link: that would loop back to this chamber (the chain is a directed ray).",
+    "zh": "不能指向：那会绕回自己（链是一条有方向的射线）。"
+  },
+  "message.rs_create_compat.chamber_link_fork": {
+    "en": "That chamber is already pointed at by another one: a ray cannot fork.",
+    "zh": "该仓已被另一台指向：射线不允许分叉。"
+  },
+  "message.rs_create_compat.chamber_link_too_long": {
+    "en": "Chain limit reached (8 chambers): cannot link.",
+    "zh": "链已达上限（8 台），无法再接。"
+  },
+  "message.rs_create_compat.chamber_link_not_ready": {
+    "en": "Nearby chunks are not loaded yet: cannot verify the chain, try again in a moment.",
+    "zh": "目标周围区块尚未加载，暂时无法确认链归属，请稍后再试。"
+  },
+  "message.rs_create_compat.chamber_link_invalid": {
+    "en": "Invalid chain link.",
+    "zh": "链指向非法，已忽略。"
+  },
+  "message.rs_create_compat.chamber_ray_fork_cleared": {
+    "en": "Old save had a forked chain: this chamber's link was cleared (a ray cannot fork).",
+    "zh": "旧存档里的链出现了分叉：已解除本仓的指向（射线不允许分叉）。"
+  },
+  "message.rs_create_compat.chamber_ray_cycle_cleared": {
+    "en": "Old save had a chain loop: this chamber's link was cleared (the chain is a directed ray).",
+    "zh": "旧存档里的链出现了环：已解除本仓的指向（链是一条有方向的射线）。"
+  }
+}

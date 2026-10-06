@@ -1,0 +1,47 @@
+{
+  "criteria": {
+    "universal_storage_disk": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:universal_storage_disk_1k",
+              "rs_create_compat:universal_storage_disk_4k",
+              "rs_create_compat:universal_storage_disk_16k",
+              "rs_create_compat:universal_storage_disk_64k",
+              "rs_create_compat:universal_storage_disk_256k",
+              "rs_create_compat:universal_storage_disk_1m",
+              "rs_create_compat:universal_storage_disk_4m",
+              "rs_create_compat:universal_storage_disk_16m",
+              "rs_create_compat:universal_storage_disk_64m",
+              "rs_create_compat:universal_storage_disk_creative"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.universal_storage_disk.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:universal_storage_disk_1k"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.universal_storage_disk.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "universal_storage_disk"
+    ]
+  ]
+}

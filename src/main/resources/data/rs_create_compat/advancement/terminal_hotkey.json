@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "terminal_hotkey": {
+      "trigger": "rs_create_compat:terminal_hotkey"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.terminal_hotkey.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_remote_terminal"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.terminal_hotkey.title"
+    }
+  },
+  "parent": "rs_create_compat:advanced_remote_terminal",
+  "requirements": [
+    [
+      "terminal_hotkey"
+    ]
+  ]
+}

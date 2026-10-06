@@ -1,0 +1,30 @@
+{
+  "block.rs_create_compat.unit_pattern_manager": {
+    "en": "Unit Pattern Manager",
+    "zh": "单元样板管理舱"
+  },
+  "block.rs_create_compat.unit_pattern_manager.help": {
+    "en": "Manages the unit patterns of every execution chamber in the network, grouped by chamber; all sequence assembly vaults are merged into one in-memory view. Distinct from the autocrafter manager (which manages autocrafting patterns).",
+    "zh": "管理网络中每台执行舱的单元样板（按执行舱分组），并把全部序列装配样板库的样板内存合并为一个视图。与「自动合成管理舱」（管自动合成样板）区分。"
+  },
+  "gui.rs_create_compat.unit_pattern_manager": {
+    "en": "Unit Pattern Manager",
+    "zh": "单元样板管理舱"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.group.merged": {
+    "en": "Sequence vaults (merged)",
+    "zh": "序列装配样板库（网络合并）"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.hint.inactive": {
+    "en": "Not connected to a network",
+    "zh": "未接入网络"
+  },
+  "gui.rs_create_compat.unit_pattern_manager.hint.empty": {
+    "en": "No execution chamber in this network",
+    "zh": "本网络内没有执行舱"
+  },
+  "gui.rs_create_compat.advanced_remote_terminal.mode.unit_manager": {
+    "en": "Unit pattern manager",
+    "zh": "单元样板管理"
+  }
+}

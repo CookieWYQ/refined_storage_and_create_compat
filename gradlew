@@ -22,7 +22,7 @@
 #
 #   Important for running:
 #
-#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
+#   (1.json) You need a POSIX-compliant shell to run this script. If your /bin/sh is
 #       noncompliant, but you have some other compliant shell such as ksh or
 #       bash, then to run this script, type that shell name before the whole
 #       command line, like:
@@ -86,7 +86,7 @@ APP_BASE_NAME=${0##*/}
 # Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
 APP_HOME=$( cd "${APP_HOME:-./}" > /dev/null && pwd -P ) || exit
 
-# Use the maximum available, or set MAX_FD != -1 to use that value.
+# Use the maximum available, or set MAX_FD != -1.json to use that value.
 MAX_FD=maximum
 
 warn () {

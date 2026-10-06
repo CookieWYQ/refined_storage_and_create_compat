@@ -1,0 +1,366 @@
+{
+  "buses": [
+    {
+      "autoCrafting": true,
+      "executorMode": true,
+      "forceNormal": false,
+      "interference": {
+        "disabled": false,
+        "reachableCount": 1,
+        "truncated": false
+      },
+      "kind": "exporter",
+      "linkedExecutor": "-7,-58,5",
+      "linkedLayout": true,
+      "pos": "-7,-58,6",
+      "selectedCategories": [
+        "input:create:powdered_obsidian"
+      ],
+      "selectionExplicit": true,
+      "visibleCategories": [
+        {
+          "amount": 1,
+          "estimated": 1,
+          "group": "ingredient",
+          "iconFluid": "",
+          "iconItem": "create:powdered_obsidian",
+          "id": "input:create:powdered_obsidian",
+          "selected": true,
+          "sharedCount": 1,
+          "stepMachine": ""
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "group": "intermediate",
+          "iconFluid": "",
+          "iconItem": "create:unprocessed_obsidian_sheet",
+          "id": "intermediate:0",
+          "selected": false,
+          "sharedCount": 1,
+          "stepMachine": "create:mechanical_press"
+        }
+      ]
+    },
+    {
+      "autoCollect": true,
+      "executorMode": true,
+      "forceNormal": false,
+      "interference": {
+        "disabled": false,
+        "reachableCount": 1,
+        "truncated": false
+      },
+      "kind": "importer",
+      "linkedExecutor": "-7,-58,5",
+      "linkedLayout": true,
+      "pos": "-7,-58,4",
+      "selectedCategories": [
+        "result:create:sturdy_sheet"
+      ],
+      "visibleCategories": [
+        {
+          "amount": 0,
+          "estimated": 0,
+          "group": "product",
+          "iconFluid": "",
+          "iconItem": "create:sturdy_sheet",
+          "id": "result:create:sturdy_sheet",
+          "selected": true,
+          "sharedCount": 1,
+          "stepMachine": ""
+        }
+      ]
+    }
+  ],
+  "camouflage": {
+    "camouflagedPositions": 12,
+    "lastToggleAffectedPositions": 12,
+    "lastToggleTick": 12345,
+    "rebuildNote": "客户端网格重建的方块数 / 区段数在客户端侧，服务端不可观测",
+    "revealToggleCount": 1
+  },
+  "chambers": [
+    {
+      "categories": [
+        {
+          "amount": 1,
+          "estimated": 1,
+          "fluids": [],
+          "id": "input:create:powdered_obsidian",
+          "items": [
+            "create:powdered_obsidian"
+          ],
+          "kind": "ingredient",
+          "step": -1
+        },
+        {
+          "amount": 500,
+          "estimated": 500,
+          "fluids": [
+            "minecraft:lava"
+          ],
+          "id": "fluid:minecraft:lava",
+          "items": [],
+          "kind": "inputFluid",
+          "step": -1
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "intermediate:0",
+          "items": [
+            "create:unprocessed_obsidian_sheet"
+          ],
+          "kind": "intermediate",
+          "step": 0
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "result:create:sturdy_sheet",
+          "items": [
+            "create:sturdy_sheet"
+          ],
+          "kind": "product",
+          "step": -1
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "scrap:create:cogwheel",
+          "items": [
+            "create:cogwheel"
+          ],
+          "kind": "scrap",
+          "step": -1
+        }
+      ],
+      "clusterSize": 1,
+      "energyUsage": 8,
+      "faces": {
+        "down": "NONE",
+        "east": "NONE",
+        "north": "INPUT",
+        "south": "OUTPUT",
+        "up": "NONE",
+        "west": "INTERMEDIATE"
+      },
+      "inFlight": true,
+      "materials": [
+        {
+          "chamber": 1,
+          "inflight": 0,
+          "machine": 1,
+          "net": 32,
+          "res": "create:powdered_obsidian",
+          "target": 1,
+          "type": "item"
+        },
+        {
+          "chamber": 500,
+          "inflight": 0,
+          "machine": 500,
+          "net": 64000,
+          "res": "minecraft:lava",
+          "target": 500,
+          "type": "fluid"
+        }
+      ],
+      "name": "冲压仓",
+      "outputMode": "face",
+      "ownedSteps": "create:sturdy_sheet#0",
+      "pos": "-7,-58,5",
+      "recipeType": "create:pressing",
+      "storedFluids": [
+        {
+          "fluid": "minecraft:lava",
+          "mB": 500
+        }
+      ],
+      "storedItems": [
+        {
+          "count": 1,
+          "item": "create:powdered_obsidian"
+        }
+      ],
+      "units": [
+        "rs_create_compat:sequence_unit_pattern"
+      ]
+    }
+  ],
+  "conservation": {
+    "entries": 1,
+    "ledger": [
+      {
+        "diff": 0,
+        "in": 1,
+        "key": "-7,-58,5|create:powdered_obsidian",
+        "out": 0,
+        "retained": 1
+      }
+    ],
+    "unbalanced": []
+  },
+  "counters": {
+    "-7,-58,5|create:powdered_obsidian|pull": 1,
+    "-7,-58,5|create:sturdy_sheet|push": 1,
+    "-7,-58,5|create:sturdy_sheet|return": 1
+  },
+  "keepers": {
+    "count": 2,
+    "entries": [
+      {
+        "claimed": [
+          "ItemResource{create:powdered_obsidian}"
+        ],
+        "destroyOverflow": true,
+        "destroyedTotal": 0,
+        "kind": "quantity_keeper",
+        "label": "定量保持器 @(-6,-58,5)",
+        "pos": "-6,-58,5",
+        "yielded": []
+      },
+      {
+        "claimed": [
+          "ItemResource{create:powdered_obsidian}"
+        ],
+        "kind": "advanced_quantity_keeper",
+        "label": "高级定量保持器 @(-5,-58,5)",
+        "pos": "-5,-58,5",
+        "slots": [
+          {
+            "destroyOverflow": false,
+            "destroyedTotal": 0,
+            "slot": 0,
+            "target": 64
+          }
+        ],
+        "yielded": [
+          "ItemResource{create:powdered_obsidian}"
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "generatedAt": "2026-10-01T12:00:00",
+    "levels": [
+      "minecraft:overworld"
+    ],
+    "schema": "rscc_diag_snapshot",
+    "sessionStartedAt": "2026-10-01T11:50:00",
+    "tag": "run",
+    "version": 1
+  },
+  "recentEvents": [
+    {
+      "amount": 1,
+      "at": "2026-10-01T11:51:00",
+      "direction": "network->chamber",
+      "kind": "pull",
+      "pos": "-7,-58,5",
+      "resource": "create:powdered_obsidian"
+    },
+    {
+      "amount": 1,
+      "at": "2026-10-01T11:51:05",
+      "direction": "chamber->machine",
+      "kind": "push",
+      "pos": "-7,-58,6",
+      "resource": "create:powdered_obsidian"
+    },
+    {
+      "amount": 1,
+      "at": "2026-10-01T11:51:20",
+      "direction": "chamber->network",
+      "kind": "return",
+      "pos": "-7,-58,5",
+      "resource": "create:sturdy_sheet"
+    }
+  ],
+  "recipes": [
+    {
+      "categories": [
+        {
+          "amount": 1,
+          "estimated": 1,
+          "fluids": [],
+          "id": "input:create:powdered_obsidian",
+          "items": [
+            "create:powdered_obsidian"
+          ],
+          "kind": "ingredient",
+          "step": -1
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "intermediate:0",
+          "items": [
+            "create:unprocessed_obsidian_sheet"
+          ],
+          "kind": "intermediate",
+          "step": 0
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "result:create:sturdy_sheet",
+          "items": [
+            "create:sturdy_sheet"
+          ],
+          "kind": "product",
+          "step": -1
+        },
+        {
+          "amount": 0,
+          "estimated": 0,
+          "fluids": [],
+          "id": "scrap:create:cogwheel",
+          "items": [
+            "create:cogwheel"
+          ],
+          "kind": "scrap",
+          "step": -1
+        }
+      ],
+      "chamber": "-7,-58,5",
+      "recipeType": "create:pressing"
+    }
+  ],
+  "shortage": {
+    "banners": {
+      "dedupedSuppressed": {
+        "shortage_chamber|-7,-58,5": 4,
+        "watchdog_missing_material|t1": 6
+      },
+      "sent": {
+        "shortage_chamber|-7,-58,5": 1,
+        "watchdog_missing_material|t1": 1
+      }
+    },
+    "mode": "suspend",
+    "suspended": [
+      {
+        "amount": 1,
+        "dimension": "minecraft:overworld",
+        "missingMaterials": 1,
+        "offlineSteps": "-",
+        "pos": "-7,-58,5",
+        "product": "坚固板",
+        "reason": "MISSING_MATERIAL",
+        "returning": false,
+        "sequence": true,
+        "stallTicks": 120,
+        "suspendState": "SUSPENDED",
+        "suspended": true,
+        "task": "00000000-0000-0000-0000-000000000001"
+      }
+    ]
+  }
+}

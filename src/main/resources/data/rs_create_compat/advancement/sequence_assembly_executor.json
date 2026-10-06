@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "sequence_assembly_executor": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:sequence_assembly_executor"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.sequence_assembly_executor.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:sequence_assembly_executor"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.sequence_assembly_executor.title"
+    }
+  },
+  "parent": "rs_create_compat:sequence_execution_chamber",
+  "requirements": [
+    [
+      "sequence_assembly_executor"
+    ]
+  ]
+}

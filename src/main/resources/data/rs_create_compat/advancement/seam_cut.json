@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "seam_cut": {
+      "trigger": "rs_create_compat:seam_cut"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.seam_cut.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:separation_frame"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.seam_cut.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "seam_cut"
+    ]
+  ]
+}

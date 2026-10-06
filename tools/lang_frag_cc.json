@@ -1,0 +1,131 @@
+{
+  "gui.rs_create_compat.collection_cache.marker.amount_line": {
+    "zh": "数量：%s",
+    "en": "Amount: %s"
+  },
+  "gui.rs_create_compat.collection_cache.marker.match_nbt.on": {
+    "zh": "匹配 NBT：开（数据组件需一致）",
+    "en": "Match NBT: ON (components must match)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.match_nbt.off": {
+    "zh": "匹配 NBT：关（只看物品种类）",
+    "en": "Match NBT: OFF (item type only)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.tag_line": {
+    "zh": "匹配标签 %s",
+    "en": "Match tag %s"
+  },
+  "gui.rs_create_compat.collection_cache.marker.matched": {
+    "zh": "会匹配到的方块 / 物品：%s 种",
+    "en": "Matches %s block/item type(s)"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags": {
+    "zh": "匹配标签",
+    "en": "Match tags"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.on": {
+    "zh": "已启用",
+    "en": "ON"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.off": {
+    "zh": "未启用",
+    "en": "OFF"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.tip": {
+    "zh": "打开后即可从「示例物自带的标签」里勾选一个或多个：命中物必须同时带上全部选中标签（例如只勾 minecraft:logs 就会匹配所有原木）。标签、匹配 NBT、数量三者可同时生效。",
+    "en": "Turn this on and pick one or more tags the sample item carries: a match must carry ALL selected tags (e.g. only minecraft:logs matches every log). Works together with NBT and amount."
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.hint": {
+    "zh": "打开「匹配标签」后可从示例物的标签里多选",
+    "en": "Enable 'Match tags' to multi-select from the sample's tags"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.preview": {
+    "zh": "已选 %2$s 个标签，可匹配 %1$s 种物品",
+    "en": "%2$s tag(s) selected, matching %1$s item type(s)"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.preview_none": {
+    "zh": "尚未勾选标签",
+    "en": "No tag selected yet"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.empty": {
+    "zh": "该示例物身上没有任何标签",
+    "en": "This sample carries no tags"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.selected": {
+    "zh": "状态：已选中（左键取消）",
+    "en": "State: selected (left-click to unselect)"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.unselected": {
+    "zh": "状态：未选中（左键选中）",
+    "en": "State: not selected (left-click to select)"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.row_click": {
+    "zh": "左键：切换该标签的选中状态",
+    "en": "Left-click: toggle this tag"
+  },
+  "gui.rs_create_compat.collection_cache.range.limit": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.range.info": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.tag_filter": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.tag_filter.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.tag_filter.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.tag_filter.on": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.tag_filter.off": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.apply": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.apply.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.clear": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.clear.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_fuzzy": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_tag": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_tag.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.marker.match_tag": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.marker.tag_filter": {
+    "zh": "按标签匹配（会匹配到一整类方块 / 物品）",
+    "en": "Match by tag (a whole class of blocks/items)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.matched_fluid": {
+    "zh": "会匹配到的流体：%s 种",
+    "en": "Matches %s fluid type(s)"
+  },
+  "gui.rs_create_compat.collection_cache.input_face.hint.1": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.input_face.hint.2": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.input_face.hint.3": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.input_face.hint.tip": {
+    "delete": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "rs_create_compat:block/sequence_assembly_executor_side_inactive",
+    "north": "rs_create_compat:block/sequence_assembly_executor_side_inactive",
+    "east": "rs_create_compat:block/sequence_assembly_executor_side_inactive",
+    "south": "rs_create_compat:block/sequence_assembly_executor_side_inactive",
+    "west": "rs_create_compat:block/sequence_assembly_executor_side_inactive",
+    "up": "rs_create_compat:block/sequence_assembly_executor_top_inactive",
+    "down": "rs_create_compat:block/sequence_assembly_executor_bottom_inactive"
+  }
+}

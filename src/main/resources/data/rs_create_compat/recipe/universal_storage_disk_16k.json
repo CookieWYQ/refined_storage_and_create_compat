@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "GBG",
+    "RPR",
+    "EEE"
+  ],
+  "key": {
+    "G": {
+      "tag": "c:glass_blocks"
+    },
+    "B": {
+      "item": "minecraft:bucket"
+    },
+    "R": {
+      "tag": "c:dusts/redstone"
+    },
+    "P": {
+      "item": "refinedstorage:16k_storage_part"
+    },
+    "E": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:universal_storage_disk_16k"
+  }
+}

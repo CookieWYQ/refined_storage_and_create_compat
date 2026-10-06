@@ -1,0 +1,56 @@
+{
+  "variants": {
+    "facing=north,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber",
+      "x": 90
+    },
+    "facing=north,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active",
+      "x": 90
+    },
+    "facing=east,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber",
+      "x": 90,
+      "y": 90
+    },
+    "facing=east,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber",
+      "x": 90,
+      "y": 180
+    },
+    "facing=south,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber",
+      "x": 90,
+      "y": 270
+    },
+    "facing=west,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber"
+    },
+    "facing=up,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active"
+    },
+    "facing=down,active=false": {
+      "model": "rs_create_compat:block/sequence_execution_chamber",
+      "x": 180
+    },
+    "facing=down,active=true": {
+      "model": "rs_create_compat:block/sequence_execution_chamber_active",
+      "x": 180
+    }
+  }
+}

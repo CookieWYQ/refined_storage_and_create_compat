@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {
+      "item": "rs_create_compat:universal_storage_disk_16m"
+    },
+    {
+      "item": "rs_create_compat:universal_storage_disk_16m"
+    },
+    {
+      "item": "rs_create_compat:universal_storage_disk_16m"
+    },
+    {
+      "item": "rs_create_compat:universal_storage_disk_16m"
+    }
+  ],
+  "result": {
+    "id": "rs_create_compat:universal_storage_disk_64m"
+  }
+}

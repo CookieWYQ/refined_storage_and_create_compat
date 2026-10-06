@@ -1,0 +1,31 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QHQ",
+    "IMD",
+    "QEQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "H": {
+      "item": "minecraft:hopper"
+    },
+    "I": {
+      "item": "refinedstorage:improved_processor"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "D": {
+      "item": "refinedstorage:destruction_core"
+    },
+    "E": {
+      "item": "create:precision_mechanism"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:sequence_execution_chamber"
+  }
+}

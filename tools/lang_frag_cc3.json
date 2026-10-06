@@ -1,0 +1,200 @@
+{
+  "gui.rs_create_compat.collection_cache.region_marker.tip": {
+    "zh": "匹配区：ghost 标记（左键标记 / 空手左键配置 / Shift+左键清除）",
+    "en": "Markers: ghost markers (left-click to mark / empty-hand left-click to configure / Shift+left-click to clear)"
+  },
+  "gui.rs_create_compat.collection_cache.region_cache.tip": {
+    "zh": "缓存区：真实存储，装不下的暂存于此并继续尝试入网",
+    "en": "Cache: real storage; overflow is held here and retried into the network"
+  },
+  "gui.rs_create_compat.collection_cache.blocked.on": {
+    "zh": "已阻塞（不回流进网络）",
+    "en": "Blocked (not returned to the network)"
+  },
+  "gui.rs_create_compat.collection_cache.blocked.off": {
+    "zh": "未阻塞（正常回流进网络）",
+    "en": "Not blocked (returned to the network normally)"
+  },
+  "gui.rs_create_compat.collection_cache.cache.fluid_click": {
+    "zh": "左键取出 1 桶",
+    "en": "Left-click: take 1 bucket"
+  },
+  "gui.rs_create_compat.collection_cache.cache.fluid_insufficient": {
+    "zh": "不足 1 桶",
+    "en": "Less than 1 bucket"
+  },
+  "gui.rs_create_compat.collection_cache.marker.matched": {
+    "zh": "可匹配 %s 种物品",
+    "en": "Matches %s item type(s)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.matched_fluid": {
+    "zh": "可匹配 %s 种流体",
+    "en": "Matches %s fluid type(s)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.tag_filter": {
+    "zh": "按标签匹配（一整类资源）",
+    "en": "Match by tag (a whole class)"
+  },
+  "gui.rs_create_compat.collection_cache.marker.match_nbt.on": {
+    "zh": "匹配 NBT：开",
+    "en": "Match NBT: ON"
+  },
+  "gui.rs_create_compat.collection_cache.marker.match_nbt.off": {
+    "zh": "匹配 NBT：关",
+    "en": "Match NBT: OFF"
+  },
+  "gui.rs_create_compat.collection_cache.match_nbt.tip": {
+    "zh": "要求数据组件（NBT）完全一致才命中",
+    "en": "Require data components (NBT) to match exactly"
+  },
+  "gui.rs_create_compat.collection_cache.blocked.tip": {
+    "zh": "阻塞后仍可收集 / 取出，只是不再回流进 RS 网络",
+    "en": "Blocked resources can still be collected/extracted, just no longer returned to the RS network"
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.tip": {
+    "zh": "打开后多选示例物自带的标签；命中物需同时带上全部选中标签",
+    "en": "Turn on to multi-select tags the sample carries; a match must carry all of them"
+  },
+  "gui.rs_create_compat.collection_cache.input_face.tip": {
+    "zh": "逐面开关物流输入（漏斗 / 管道）",
+    "en": "Toggle which faces accept logistics input (hoppers/pipes)"
+  },
+  "gui.rs_create_compat.collection_cache.input_face.state.on.tip": {
+    "zh": "该面允许漏斗 / 管道塞入",
+    "en": "This face accepts items/fluids from hoppers/pipes"
+  },
+  "gui.rs_create_compat.collection_cache.input_face.state.off.tip": {
+    "zh": "该面不接收输入（仍可抽走）",
+    "en": "This face refuses input (extraction is still allowed)"
+  },
+  "gui.rs_create_compat.collection_cache.range.step": {
+    "zh": "Shift+点击 = ±5",
+    "en": "Shift+click = ±5"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.none.tip": {
+    "zh": "该面不参与自动交互",
+    "en": "This face does nothing automatically"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.input.tip": {
+    "zh": "把原料推给该面的相邻机器",
+    "en": "Push inputs to the machine on this face"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.output.tip": {
+    "zh": "从该面收回产物",
+    "en": "Collect outputs from this face"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.intermediate.tip": {
+    "zh": "从该面收回过渡件并回写网络",
+    "en": "Collect transitional items here and return them to the network"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.face.tip": {
+    "zh": "面输出：按左侧六个面的配置工作",
+    "en": "Face output: works by the six face settings on the left"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.bus.tip": {
+    "zh": "总线输出：忽略逐面配置，由相连的输出总线代劳",
+    "en": "Bus output: per-face settings are ignored; a connected exporter bus does the work"
+  },
+  "gui.rs_create_compat.collection_cache.stats": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.stats.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.stats.capacity": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.stats.fluid": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.collected": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.inserted": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrades": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrade_speed": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrade_stack": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrade_speed.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrade_stack.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.absorb.item.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.absorb.fluid.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.absorb.gas.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.absorb.experience.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.fluid_region": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.fluid_region.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.cache.fluid_summary": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.upgrade": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.blocked.hint.on": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.blocked.hint.off": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.blocked.hint.band": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.selected": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.unselected": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.match_tags.row_click": {
+    "delete": true
+  },
+  "gui.rs_create_compat.collection_cache.input_face.click": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.click": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.hint.1": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.hint.2": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.hint.3": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.hint.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.tip.title": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.tip.switch": {
+    "delete": true
+  }
+}

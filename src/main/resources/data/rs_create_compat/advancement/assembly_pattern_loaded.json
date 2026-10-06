@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "assembly_pattern_loaded": {
+      "trigger": "rs_create_compat:assembly_pattern_loaded"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.assembly_pattern_loaded.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:sequence_assembly_executor"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.assembly_pattern_loaded.title"
+    }
+  },
+  "parent": "rs_create_compat:sequence_assembly_executor",
+  "requirements": [
+    [
+      "assembly_pattern_loaded"
+    ]
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "rs_create_compat:block/infinite_separation_frame"
+    }
+  }
+}

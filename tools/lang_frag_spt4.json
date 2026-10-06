@@ -1,0 +1,78 @@
+{
+  "gui.rs_create_compat.sequence_pattern_terminal.card.no_item_input": {
+    "en": "This step has no input (neither item nor fluid)",
+    "zh": "该步无输入（物品与流体都没有）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.fluid_input_only": {
+    "en": "This step needs a fluid input (no item input)",
+    "zh": "该步需要流体输入（没有物品输入）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.readonly": {
+    "en": "Read-only: the flow is generated from the recipe",
+    "zh": "只读：流程由配方自动生成"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.tip": {
+    "en": "Unit pattern library, grouped into one basket per chamber (click the title for the chamber summary)",
+    "zh": "单元样板库：按执行仓分成一篮一篮（左键标题打开执行仓汇总）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.unmatched": {
+    "en": "No matching chamber",
+    "zh": "未匹配执行仓"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.unmatched.sub": {
+    "en": "No chamber to place these into yet",
+    "zh": "暂时没有可放入的执行仓"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.push.tip": {
+    "en": "Place this basket's patterns into the chamber",
+    "zh": "把本篮样板存入该执行仓"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.count": {
+    "en": "Patterns in this basket: %s",
+    "zh": "本篮待存入样板：%s 张"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.empty": {
+    "en": "This basket has no patterns",
+    "zh": "本篮暂无可存入的样板"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.section.none": {
+    "en": "No chambers or unit patterns yet",
+    "zh": "暂无执行仓与单元样板"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.slot.tip": {
+    "en": "Empty cell: drop a unit pattern here and it joins the matching chamber basket",
+    "zh": "空位：放入单元样板后会归入对应执行仓的那一篮"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.title.tip": {
+    "en": "This chamber's name (edit under Config)",
+    "zh": "本执行仓的名字（在「配置」里修改）"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.recipe_type.tip": {
+    "en": "The recipe type this chamber handles",
+    "zh": "本执行仓负责的配方类型"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.arrangement.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.steps.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.page.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.slot_hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.row_hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.status.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.bound": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.unbound": {
+    "delete": true
+  }
+}

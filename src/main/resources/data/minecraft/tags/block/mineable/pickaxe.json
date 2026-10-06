@@ -1,0 +1,19 @@
+{
+  "replace": false,
+  "values": [
+    "rs_create_compat:advanced_quantity_keeper",
+    "rs_create_compat:advanced_schematic_loader",
+    "rs_create_compat:camouflage_frame",
+    "rs_create_compat:collection_cache",
+    "rs_create_compat:infinite_separation_frame",
+    "rs_create_compat:intermediate_cache",
+    "rs_create_compat:quantity_keeper",
+    "rs_create_compat:range_charger",
+    "rs_create_compat:schematic_loader",
+    "rs_create_compat:separation_frame",
+    "rs_create_compat:sequence_assembly_executor",
+    "rs_create_compat:sequence_execution_chamber",
+    "rs_create_compat:sequence_pattern_terminal",
+    "rs_create_compat:unit_pattern_manager"
+  ]
+}

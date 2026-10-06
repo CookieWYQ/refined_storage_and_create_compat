@@ -1,0 +1,20 @@
+{
+  "replace": false,
+  "values": [
+    "refinedstorage:portable_grid",
+    "refinedstorage:creative_portable_grid",
+    "refinedstorage:wireless_grid",
+    "refinedstorage:creative_wireless_grid",
+    {
+      "id": "refinedstorage_quartz_arsenal:wireless_crafting_grid",
+      "required": false
+    },
+    {
+      "id": "refinedstorage_quartz_arsenal:creative_wireless_crafting_grid",
+      "required": false
+    },
+    "rs_create_compat:advanced_remote_terminal",
+    "rs_create_compat:advanced_remote_terminal_charged",
+    "rs_create_compat:creative_advanced_remote_terminal"
+  ]
+}

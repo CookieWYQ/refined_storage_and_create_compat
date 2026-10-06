@@ -1,6 +1,12 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "minecraft:block/cube",
   "textures": {
-    "all": "rs_create_compat:block/advanced_schematic_loader"
+    "particle": "rs_create_compat:block/advanced_schematic_loader_side_inactive",
+    "north": "rs_create_compat:block/advanced_schematic_loader_side_inactive",
+    "east": "rs_create_compat:block/advanced_schematic_loader_side_inactive",
+    "south": "rs_create_compat:block/advanced_schematic_loader_side_inactive",
+    "west": "rs_create_compat:block/advanced_schematic_loader_side_inactive",
+    "up": "rs_create_compat:block/advanced_schematic_loader_top_inactive",
+    "down": "rs_create_compat:block/advanced_schematic_loader_bottom_inactive"
   }
 }

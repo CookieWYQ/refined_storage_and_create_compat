@@ -1,7 +1,10 @@
 {
   "variants": {
-    "": {
+    "active=false": {
       "model": "rs_create_compat:block/range_charger"
+    },
+    "active=true": {
+      "model": "rs_create_compat:block/range_charger_active"
     }
   }
 }

@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "rs_create_compat:item/advanced_remote_terminal_charged"
+  }
+}

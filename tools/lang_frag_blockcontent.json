@@ -1,0 +1,26 @@
+{
+  "message.rs_create_compat.blockcontent.set": {
+    "en": "Block-content disposition is now: %s",
+    "zh": "拆方块内容物去向已设为：%s"
+  },
+  "message.rs_create_compat.blockcontent.current": {
+    "en": "Current block-content disposition: %s",
+    "zh": "当前拆方块内容物去向：%s"
+  },
+  "message.rs_create_compat.blockcontent.usage": {
+    "en": "Usage: /rs_create_compat blockcontent <network|drop|block>",
+    "zh": "用法：/rs_create_compat blockcontent <network|drop|block>"
+  },
+  "message.rs_create_compat.blockcontent.mode.network": {
+    "en": "Network (falls back to keeping it in the block when offline)",
+    "zh": "回网（没接网络时自动保存在方块内部）"
+  },
+  "message.rs_create_compat.blockcontent.mode.drop": {
+    "en": "Drop as items",
+    "zh": "掉落出来"
+  },
+  "message.rs_create_compat.blockcontent.mode.block": {
+    "en": "Keep inside the block (restored when replaced)",
+    "zh": "保存在方块内部（重新放下原样恢复）"
+  }
+}

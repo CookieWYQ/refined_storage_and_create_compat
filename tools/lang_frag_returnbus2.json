@@ -1,0 +1,30 @@
+{
+  "gui.rs_create_compat.exporter_executor.shared.tip": {
+    "zh": "当前 %s 台总线共享该类别：按轮询均分（除不尽时余数按轮询顺序分配，不会丢失或复制）。右下角的青色小方块就是这个标记。",
+    "en": "%s buses share this category: output is split by round-robin (the remainder follows the same order; nothing is lost or duplicated). The cyan square marks it."
+  },
+  "gui.rs_create_compat.exporter_executor.exclusive.tip": {
+    "zh": "当前仅本总线选中该类别（独占）。再让别的总线也选中它即可改为均分。",
+    "en": "Only this bus has this category selected (exclusive). Select it on another bus to switch to round-robin sharing."
+  },
+  "gui.rs_create_compat.exporter_executor.gate.off.tip": {
+    "zh": "自动合成未开启：本总线当前不处理任何类别（先发起自动合成）",
+    "en": "Autocrafting is off: this bus currently handles no categories (start an autocrafting task first)"
+  },
+  "gui.rs_create_compat.exporter_executor.scroll.tip": {
+    "zh": "滚轮：左右翻看更多类别（当前显示第 %s-%s 项，共 %s 项）。点下方滚动条可直接跳转。",
+    "en": "Wheel: browse more categories (showing %s-%s of %s). Click the bar below to jump."
+  },
+  "gui.rs_create_compat.exporter_executor.no_categories": {
+    "zh": "暂无可用类别",
+    "en": "No categories available"
+  },
+  "gui.rs_create_compat.exporter_executor.state.on": {
+    "zh": "状态：本总线已选",
+    "en": "State: selected on this bus"
+  },
+  "gui.rs_create_compat.exporter_executor.state.off": {
+    "zh": "状态：本总线未选",
+    "en": "State: not selected on this bus"
+  }
+}

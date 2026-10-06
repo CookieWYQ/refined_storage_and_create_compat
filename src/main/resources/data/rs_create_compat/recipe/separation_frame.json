@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "A A",
+    " A ",
+    "A A"
+  ],
+  "key": {
+    "A": {
+      "item": "minecraft:iron_ingot"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:separation_frame",
+    "count": 64
+  }
+}

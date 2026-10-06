@@ -1,0 +1,40 @@
+{
+  "criteria": {
+    "advanced_remote_terminal": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:advanced_remote_terminal",
+              "rs_create_compat:advanced_remote_terminal_charged",
+              "rs_create_compat:creative_advanced_remote_terminal"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.advanced_remote_terminal.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_remote_terminal"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.advanced_remote_terminal.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "advanced_remote_terminal"
+    ]
+  ]
+}

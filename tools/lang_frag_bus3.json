@@ -1,0 +1,6 @@
+{
+  "gui.rs_create_compat.exporter_executor.fluids.tip": {
+    "en": "Export this fluid input: pushes this fluid (required by the chamber's unit patterns) into the machine this bus faces. If several exporters select the same fluid, the chamber splits it between them in round-robin (fluid is split by export batch, so the total is conserved).",
+    "zh": "导出这一类流体输入：把网络上序列执行仓单元样板对应配方所需的那种流体推给本总线面对的机器。同一种流体若被多台输出总线选中，会按轮询在它们之间均分（水量按导出批次分配，总量守恒）。"
+  }
+}

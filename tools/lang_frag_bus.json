@@ -1,0 +1,48 @@
+{
+  "gui.rs_create_compat.exporter_executor.click": {
+    "en": "Left-click: toggle whether this bus exports this category (multi-select allowed)",
+    "zh": "左键：切换本总线是否导出该类别（可以多选）"
+  },
+  "gui.rs_create_compat.exporter_executor.disabled.state": {
+    "delete": true
+  },
+  "gui.rs_create_compat.exporter_executor.disabled.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.exporter_executor.exclusive.tip": {
+    "en": "Only this bus exports this category right now (exclusive). Let another exporter select it too to switch to even splitting.",
+    "zh": "当前仅本总线导出该类别（独占）。再让别的输出总线也选中它即可改为均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.inputs.tip": {
+    "en": "Export this input material: pushes this specific ingredient (from the chamber's unit patterns) into the machine this bus faces. If several exporters select the same material, the chamber splits it between them in round-robin.",
+    "zh": "导出这一类输入性产物：把网络上序列执行仓单元样板对应的这种原料推给本总线面对的机器。同一种原料若被多台输出总线选中，会按轮询在它们之间均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.intermediate.label": {
+    "en": "Intermediates (transitional items)",
+    "zh": "中间产物（过渡件）"
+  },
+  "gui.rs_create_compat.exporter_executor.intermediates.tip": {
+    "en": "Export intermediates: pushes the sequenced-assembly transitional items (with progress components) into the machine this bus faces. If several exporters select it, the chamber splits it between them in round-robin.",
+    "zh": "导出「中间产物」：把网络上序列装配的过渡件（带进度组件的未完成件）推给本总线面对的机器。同一种过渡件若被多台输出总线选中，会按轮询在它们之间均分。"
+  },
+  "gui.rs_create_compat.exporter_executor.no_categories": {
+    "en": "The chamber has no exportable category yet",
+    "zh": "执行仓暂无可用类别"
+  },
+  "gui.rs_create_compat.exporter_executor.scroll.tip": {
+    "en": "Mouse wheel: scroll to browse more categories (showing %s-%s of %s). Click the bar below to jump.",
+    "zh": "滚轮：左右翻看更多类别（当前显示第 %s-%s 项，共 %s 项）。点下方滚动条可直接跳转。"
+  },
+  "gui.rs_create_compat.exporter_executor.shared.tip": {
+    "en": "This category is shared by %s exporters: the chamber hands its output to them in round-robin (a remainder goes to the earlier exporter in the rotation, never lost or duplicated). The cyan corner square marks a shared category.",
+    "zh": "当前 %s 台输出总线共享该类别：本仓按轮询把产出均分给它们（除不尽时余数按轮询顺序分配，不会丢失或复制）。右下角的青色小方块就是这个标记。"
+  },
+  "gui.rs_create_compat.exporter_executor.state.off": {
+    "en": "State: not selected on this bus",
+    "zh": "状态：本总线未选"
+  },
+  "gui.rs_create_compat.exporter_executor.state.on": {
+    "en": "State: selected on this bus",
+    "zh": "状态：本总线已选"
+  }
+}

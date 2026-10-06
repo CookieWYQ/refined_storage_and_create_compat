@@ -54,10 +54,17 @@ public final class UniversalStorageType implements StorageType {
 
     @Override
     public MapCodec<SerializableStorage> getMapCodec(final Runnable listener) {
+        final Codec<UniversalStorageData.StorageChangedByAt> changedCodec =
+            RecordCodecBuilder.create(instance -> instance.group(
+                Codec.STRING.fieldOf("changedBy").forGetter(UniversalStorageData.StorageChangedByAt::changedBy),
+                Codec.LONG.fieldOf("changedAt").forGetter(UniversalStorageData.StorageChangedByAt::changedAt)
+            ).apply(instance, UniversalStorageData.StorageChangedByAt::new));
         final Codec<UniversalStorageData.UniversalStorageResource> resourceCodec =
             RecordCodecBuilder.create(instance -> instance.group(
                 RESOURCE_CODEC.fieldOf("resource").forGetter(UniversalStorageData.UniversalStorageResource::resource),
-                Codec.LONG.fieldOf("amount").forGetter(UniversalStorageData.UniversalStorageResource::amount)
+                Codec.LONG.fieldOf("amount").forGetter(UniversalStorageData.UniversalStorageResource::amount),
+                Codec.optionalField("changed", changedCodec, false)
+                    .forGetter(UniversalStorageData.UniversalStorageResource::changed)
             ).apply(instance, UniversalStorageData.UniversalStorageResource::new));
 
         return RecordCodecBuilder.<UniversalStorageData>mapCodec(instance -> instance.group(
@@ -95,16 +102,35 @@ public final class UniversalStorageType implements StorageType {
         final List<UniversalStorageData.UniversalStorageResource> resources = storage.getAll().stream()
             .map(resourceAmount -> new UniversalStorageData.UniversalStorageResource(
                 (PlatformResourceKey) resourceAmount.resource(),
-                resourceAmount.amount()
+                resourceAmount.amount(),
+                getChanged(storage, resourceAmount)
             ))
             .toList();
         return new UniversalStorageData(capacity, resources);
     }
 
+    /** 读取"最后修改"跟踪信息（与 RS 原版 StorageData.getChanged 一致，供存档恢复）。 */
+    private static Optional<UniversalStorageData.StorageChangedByAt> getChanged(
+        final SerializableStorage storage,
+        final com.refinedmods.refinedstorage.api.resource.ResourceAmount resourceAmount) {
+        if (!(storage instanceof com.refinedmods.refinedstorage.api.storage.tracked.TrackedStorage trackedStorage)) {
+            return Optional.empty();
+        }
+        return trackedStorage.findTrackedResourceByActorType(
+                resourceAmount.resource(),
+                com.refinedmods.refinedstorage.common.api.storage.PlayerActor.class)
+            .map(tracked -> new UniversalStorageData.StorageChangedByAt(
+                tracked.getSourceName(),
+                tracked.getTime()));
+    }
+
     /**
-     * 容错列表编解码：单条资源解码失败时跳过，避免整个磁盘数据丢失。
+     * 容错列表编解码：单条资源解码失败时跳过并记录日志（对齐 RS 原版 ErrorHandlingListCodec），
+     * 避免整个磁盘数据因一条损坏记录而丢失。
      */
     private static final class ErrorTolerantListCodec<T> implements Codec<List<T>> {
+        private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(ErrorTolerantListCodec.class);
         private final Codec<T> elementCodec;
 
         private ErrorTolerantListCodec(final Codec<T> elementCodec) {
@@ -118,7 +144,10 @@ public final class UniversalStorageType implements StorageType {
                 // getList 的流是一个 Consumer<Consumer<X>>：逐个接收元素
                 stream.accept(value -> {
                     // 单条失败仅跳过，不影响整体
-                    elementCodec.parse(ops, value).result().ifPresent(result::add);
+                    final DataResult<T> parsed = elementCodec.parse(ops, value);
+                    parsed.error().ifPresent(error ->
+                        LOGGER.warn("Universal storage could not load a resource: {}", error.message()));
+                    parsed.resultOrPartial().ifPresent(result::add);
                 });
                 return Pair.of(result, ops.empty());
             });

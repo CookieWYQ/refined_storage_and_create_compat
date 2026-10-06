@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "unit_pattern_manager": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:unit_pattern_manager"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.unit_pattern_manager.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:unit_pattern_manager"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.unit_pattern_manager.title"
+    }
+  },
+  "parent": "rs_create_compat:sequence_execution_chamber",
+  "requirements": [
+    [
+      "unit_pattern_manager"
+    ]
+  ]
+}

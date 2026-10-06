@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "advanced_schematic_loader": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:advanced_schematic_loader"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.advanced_schematic_loader.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_schematic_loader"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.advanced_schematic_loader.title"
+    }
+  },
+  "parent": "rs_create_compat:schematic_loader",
+  "requirements": [
+    [
+      "advanced_schematic_loader"
+    ]
+  ]
+}

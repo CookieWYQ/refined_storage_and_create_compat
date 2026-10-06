@@ -2,6 +2,11 @@
 """最终验证：背景无透明洞 + 所有槽位齐全 + 按钮区无槽位。"""
 import sys
 from PIL import Image
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 SLOT = 18
 

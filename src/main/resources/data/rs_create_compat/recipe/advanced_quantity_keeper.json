@@ -1,0 +1,25 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QPQ",
+    "PKP",
+    "QEQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "P": {
+      "item": "refinedstorage:advanced_processor"
+    },
+    "K": {
+      "item": "rs_create_compat:quantity_keeper"
+    },
+    "E": {
+      "item": "create:precision_mechanism"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:advanced_quantity_keeper"
+  }
+}

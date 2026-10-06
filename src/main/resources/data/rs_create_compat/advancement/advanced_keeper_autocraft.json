@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "advanced_keeper_autocraft": {
+      "trigger": "rs_create_compat:advanced_keeper_autocrafted"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.advanced_keeper_autocraft.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:advanced_quantity_keeper"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.advanced_keeper_autocraft.title"
+    }
+  },
+  "parent": "rs_create_compat:advanced_quantity_keeper",
+  "requirements": [
+    [
+      "advanced_keeper_autocraft"
+    ]
+  ]
+}

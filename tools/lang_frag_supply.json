@@ -1,0 +1,42 @@
+{
+  "gui.rs_create_compat.exporter_executor.estimated": {
+    "en": "Estimated need (per final product): %s",
+    "zh": "预估需求（每 1 个最终产物）：%s"
+  },
+  "gui.rs_create_compat.exporter_executor.estimated.note": {
+    "en": "Due to chance, actual consumption may exceed this estimate (supply keeps going until the target product count is reached).",
+    "zh": "因概率原因，实际消耗可能会超出这个预估（系统会持续供应直到目标产物达标）。"
+  },
+  "gui.rs_create_compat.exporter_executor.linked": {
+    "en": "Linked chamber: %s",
+    "zh": "归属执行舱：%s"
+  },
+  "gui.rs_create_compat.exporter_executor.strategy.materials": {
+    "en": "Supply mode: materials only (ignores chance)",
+    "zh": "供应策略：只管输出原料（不看概率）"
+  },
+  "gui.rs_create_compat.exporter_executor.strategy.target": {
+    "en": "Supply mode: until target product count is reached (auto-crafts missing inputs)",
+    "zh": "供应策略：直到目标产物达标（缺料自动合成补齐）"
+  },
+  "message.rs_create_compat.supply.current": {
+    "en": "Current supply strategy: %s",
+    "zh": "当前原料供应策略：%s"
+  },
+  "message.rs_create_compat.supply.mode.materials": {
+    "en": "materials only (ignores chance)",
+    "zh": "只管输出原料（不看概率）"
+  },
+  "message.rs_create_compat.supply.mode.target": {
+    "en": "until target product count is reached (default; auto-crafts missing inputs)",
+    "zh": "直到目标产物达标（默认；缺料自动合成补齐）"
+  },
+  "message.rs_create_compat.supply.set": {
+    "en": "Sequence chamber supply strategy set to: %s",
+    "zh": "序列执行仓原料供应策略已设为：%s"
+  },
+  "message.rs_create_compat.supply.usage": {
+    "en": "Usage: /rs_create_compat supply <materials|target>",
+    "zh": "用法：/rs_create_compat supply <materials|target>"
+  }
+}

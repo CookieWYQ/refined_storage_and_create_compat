@@ -1,0 +1,72 @@
+{
+  "gui.rs_create_compat.sequence_pattern_terminal.pattern_slots": {
+    "en": "Total patterns",
+    "zh": "总样板"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.pattern_slots.hint": {
+    "en": "Holds only this mod's sequence assembly patterns (one per slot). Unit patterns and refinedstorage:pattern are rejected; generating/importing consumes nothing.",
+    "zh": "只放本模组的序列装配总样板（一格一张）：单元样板与 refinedstorage:pattern 都放不进去；生成样板 / 导入配方不再消耗材料。"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.hints": {
+    "en": "Scroll = list; Ctrl+LMB = step config; LMB machine area = pick machine; Shift+LMB/RMB = move up/down; RMB = delete step",
+    "zh": "滚轮 = 滚动列表；Ctrl+左键 = 详细配置；左键机器区 = 选机器；Shift+左键/右键 = 上移/下移；右键 = 删除该步"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.fluid": {
+    "en": "Input fluid: %s (%s)",
+    "zh": "输入流体：%s（%s）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.tip": {
+    "en": "Unit pattern library: drag patterns into the flow list; click the title to open the chamber unit summary",
+    "zh": "单元样板库：存放单元样板，可拖到流程编排行；左键标题打开「执行仓单元样板汇总」"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.generate.tip": {
+    "en": "Generate the assembly pattern into the slot at the bottom-right, then take it out (no material consumed; move the old pattern away first)",
+    "zh": "生成装配样板：写入界面右下角的「生成槽」，取走即可（不再消耗材料；槽里有样板时需先取走）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.import.tip": {
+    "en": "Open the recipe list and transfer a Create sequenced-assembly recipe into the flow (no material consumed)",
+    "zh": "打开配方选择界面：把一张 Create 序列装配配方一键转移进流程（不再消耗材料）"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.cannot_generate": {
+    "en": "Cannot generate: the flow and the outputs are both empty.",
+    "zh": "无法生成装配样板：流程与产物都为空"
+  },
+  "gui.rs_create_compat.step_detail.recipe_type.tip": {
+    "en": "Recipe type of this step (the raw id is shown in the grey line below)",
+    "zh": "本步的配方类型（原始 id 见下方灰字）"
+  },
+  "gui.rs_create_compat.step_detail.recipe_type.unset": {
+    "en": "Unset",
+    "zh": "未设置"
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.no_patterns": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.chance.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.library.summary.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.move.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.detail_hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.delete_hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.card.machine.hint": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.pattern_count.tip": {
+    "delete": true
+  },
+  "gui.rs_create_compat.sequence_pattern_terminal.op.assembly.tip": {
+    "delete": true
+  }
+}

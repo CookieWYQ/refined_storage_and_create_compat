@@ -1,6 +1,7 @@
 package cretae.cookiewyq.rs_create_compat.storage;
 
 import com.refinedmods.refinedstorage.api.core.Action;
+import com.refinedmods.refinedstorage.api.core.FieldsAndMethodsAreNonnullByDefault;
 import com.refinedmods.refinedstorage.api.resource.ResourceAmount;
 import com.refinedmods.refinedstorage.api.resource.ResourceKey;
 import com.refinedmods.refinedstorage.api.storage.AbstractProxyStorage;
@@ -16,6 +17,7 @@ import com.refinedmods.refinedstorage.common.api.support.resource.PlatformResour
 import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import cretae.cookiewyq.rs_create_compat.Config;
 
+import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.Optional;
 
 /**
@@ -28,6 +30,8 @@ import java.util.Optional;
  * </ul>
  * 可通过配置开关限制"同一磁盘只能存放一种类型"。
  */
+@ParametersAreNonnullByDefault
+@FieldsAndMethodsAreNonnullByDefault
 public class UniversalLimitedStorage extends AbstractProxyStorage
     implements LimitedStorage, SerializableStorage, TrackedStorage {
 
@@ -76,13 +80,20 @@ public class UniversalLimitedStorage extends AbstractProxyStorage
         if (!Config.universalDiskAllowMixedTypes && !isSameTypeAsStored(resource)) {
             return 0;
         }
-        final long spaceRemaining = capacity - getStored();
-        if (spaceRemaining <= 0) {
-            return 0;
+        final long inserted;
+        if (capacity == Long.MAX_VALUE) {
+            // 无限容量（创造级）：容量本身就是 Long.MAX_VALUE，若再做减法/乘 1000 换算会溢出成
+            // 负数导致崩溃，故直接透传、不做任何容量限制（与 RS 原版创造盘一致——不套容量装饰）。
+            inserted = super.insert(resource, amount, action, actor);
+        } else {
+            final long spaceRemaining = capacity - getStored();
+            if (spaceRemaining <= 0) {
+                return 0;
+            }
+            // 部分插入：在剩余容量内尽可能多地插入
+            final long maxAffordable = affordableAmount(resource, spaceRemaining);
+            inserted = super.insert(resource, Math.min(amount, maxAffordable), action, actor);
         }
-        // 部分插入：在剩余容量内尽可能多地插入
-        final long maxAffordable = affordableAmount(resource, spaceRemaining);
-        final long inserted = super.insert(resource, Math.min(amount, maxAffordable), action, actor);
         if (inserted > 0 && action == Action.EXECUTE) {
             listener.run();
         }
@@ -105,10 +116,15 @@ public class UniversalLimitedStorage extends AbstractProxyStorage
     }
 
     /**
-     * 反序列化回填（不触发变更通知）。
+     * 反序列化回填（不触发变更通知），并恢复"最后修改"跟踪信息。
      */
     void load(final UniversalStorageData.UniversalStorageResource storageResource) {
         super.insert(storageResource.resource(), storageResource.amount(), Action.EXECUTE, Actor.EMPTY);
+        storageResource.changed().ifPresent(changed ->
+            trackingRepository.update(
+                storageResource.resource(),
+                new com.refinedmods.refinedstorage.common.api.storage.PlayerActor(changed.changedBy()),
+                changed.changedAt()));
     }
 
     /**
@@ -150,6 +166,7 @@ public class UniversalLimitedStorage extends AbstractProxyStorage
         if (resource instanceof ItemResource) {
             return space; // 物品：空间即件数
         }
-        return space * 1000; // 流体/气体：1 物品位 = 1000 单位
+        // 防止超大容量下 space * 1000 溢出成负数（饱和为 Long.MAX_VALUE）
+        return space > Long.MAX_VALUE / 1000 ? Long.MAX_VALUE : space * 1000; // 流体/气体：1 物品位 = 1000 单位
     }
 }

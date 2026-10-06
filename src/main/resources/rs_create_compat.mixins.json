@@ -6,9 +6,41 @@
   "mixins": [
     "FilterTagMixin",
     "AutocrafterStorageMixin",
-    "AutocrafterAccessor"
+    "AutocrafterManagerMenuAccessor",
+    "VirtualGridBlockEntityMixin",
+    "VirtualAutocrafterManagerMenuMixin",
+    "AutocrafterManagerSlotMixin",
+    "exporter.AbstractExporterBlockEntityMixin",
+    "exporter.ExporterContainerMenuMixin",
+    "importer.AbstractImporterBlockEntityMixin",
+    "importer.ImporterContainerMenuMixin",
+    "importer.AbstractResourceContainerMenuMixin",
+    "network.AbstractBaseNetworkNodeContainerBlockEntityMixin",
+    "network.InWorldNetworkNodeContainerImplMixin",
+    "create.FluidPipeBlockMixin",
+    "block.CamouflageShapeMixin",
+    "block.CamouflagePropertyMixin",
+    "block.CamouflageRemovalMixin",
+    "blockentity.BlockEntityUpdateTagMixin",
+    "level.ServerLevelBlockUpdateMixin",
+    "TaskContainerMixin",
+    "RsccTaskDeliveredMixin",
+    "accessor.RsccTaskPatternAccessor",
+    "accessor.RsccExternalTaskPatternAccessor",
+    "accessor.MainNetworkNodeAccessor",
+    "accessor.AbstractAutocraftingMonitorMenuAccessor",
+    "accessor.AbstractNetworkNodeContainerBlockEntityAccessor"
   ],
   "client": [
+    "client.ExporterScreenMixin",
+    "client.ImporterScreenMixin",
+    "client.SchematicExportNoticeMixin",
+    "client.AbstractBaseScreenMixin",
+    "client.AutocraftingMonitorScreenMixin",
+    "client.AutocraftingPreviewScreenMixin",
+    "accessor.ScreenAccessor",
+    "accessor.AutocraftingPreviewMenuAccessor",
+    "accessor.AutocraftingRequestAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

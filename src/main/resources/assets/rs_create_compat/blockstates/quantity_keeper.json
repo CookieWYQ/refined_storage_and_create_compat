@@ -1,7 +1,10 @@
 {
   "variants": {
-    "": {
+    "active=false": {
       "model": "rs_create_compat:block/quantity_keeper"
+    },
+    "active=true": {
+      "model": "rs_create_compat:block/quantity_keeper_active"
     }
   }
 }

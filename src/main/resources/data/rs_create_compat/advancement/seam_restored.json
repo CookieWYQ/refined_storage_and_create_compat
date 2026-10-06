@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "seam_restored": {
+      "trigger": "rs_create_compat:seam_restored"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.seam_restored.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:separation_frame"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.seam_restored.title"
+    }
+  },
+  "parent": "rs_create_compat:seam_cut",
+  "requirements": [
+    [
+      "seam_restored"
+    ]
+  ]
+}

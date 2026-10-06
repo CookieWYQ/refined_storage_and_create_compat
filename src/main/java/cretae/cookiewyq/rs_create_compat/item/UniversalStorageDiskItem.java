@@ -24,22 +24,35 @@ import net.minecraft.world.level.Level;
 /**
  * 通用储存磁盘：可同时存入物品、流体、气体任意类型。
  * 容量换算：1 bucket（1000 mB）= 1 物品位。
+ * <p>分级版（1K/4K/16K/64K/256K/1M/4M/16M/64M/无限）
+ * 通过 {@link #UniversalStorageDiskItem(long)} 传入固定容量（≤0 表示无限）。
  */
 public class UniversalStorageDiskItem extends AbstractStorageContainerItem {
     private static final Component HELP_TEXT = Component.translatable(
         "item.rs_create_compat.universal_storage_disk.help");
 
-    public UniversalStorageDiskItem() {
+    /** 分级容量（物品位）；≤0 表示无限（创造）。 */
+    @Nullable
+    private final Long tierCapacity;
+
+    /** 分级版：容量固定；{@code capacity <= 0} 表示无限（创造级）。 */
+    public UniversalStorageDiskItem(final long capacity) {
+        this(Long.valueOf(capacity <= 0 ? Long.MIN_VALUE : capacity));
+    }
+
+    private UniversalStorageDiskItem(@Nullable final Long tierCapacity) {
         super(
             new Item.Properties().stacksTo(1).fireResistant(),
             RefinedStorageApi.INSTANCE.getStorageContainerItemHelper()
         );
+        this.tierCapacity = tierCapacity;
     }
 
     @Nullable
     @Override
     protected Long getCapacity() {
-        return (long) Config.universalDiskBaseCapacity;
+        // 无限容量由 UniversalStorageType.create 识别为 null
+        return tierCapacity == Long.MIN_VALUE ? null : tierCapacity;
     }
 
     @Override
@@ -73,6 +86,7 @@ public class UniversalStorageDiskItem extends AbstractStorageContainerItem {
 
     @Override
     public Optional<TooltipComponent> getTooltipImage(final ItemStack stack) {
+        // 恢复 RS 原生「常显帮助」：帮助文本由 HelpTooltipComponent 一直显示，不再走按键分层。
         return Optional.of(new HelpTooltipComponent(HELP_TEXT));
     }
 }

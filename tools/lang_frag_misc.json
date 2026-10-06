@@ -1,0 +1,38 @@
+{
+  "gui.rs_create_compat.advanced_quantity_keeper.autocraft_header.tip": {
+    "en": "Autocraft column: click a row's check/cross to toggle autocrafting for that row (requires an Autocrafting Upgrade; without it these buttons stay disabled).",
+    "zh": "自动合成列：点某行的 ✓/✗ 切换该行是否自动合成（必须先装入自动合成升级，否则这一列按钮保持禁用、点都点不了）。"
+  },
+  "gui.rs_create_compat.advanced_quantity_keeper.overflow_header.tip": {
+    "en": "Destroy-overflow column: click a row's check/cross to let that row destroy the amount beyond its target amount.",
+    "zh": "过量销毁列：点某行的 ✓/✗ 切换该行「超出目标数量的部分是否销毁」。"
+  },
+  "gui.rs_create_compat.exporter_executor.locked.tip": {
+    "zh": "本总线已连到一台处于「总线输出」模式的序列执行仓（贴着放或用 RS 线缆直达，最多 64 格）。类别由执行仓按单元样板动态给出，可多选；原来的过滤器槽位不可编辑。",
+    "en": "This bus is linked to a sequence execution chamber in Bus Output mode (adjacent, or reached through RS cables up to 64 blocks). Categories come from the chamber's unit patterns and can be multi-selected; the original filter slots are locked."
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.short.input": {
+    "en": "Input",
+    "zh": "输入"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.short.intermediate": {
+    "en": "Mid",
+    "zh": "中间"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.short.none": {
+    "en": "None",
+    "zh": "无"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.face.mode.short.output": {
+    "en": "Output",
+    "zh": "输出"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.bus.tip": {
+    "en": "Bus output: per-face settings are ignored; an exporter bus placed next to the chamber or reached through a run of RS cables does the work.",
+    "zh": "总线输出：忽略逐面配置，由紧贴或线缆相连的「输出总线」代劳。"
+  },
+  "gui.rs_create_compat.sequence_execution_chamber.output.cell.ignored": {
+    "en": "Note: bus output is active, so this face config is ignored (it takes effect again in face output mode).",
+    "zh": "注意：当前为「总线输出」模式，该面的配置被整体忽略（切回「面输出」后立即恢复生效）。"
+  }
+}

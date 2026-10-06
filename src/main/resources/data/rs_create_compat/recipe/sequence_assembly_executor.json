@@ -1,0 +1,31 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QPQ",
+    "CMD",
+    "QEQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "P": {
+      "item": "refinedstorage:advanced_processor"
+    },
+    "C": {
+      "item": "refinedstorage:construction_core"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "D": {
+      "item": "refinedstorage:destruction_core"
+    },
+    "E": {
+      "item": "create:precision_mechanism"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:sequence_assembly_executor"
+  }
+}

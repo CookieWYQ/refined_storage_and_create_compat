@@ -1,0 +1,29 @@
+{
+  "criteria": {
+    "collection_fluid": {
+      "trigger": "rs_create_compat:collection_fluid"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.collection_fluid.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:collection_cache"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.collection_fluid.title"
+    }
+  },
+  "parent": "rs_create_compat:collection_cache",
+  "requirements": [
+    [
+      "collection_fluid"
+    ]
+  ]
+}
