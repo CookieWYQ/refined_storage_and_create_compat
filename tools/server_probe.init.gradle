@@ -1,0 +1,92 @@
+// 专用服务端探针：Gradle init script（**不改 build.gradle、不动 run/**）
+//
+// 为什么需要这个文件（写「为什么」）
+// ---------------------------------
+// 1) 1.1.0 的专用服务端「启动即崩」（Mixin apply for mod rs_create_compat failed），
+//    而所有编译期/客户端语境校验都报 0 问题。要拿到最硬的证据，只能**真的启动一次
+//    DEDICATED_SERVER**（`tools/verify_dedicated_server.ps1` 会自动调用本文件）。
+// 2) `gradlew runServer` 的默认 gameDirectory 是工程根的 `run/`。run/ 是另一个 agent
+//    正在使用的共享开发目录（存档 / 配置 / 日志），本任务把它视为**只读**。
+//    【实测教训，2026-10-11】只在 doFirst 里改 JavaExec.workingDir **不管用**：
+//    moddev 的 RunGameTask 会在自己的 task action 里把 workingDir 重新赋成 run 的
+//    gameDirectory，于是服务端照样把日志写进了 run/（日志里 GAMEDIR 仍是 ...\run）。
+//    ⇒ 必须改 **moddev 自己的 run 配置属性 `gameDirectory`**（DirectoryProperty），
+//      moddev 才会用新目录同时做 workingDir 与 `--gameDir .` 的解析基准。
+// 3) 用 init script 而不是改 build.gradle：本任务明确「只加校验、不动业务构建脚本」，
+//    而且并行 agent 同时在改这个工程，减少冲突面。
+//
+// 可传入的属性
+// ------------
+//   -PrsccProbeGameDir=<绝对路径>  探针工作目录（默认 build/server_probe/game）
+//   -PrsccProbeModJar=<jar 绝对路径>
+//        把本模组的加载源从「dev 的 build/classes」改成指定的 jar。
+//        用途：用**已发布的 1.1.0 jar**（build/libs/rs_create_compat-1.1.0.jar）做
+//        确定性反例复现 —— 它就是当初让专服启动即崩的那一份制品。
+//        实现：FML 的 CommonLaunchHandler 从环境变量 MOD_CLASSES 读 dev 模组坐标
+//        （格式 `<modid>%%<路径>`，多个用 `;` 分隔，见 loader-4.0.43.jar 里的字符串
+//        "MOD_CLASSES" / "Got mod coordinates {} from env"），这里直接改写它。
+//
+// 用法（由 tools/verify_dedicated_server.ps1 自动调用）：
+//   gradlew.bat runServer --init-script tools\server_probe.init.gradle \
+//       --no-configuration-cache --console=plain \
+//       -PrsccProbeGameDir=<绝对路径> [-PrsccProbeModJar=<jar>]
+
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+
+    // 探针工作目录：优先取 -PrsccProbeGameDir 传入的绝对路径，默认 build/server_probe/game。
+    def probeDir = {
+        def prop = root.findProperty('rsccProbeGameDir')
+        return prop ? new File(prop.toString())
+                    : new File(root.projectDir, 'build/server_probe/game')
+    }
+    def probeModJar = {
+        def prop = root.findProperty('rsccProbeModJar')
+        return prop ? new File(prop.toString()) : null
+    }
+
+    // ① 直接改 moddev 的 run 配置（唯一真正决定 GAMEDIR 的属性）。
+    def neoForgeExt = root.extensions.findByName('neoForge')
+    if (neoForgeExt == null) {
+        logger.lifecycle("[rscc-probe] [警告] 找不到 neoForge 扩展，无法改 gameDirectory")
+    } else {
+        try {
+            neoForgeExt.runs.named('server') { run ->
+                run.gameDirectory.set(probeDir())
+            }
+            logger.lifecycle("[rscc-probe] neoForge.runs.server.gameDirectory -> " + probeDir())
+        } catch (Exception exc) {
+            logger.lifecycle("[rscc-probe] [警告] 设置 gameDirectory 失败：" + exc)
+        }
+    }
+
+    // ② 兜底：执行前再确认一次 workingDir / MOD_CLASSES（幂等，不覆盖上面 ① 的效果）。
+    root.tasks.matching { it.name == 'runServer' }.configureEach { t ->
+        t.doFirst {
+            def dir = probeDir()
+            dir.mkdirs()
+            if (t.workingDir != dir) {
+                t.workingDir = dir
+            }
+            def jar = probeModJar()
+            if (jar != null) {
+                if (!jar.isFile()) {
+                    throw new GradleException("[rscc-probe] -PrsccProbeModJar 指向的文件不存在：" + jar)
+                }
+                t.environment('MOD_CLASSES', 'rs_create_compat%%' + jar.absolutePath)
+                logger.lifecycle("[rscc-probe] MOD_CLASSES -> rs_create_compat%%" + jar.absolutePath)
+            }
+            logger.lifecycle("[rscc-probe] runServer workingDir -> " + t.workingDir)
+        }
+    }
+
+    // 自证用：打印探针实际会用的工作目录 / 加载源（校验脚本会 grep 这几行确认没跑偏）。
+    root.tasks.register('rsccProbeInfo') {
+        group = 'rscc'
+        doLast {
+            println("RSCC_PROBE_GAMEDIR=" + probeDir().absolutePath)
+            println("RSCC_PROBE_MODJAR=" + (probeModJar() ? probeModJar().absolutePath : "<dev classes>"))
+            println("RSCC_PROBE_RUNSERVER_WORKDIR=" + root.tasks.named('runServer').get().workingDir)
+        }
+    }
+}

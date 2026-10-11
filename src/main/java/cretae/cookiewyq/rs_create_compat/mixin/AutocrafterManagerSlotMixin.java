@@ -1,8 +1,8 @@
 package cretae.cookiewyq.rs_create_compat.mixin;
 
+import com.refinedmods.refinedstorage.common.autocrafting.PatternSlot;
 import com.refinedmods.refinedstorage.common.autocrafting.autocraftermanager.AutocrafterManagerContainerMenu;
 import net.minecraft.world.Container;
-import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import org.spongepowered.asm.mixin.Mixin;
@@ -34,6 +34,33 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  * 即原 4 个参数之后），@At 目标则由 {@code NEW Slot} 改指向 {@code NEW PatternSlot}。
  * 用 {@code container.canPlaceItem(...)} 收口与 2.0.9 的 {@code isPresent(getPattern(...))}
  * 判据等价，故槽位语义不变。
+ * <p>
+ * <b>2.0.9 启动即崩的根因（2026-10-11，专用服务端）</b>：上一次改动只把 {@code @At} 的 NEW 目标
+ * 从 {@code Slot} 换成了 {@code PatternSlot}，<b>却没有同步改 handler 的返回类型</b>。
+ * Mixin 对「NEW 工厂模式」的硬规则是：
+ * <ul>
+ *   <li>handler 的<b>返回类型必须精确等于被构造的类型</b>（{@code PatternSlot}）；</li>
+ *   <li>handler 的形参 = <b>被重定向构造器的形参</b>（顺序一致），
+ *       其后可选地追加「目标方法自身形参」的前缀；</li>
+ * </ul>
+ * 于是运行期抛 {@code InvalidInjectionException: @Redirect factory method ... has an invalid
+ * signature. Found unexpected return type net.minecraft.world.inventory.Slot, expected
+ * com.refinedmods.refinedstorage.common.autocrafting.PatternSlot} —— 模组加载阶段即崩，
+ * 服务端根本起不来。修法：返回类型与 {@code new} 出来的类型严格一致（下面 {@link PatternSlot}），
+ * 方法体自然也必须是 {@code new PatternSlot(...)}（匿名子类仍是 PatternSlot，
+ * 描述符层面完全一致）。{@code javap} 证据（RS 2.0.9 真实字节码）：
+ * <pre>
+ *   addServerSideSlots(Group, Level):
+ *     52: new  #207  // class com/refinedmods/refinedstorage/common/autocrafting/PatternSlot
+ *     57: aload 5    // container
+ *     59: iload 6    // index
+ *     61: iconst_0   // x
+ *     62: iconst_0   // y
+ *     63: aload_2    // level
+ *     64: invokespecial PatternSlot."&lt;init&gt;":(Lnet/minecraft/world/Container;IIILnet/minecraft/world/level/Level;)V
+ * </pre>
+ * 即构造器形参顺序 = (Container, int, int, int, Level)，与下面 handler 的形参逐个对应。
+ * 同类坑（返回类型与 NEW 目标不一致）已由 {@code tools/verify_mixin_shadows.py} 静态拦截。
  */
 @Mixin(AutocrafterManagerContainerMenu.class)
 public abstract class AutocrafterManagerSlotMixin {
@@ -48,9 +75,14 @@ public abstract class AutocrafterManagerSlotMixin {
         expect = 1,
         require = 0
     )
-    private static Slot rscc$patternOnlyManagerServerSlot(final Container container, final int index,
-                                                          final int x, final int y, final Level level) {
-        return new Slot(container, index, x, y) {
+    // 【返回类型】必须是 @At 的 NEW 目标类型本身（PatternSlot），否则 Mixin 在加载期直接抛
+    // InvalidInjectionException 崩启动（1.1.0 实机崩溃即此）；这里返回匿名子类实例，
+    // 对 Mixin 而言 handler 描述符仍是 (...)->Lcom/.../PatternSlot;，与目标严格一致。
+    // 【形参】= 真实字节码里 PatternSlot ctor 的形参，顺序 (Container, int, int, int, Level)，
+    // 见类注释里的 javap 反汇编；此处不再追加「目标方法形参」，因此不接 (Group, Level)。
+    private static PatternSlot rscc$patternOnlyManagerServerSlot(final Container container, final int index,
+                                                                  final int x, final int y, final Level level) {
+        return new PatternSlot(container, index, x, y, level) {
             @Override
             public boolean mayPlace(final ItemStack stack) {
                 return stack.isEmpty() || container.canPlaceItem(this.index, stack);

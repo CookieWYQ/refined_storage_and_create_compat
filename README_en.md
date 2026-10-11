@@ -371,6 +371,8 @@ Diagnostic logging is **off by default** (`devLogs`, same name as the config opt
 
 ## 14. Documentation in this repository
 
+There are two iron rules for releases: a version that crashes has its **attachment replaced** (same tag, same version number), while a version that does not crash is **published as a new version**. See section 3 of `VERSIONING.md`.
+
 For implementation details or deeper troubleshooting, the repository ships design documents:
 
 | Document | Content |

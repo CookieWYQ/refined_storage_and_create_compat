@@ -12,7 +12,54 @@
 
 唯一需要你主动做的一件事：**诊断日志是关闭的**。要抓日志排查问题，先敲一次 `/rs_create_compat devlogs on`。
 
+> **本版附件替换过一次（2026-10-11，版本号仍是 `1.1.0`）**：最初上传的那份 `1.1.0` 附件会让**专用服务端在模组加载阶段直接崩掉**（Mixin `@Redirect` handler 签名不符），现已修好并替换上传。同一次替换还带来 **Refined Storage 2 依赖从 `2.0.0` 升到 `2.0.9`**。两件事的来龙去脉见下面「附件替换记录」与「依赖升级」两节。
+
 > **关于 `1.0.0` 的两条旧闻（先看这里，免得白忙）**：「专用服务端一装就崩」的修复与「开发日志总开关」`devLogs` **都已经包含在 `v1.0.0` 的最终附件里**（发布后重新构建并替换上传的那一份），**不是 `1.1.0` 的新修复**。从 `1.0.0` 升级上来的玩家**不需要为它们做任何事**：你没有装过那份会崩的 jar，日志开关在 `1.0.0` 就已经是默认关闭。下面的正文里仍然保留这两节的说明，只为把 `1.0.0` 发布正文没写的事补齐。
+
+---
+
+## 附件替换记录：专用服务端「启动即崩」已修好
+
+> **附件已于 `2026-10-11` 替换上传，版本号仍为 `1.1.0`。** 手里那份如果起不来专用服务端，重新下载同一个 `1.1.0` 附件即可。因为版本号没变，判断「手里这份是哪个构建」的唯一凭据是启动日志里的 `[rscc-build]` 那一行（见「反馈渠道」）。
+
+**症状**：把模组装进专用服务端，**启动在模组加载阶段就停住**，日志里是一段确定性的崩溃：
+
+```
+Mixin apply for mod rs_create_compat failed
+  rs_create_compat.mixins.json:AutocrafterManagerSlotMixin
+  -> ...AutocrafterManagerContainerMenu
+InvalidInjectionException: @Redirect factory method ... has an invalid signature.
+  Found unexpected return type net.minecraft.world.inventory.Slot,
+  expected com.refinedmods.refinedstorage.common.autocrafting.PatternSlot
+```
+
+不是进世界之后才出问题 —— 是**加载阶段**就崩，专用服务端根本起不来。
+
+**根因**：本版把 Refined Storage 依赖从 `2.0.0` 升到 `2.0.9` 时，为适配 RS 的改动，把 `AutocrafterManagerSlotMixin` 里 `@Redirect` 的 `@At` 目标从普通 `Slot` 改成了 RS 自己的 `PatternSlot`，**却忘了同步改 handler 的返回类型**。Mixin 对「`@Redirect` 构造器注入」有一条硬规则：**handler 的返回类型必须精确等于被构造的那个类型**。返回类型还是 `Slot`，目标已经是 `PatternSlot`，于是模组加载期直接抛 `InvalidInjectionException`。
+
+**修复**：handler 的返回类型改为 `PatternSlot`，构造同步改为 `new PatternSlot(container, index, 0, 0, level)`。返回类型与 `new` 出来的类型严格一致之后，注入重新成立，槽位语义一字未变。
+
+**验收证据（真机）**：
+
+- **真启动了一次专用服务端**（headless，独立目录，不是 `run/`）；
+- 换回**修复前的旧 jar** ⇒ 判定 `OUR_MIXIN_FAILURE`，崩溃与上面的原文逐字一致（**确定性复现**，不是偶发）；
+- 换成**修复后的新 jar** ⇒ 启动打印 `Done (1.177s)! For help, type "help"`，判定 `PASS`，日志里**没有任何 Mixin 与 dist 致命标记**。
+
+**静态校验也一并补强**（`tools/verify_mixin_shadows.py`）：校验器现在分**「客户端一遍」与「专用服务端一遍」**各自报问题数；新增 `@Redirect` handler 签名校验（返回类型、形参、`@At` 目标逐项对真实字节码），并且留了**反例自证** —— 把返回类型改回旧值，**旧检查报 0 问题放行、新检查判负**，证明这条规则真的拦得住这一类错。
+
+**这不是 `1.0.0` 那条崩溃。** `1.0.0` 修的是注册网络包时加载客户端类导致的 `NoClassDefFoundError`（见下面「属于 `1.0.0` 的两条」）；本条是 `@Redirect` handler 签名不符。两条都是专用服务端启动问题，成因与修法完全不同。
+
+---
+
+## 依赖升级：Refined Storage 2 从 `2.0.0` 升到 `2.0.9`
+
+**实际值**：`gradle.properties` 里 `refinedstorage_version=2.0.9`，也就是本版**是对着 `2.0.9` 编译的**。
+
+**为什么升**：大家实际跑的运行环境是 `2.0.9`。**「对着旧版编译、在新版上运行」是问题的温床** —— 编译期看不见的差异（方法形参变了、构造的类换人了）只会在运行期冒出来，而且往往以「静默不生效」的面目出现，不带任何报错。
+
+**升级当场发现并修掉的静默失效**：升级立刻暴露了一个**早就不对目标**的 mixin —— `AutocrafterManagerSlotMixin` 挂在 `require = 0` 上，而 `2.0.9` 改动了它要注入的那个重载：`addServerSideSlots(Group)` 变成 `addServerSideSlots(Group, Level)`，建槽也从普通 `new Slot(...)` 换成了 RS 自己的 `PatternSlot(Container, int, int, int, Level)`。注入对不上目标，而 `require = 0` 让它**既不崩、也不生效** —— 那条「服务端样板槽放行校验」的修复就这么静默地没在工作，日志里一个字都不会提。本次把它对齐了：方法描述符补上 `Level`、`@At` 目标指向 `PatternSlot`、handler 的形参与返回类型逐项对上真实字节码（`javap` 反汇编核对：`new PatternSlot` 的构造器形参顺序是 `(Container, int, int, int, Level)`）。**把 `@At` 目标改对、却忘了同步 handler 返回类型，就是上一节那次启动崩溃的由来。**
+
+**两个版本的 API 差异只有这一处**，`2.0.0` 升到 `2.0.9` 造成的 **Java 源码编译破坏 0 处**。
 
 ---
 
@@ -33,7 +80,7 @@
 
 这一版修的问题有一个共同点：它们都**不会报错**，只是让产线静静地停在那里，而且**越大的产线越容易撞上**。
 
-> 本版**真正新增**的严重修复就是这四条。另有两条常被误当成 `1.1.0` 的新修复 —— 「专用服务端一装就崩」与「日志刷屏／`devLogs` 开关」—— 它们**已经包含在 `v1.0.0` 的最终附件里**，集中放在后面的「属于 `1.0.0` 的两条」一节，从 `1.0.0` 升级上来的玩家无需为它们做任何事。
+> 本版**真正新增**的严重修复就是这四条。另有两条常被误当成 `1.1.0` 的新修复 —— 「专用服务端一装就崩」与「日志刷屏／`devLogs` 开关」—— 它们**已经包含在 `v1.0.0` 的最终附件里**，集中放在后面的「属于 `1.0.0` 的两条」一节，从 `1.0.0` 升级上来的玩家无需为它们做任何事。本版附件替换时修好的那条**专用服务端启动崩溃**（`@Redirect` handler 签名）是另一回事，见前面的「附件替换记录」。
 
 ### 一、长线缆上的总线被误判成「归属未确定」，直接停用
 
@@ -330,7 +377,8 @@
 - **挂起中的任务不会自动恢复。** 本版只是让普通任务不再被**误**挂起；已经被挂起的任务仍然需要保留原有语义 —— 在监视器上点「继续」。这是刻意的：拆机器加机器往往是有意为之。
 - **升级后请顺手看一眼在途任务。** 预留模型会让执行仓在「别人正在等这份料」时**先等一下**。如果你的产线本来就有大量并发的在途任务，升级后头几分钟看到执行仓「没有立刻抽料」是正常行为，不是卡住 —— 它在等前面的任务把料抽走。没有任何在途预留时，行为与 `1.0.0` 逐字一致。
 - **诊断日志是关闭的**（`devLogs`，默认 `false`）。这不是 `1.1.0` 的新变更 —— 它在 `1.0.0` 就已经默认关闭、旧配置项 `rsccAssemblyDebug` 也已经删除并合并进 `devLogs`，本版只是沿用。要抓日志请敲 `/rs_create_compat devlogs on`（即时生效、不需要重启），也可以把配置里的 `devLogs` 改成 `true`。
-- **专用服务端的崩溃修复**：这条修复已包含在 `v1.0.0` 的**最终附件**里（那份附件是重新构建后替换上传的，sha256 `ab6d04bf39a4b3c28c07b5996bcfa0bc89ccc24c6a5c9d1d0fdbf5f6b5f47d9b`），**所以从 `1.0.0` 升级上来的玩家无需为它做任何事**。只有当初在发布后头几分钟内下载到那份未替换的 jar 的人才会崩 —— 直接换成本版即可。
+- **本版附件在 `2026-10-11` 被替换过一次，版本号仍是 `1.1.0`。** 替换的是「专用服务端启动即崩」的修复（`@Redirect` handler 签名），以及依赖从 Refined Storage 2 `2.0.0` 升到 `2.0.9`。能正常启动的玩家不需要做任何事；专用服务端起不来的玩家重新下载同一个 `1.1.0` 附件即可。**因为版本号没变，请用启动日志里的 `[rscc-build]` 那一行确认手里这份是哪个构建**（见「反馈渠道」）。
+- **`1.0.0` 那条专用服务端崩溃（`NoClassDefFoundError`）的修复**：这条修复已包含在 `v1.0.0` 的**最终附件**里（那份附件是重新构建后替换上传的，sha256 `ab6d04bf39a4b3c28c07b5996bcfa0bc89ccc24c6a5c9d1d0fdbf5f6b5f47d9b`），**所以从 `1.0.0` 升级上来的玩家无需为它做任何事**。只有当初在发布后头几分钟内下载到那份未替换的 jar 的人才会崩 —— 直接换成本版即可。
 - **升级后建议重开一次游戏。** 构建指纹只在启动时打一次；重启之后日志才能自证版本，一键自检也才能给出有效判定。
 
 ---
@@ -344,6 +392,7 @@
 - **剪贴板整簇粘贴有上限。** 只走同一条线缆簇、只改同一种总线、最多 64 台、不跨维度；超出范围的会被跳过，不会部分写入。
 - **Jade 提示会截断。** 每类最多列三件代表物，超出只写一个「…」，不写数量 —— 这是刻意的（提示要放得下），想看全请打开总线界面。
 - **饰品槽充电有节流。** 默认 5 tick 扫一次，「放进去之后立刻满电」不会发生，延迟不超过一秒。想更快可以把 `rangeChargerCuriosScanInterval` 调小（最小 1）。
+- **本次「专用服务端启动即崩」的修复是实机验收过的。** 这一条与下一条不矛盾：下一条说的是**功能行为**（总线分配、预留模型、结构缓存、线缆搜链）没有实机验证；而「装进专用服务端能不能起来」这一件事已经实测 —— 一次真实的 headless 专用服务端启动里，旧 jar 判 `OUR_MIXIN_FAILURE`、新 jar 判 `PASS` 并打印 `Done (1.177s)! For help, type "help"`。
 - **本版大部分修复的凭据是源码交叉验证加模型推演，不是实机验证。** 自检脚本里对总线分配、预留模型、结构缓存与线缆搜链这几处都明确写着「没有实机验证」。这不等于没验证 —— 每一条断言都能被源码事实、模型反例证伪，而且模型与实现是逐字同构的；但它确实**不等于**在真实世界里跑过。大规模线上产线升级前，建议先在一个小批量的订单上验证一遍。
 - **本版的性能数字来自模型与静态推演。** 上表里的「单位工作量」与「世界查询次数」是同一套规模参数下的计数对比，用来证明**增长量级**的变化，不是某一台机器上的毫秒数。
 
@@ -356,6 +405,8 @@
 <https://github.com/CookieWYQ/refined_storage_and_create_compat/issues>
 
 报问题之前，请先跑一次 `/rs_create_compat devlogs on`（本版默认关闭），这样日志里才会有可用的诊断行。
+
+**请把启动日志里的 `[rscc-build]` 那一行一并贴上。** 本版附件被替换过而**版本号没有变**，所以这一行（版本、git revision、编译时间、源码数、Minecraft／NeoForge／Java）是判断「你手里这份是哪个构建」的**唯一凭据** —— 排查「专用服务端起不来」这类问题时，第一件事就是看它。
 
 ---
 
@@ -377,6 +428,8 @@
 - **Dedicated servers crashed on startup.** `NoClassDefFoundError` on a client-only toast class, because payload registration links payload classes and the verifier must load both sides of an assignment check. Client logic has been moved out of the registration path behind a server-safe indirection layer, all 13 payload classes were switched over, and no `NoClassDefFoundError` catch is used to paper over it. The same class of hazard was hunted down across the project: the new dedicated-server safety check reported 13 files before the fix and 0 after.
 - **Log spam, with the `devLogs` master switch already defaulting to off.** A historical total of 320,285 lines from this mod, with peaks of 80 and 128 lines per second. `devLogs` defaults to **off**, and all warnings and errors, the startup fingerprint, session anchors, `diag` exports and the direct consequences of player actions still print. One subtle trap was fixed on purpose: the "no chamber claims this step" timestamp was moved out of the switch, otherwise turning logs off would also kill the monitor banner.
 
+**Attachment replacement (2026-10-11, version number still `1.1.0`)** — The first `1.1.0` upload crashed dedicated servers during mod loading: the `@Redirect` factory handler in `AutocrafterManagerSlotMixin` still declared `Slot` as its return type while its `@At` target had moved to Refined Storage's `PatternSlot`. The handler now returns `PatternSlot`. This was verified on a real headless dedicated server: the old jar reproduces `OUR_MIXIN_FAILURE` with the exact same stack trace, the new jar reaches `Done (1.177s)! For help, type "help"` and is judged `PASS`, with no fatal Mixin or dist markers. The static checker now reports problems separately for the client pass and the dedicated-server pass, validates `@Redirect` handler signatures against real bytecode, and carries a counterexample proving the old check let the bad signature through. The same replacement moved the Refined Storage 2 dependency from `2.0.0` to `2.0.9` (the version players actually run), which exposed one silently inactive mixin (`require = 0`); that mixin is now aligned, it was the only API difference between the two versions, and there were zero Java compile breaks. Because the version number did not change, the `[rscc-build]` fingerprint line is the only way to tell which build you have — please paste it when reporting an issue.
+
 **New capabilities**
 
 - **Jade bus tooltips** showing which chamber a bus is bound to and what it is responsible for, grouped by category, with the fully-automatic input state called out. Display mode is configurable (default: always shown).
@@ -395,4 +448,4 @@ Remote terminal opening on a large save dropped from 58,221 cost units to 12 (�
 
 **Upgrading from `1.0.0`**
 
-No world rebuild, no machine or cable replacement, and no pattern regeneration — this release does not change the pattern NBT layout. Buses previously mis-disabled will recover on their own. Suspended tasks still need a manual Resume. Diagnostic logging now defaults to off, so run `/rs_create_compat devlogs on` before reporting an issue. Requires Minecraft `1.21.1`, NeoForge `21.1.x`, Create `6.0.x`, Refined Storage 2 `2.0.0`, Curios API `9.0.0` and Refined Storage Curios Integration `1.0.0`. JEI, Jade and FTB Ultimine are optional.
+No world rebuild, no machine or cable replacement, and no pattern regeneration — this release does not change the pattern NBT layout. Buses previously mis-disabled will recover on their own. Suspended tasks still need a manual Resume. Diagnostic logging now defaults to off, so run `/rs_create_compat devlogs on` before reporting an issue. Requires Minecraft `1.21.1`, NeoForge `21.1.x`, Create `6.0.x`, Refined Storage 2 `2.0.9`, Curios API `9.0.0` and Refined Storage Curios Integration `1.0.0`. JEI, Jade and FTB Ultimine are optional.
