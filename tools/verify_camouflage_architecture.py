@@ -23,6 +23,11 @@ except Exception:
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 缓存根统一跟随 GRADLE_USER_HOME（本机 = D:\gradle\caches，Gradle 真正在用的那个）；
+# 以前这里写死 ~/.gradle/caches，两个根里的 MC 编译产物不是同一批 parchment 映射 ⇒ 取证错位。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gradle_cache as gc  # noqa: E402  （必须在 sys.path 调整之后再导入）
+
 PKG = os.path.join(ROOT, "src", "main", "java", "cretae", "cookiewyq", "rs_create_compat")
 CREATE = os.path.join(ROOT, "local_src", "external", "Create", "src", "main", "java")
 
@@ -458,12 +463,14 @@ else:
     check(_platform is not None and MARKER_GET_MODEL_DATA not in _platform,
           "⑦3 单格分支<b>从不</b>调用 BakedModel.getModelData（该 class 的常量池里没有它的描述符）"
           "⇒ CamouflageShellModel#gatherModelData 在单格路径下不会被调用（外壳因此零四元组）")
-    _mc_jars = glob.glob(os.path.join(os.path.expanduser("~"), ".gradle", "caches",
-                                      "neoformruntime", "intermediate_results",
-                                      "compiledWithNeoForge_*_output.jar"))
-    if _mc_jars:
+    # MC 编译产物：多份候选（不同 parchment 映射批次）时取 mtime 最新，并打印选的是哪一份
+    # （原先取 glob[0]，顺序由目录枚举决定 ⇒ 换台机器/换目录布局就可能变）。
+    _mc_jar, _mc_notes = gc.find_mc_jar()
+    for _line in _mc_notes:
+        print("  " + _line.strip())
+    if _mc_jar:
         import zipfile as _zf
-        with _zf.ZipFile(_mc_jars[0]) as _mc:
+        with _zf.ZipFile(_mc_jar) as _mc:
             _section = _mc.read("net/minecraft/client/renderer/chunk/SectionCompiler.class")
         check(MARKER_GET_MODEL_DATA in _section,
               "⑦4 对照：常规区块 / 多格子关卡走 SectionCompiler，而它<b>明确调用</b> "

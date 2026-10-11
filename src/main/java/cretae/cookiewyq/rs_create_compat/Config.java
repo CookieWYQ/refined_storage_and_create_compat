@@ -62,6 +62,13 @@ public class Config {
         .comment("是否给范围内玩家手持/背包中的可充电物品供电（如无线终端）。")
         .define("rangeChargerChargePlayerItems", true);
 
+    private static final ModConfigSpec.IntValue RANGE_CHARGER_CURIOS_SCAN_INTERVAL = BUILDER
+        .comment("范围充电器扫描玩家饰品槽（Curios）的间隔（tick）。默认 5（每 0.25 秒一次）。",
+            "背包 / 快捷栏 / 盔甲 / 副手仍然每 tick 扫描（既有行为不变），饰品槽按本间隔节流，",
+            "避免「每 tick 遍历所有玩家所有饰品槽」这种纯浪费；调大 = 更省，调小 = 充电更快。",
+            "未安装 Curios 时这一项没有任何效果（扫描直接跳过，不报错）。")
+        .defineInRange("rangeChargerCuriosScanInterval", 5, 1, 1200);
+
     // ========== 定量保持器 ==========
     private static final ModConfigSpec.IntValue QUANTITY_KEEPER_ENERGY_USAGE = BUILDER
         .comment("定量保持器每 tick 的网络能量消耗（FE）。")
@@ -234,6 +241,17 @@ public class Config {
             "本项在配置加载事件里读取一次，改动后需要重启客户端 / 服务端才生效。")
         .define("wrenchCableDisconnectMode", "seam");
 
+    // ========== Jade 总线提示（用户第 8 项：默认一直显示，可切成「按 Shift 显示」） ==========
+    private static final ModConfigSpec.ConfigValue<String> JADE_BUS_TOOLTIP_MODE = BUILDER
+        .comment("序列装配总线（输入总线 / 输出总线）在 Jade 瞄准提示里显示「归属执行仓 + 负责的类别」的方式，"
+            + "取值二选一：",
+            "always = 一直显示（默认）；",
+            "shift  = 按住 Shift 才显示（没按住时只留一行「按住 Shift 查看总线状态」）。",
+            "本项是纯客户端表现：服务端读不到也用不到它，专服与单人世界的行为不会因此分叉。",
+            "运行时切换：这一项每次画提示时都重新读，配置被重载（游戏内改配置 / 重载配置）后"
+                + "立刻生效，不需要重启客户端。")
+        .define("jadeBusTooltipMode", "always");
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean logDirtBlock;
@@ -250,6 +268,8 @@ public class Config {
     public static boolean rangeChargerChargeBlocks;
     public static boolean rangeChargerChargeItems;
     public static boolean rangeChargerChargePlayerItems;
+    /** 饰品槽（Curios）扫描间隔（tick）：背包族每 tick 扫，饰品槽按这个周期扫，见 {@link #RANGE_CHARGER_CURIOS_SCAN_INTERVAL}。 */
+    public static int rangeChargerCuriosScanInterval;
     public static int quantityKeeperEnergyUsage;
     public static int quantityKeeperDefaultTarget;
     public static int quantityKeeperDestroyRate;
@@ -292,6 +312,12 @@ public class Config {
     /** 扳手分离 RS 线缆的生效档位（seam / face / off，见 {@link #WRENCH_CABLE_DISCONNECT_MODE}）。 */
     public static cretae.cookiewyq.rs_create_compat.support.RsccCableCuts.Mode wrenchCableDisconnectMode =
         cretae.cookiewyq.rs_create_compat.support.RsccCableCuts.Mode.SEAM;
+    /**
+     * Jade 总线提示是否<b>只在按住 Shift 时</b>显示（{@code false} = 一直显示，这是默认值）。
+     * <p>由 {@link #JADE_BUS_TOOLTIP_MODE} 解析而来（{@code always} / {@code shift}）；
+     * 客户端每画一次提示就读一次，因此配置重载后立刻生效。</p>
+     */
+    public static boolean jadeBusTooltipShiftOnly = false;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
@@ -312,6 +338,7 @@ public class Config {
         rangeChargerChargeBlocks = RANGE_CHARGER_CHARGE_BLOCKS.get();
         rangeChargerChargeItems = RANGE_CHARGER_CHARGE_ITEMS.get();
         rangeChargerChargePlayerItems = RANGE_CHARGER_CHARGE_PLAYER_ITEMS.get();
+        rangeChargerCuriosScanInterval = RANGE_CHARGER_CURIOS_SCAN_INTERVAL.get();
 
         quantityKeeperEnergyUsage = QUANTITY_KEEPER_ENERGY_USAGE.get();
         quantityKeeperDefaultTarget = QUANTITY_KEEPER_DEFAULT_TARGET.get();
@@ -359,6 +386,13 @@ public class Config {
             wrenchCableDisconnectMode = cretae.cookiewyq.rs_create_compat.support.RsccCableCuts.Mode.SEAM;
             LOGGER.warn("未知的 wrenchCableDisconnectMode 取值「{}」，已回落到 seam（可选 seam / face / off）",
                 rawDisconnectMode);
+        }
+
+        // Jade 总线提示档位：只认 always / shift，写错一律回落到默认档 always（一直显示 —— 默认档必须最安全）
+        final String jadeBusMode = JADE_BUS_TOOLTIP_MODE.get();
+        jadeBusTooltipShiftOnly = "shift".equalsIgnoreCase(jadeBusMode);
+        if (!jadeBusTooltipShiftOnly && !"always".equalsIgnoreCase(jadeBusMode)) {
+            LOGGER.warn("未知的 jadeBusTooltipMode 取值「{}」，已回落到 always（可选 always / shift）", jadeBusMode);
         }
 
         // convert the list of strings into a set of items

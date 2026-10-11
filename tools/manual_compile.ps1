@@ -3,7 +3,6 @@
 
 $ErrorActionPreference = "Continue"
 $root = "d:\MODS\refined_storage_and_create_compat"
-$gradleCache = "C:\Users\70432\.gradle\caches"
 $javac = "D:\java21\bin\javac.exe"
 $outDir = "$root\build\manual_compile"
 $logFile = "$root\build\manual_compile.log"
@@ -31,27 +30,29 @@ if (Test-Path $stampScript) {
 }
 
 # 1) collect classpath jars (MC compiled artifact + all deps)
+#    缓存根与「同族多版本去重」统一交给 tools\_gradle_cache.ps1：
+#      * 缓存根**跟随 GRADLE_USER_HOME**（本机 = D:\gradle\caches，Gradle 真正在用的那个）。
+#        原先这里写死 C:\Users\70432\.gradle\caches，而两个根里的制品版本并不一致
+#        （RS 2.0.0 vs 2.0.9），于是「编译通过」证明的不是 Gradle 实际用的那一份。
+#      * 按 (group, artifact, classifier) 去重，每族只留一个版本（pin 优先，其次版本号最高）。
+#        原先「全量 glob 拼 classpath」会把同族多版本一起塞进去，谁生效取决于目录枚举顺序。
 #    注意：Jade 是「工程内本地制品」（libs/jade-15.10.5+neoforge.jar，见 build.gradle 的说明），
-#    因此这里 (a) 显式加入 libs\*.jar，(b) 从 Gradle 缓存里排除同名/同族的 jade 制品，
+#    因此 helper (a) 显式加入 libs\*.jar，(b) 从 Gradle 缓存里排除同名/同族的 jade 制品，
 #    保证**编译脚本与 Gradle 构建用的是同一份制品**（不会出现「缓存里躺着一个旧版本」的歧义）。
+. "$PSScriptRoot\_gradle_cache.ps1"
+$artifacts = Get-RsccGradleArtifacts -ProjectRoot $root
 $jars = New-Object System.Collections.Generic.List[string]
-$mcJar = Get-ChildItem "$gradleCache\neoformruntime\intermediate_results" -Filter "compiledWithNeoForge_*_output.jar" | Select-Object -First 1
-if ($mcJar) { $jars.Add($mcJar.FullName) }
-$libsDir = "$root\libs"
-if (Test-Path $libsDir) {
-    Get-ChildItem $libsDir -Filter "*.jar" | ForEach-Object { $jars.Add($_.FullName) }
-} else {
-    Write-Output "[warn] 找不到 $libsDir（Jade 等本地可选依赖制品应放在这里）"
-}
-Get-ChildItem "$gradleCache\modules-2\files-2.1" -Recurse -Filter "*.jar" |
-    Where-Object {
-        $_.Name -notmatch "sources|javadoc" -and
-        $_.Name -notmatch "natives-windows" -and
-        $_.Name -notmatch "^(?i)jade-" -and
-        $_.FullName -notmatch "parchment|fabric-loader|yarn|sponge-mixin-transformer"
-    } |
-    ForEach-Object { $jars.Add($_.FullName) }
+if ($artifacts.McJar) { $jars.Add($artifacts.McJar) }
+foreach ($lib in $artifacts.LibJars) { $jars.Add($lib) }
+foreach ($mod in $artifacts.ModuleJars) { $jars.Add($mod) }
 $classpath = ($jars | Select-Object -Unique) -join ";"
+
+# 自证块：用了哪个缓存 / 哪些版本 / 排除了什么（被排除的版本绝不静默）。
+Write-Output "MANUAL_COMPILE_CACHE path=$($artifacts.CachePath) source=$($artifacts.CacheSource)"
+Write-Output "MANUAL_COMPILE_CLASSPATH jars=$($jars.Count) scanned=$($artifacts.ScannedJars) excludedDupes=$($artifacts.Excluded.Count)"
+Write-Output "MANUAL_COMPILE_PINVERSIONS rs=$(Get-RsccVersionSummary -Artifacts $artifacts)"
+foreach ($warn in $artifacts.Warnings) { Write-Output "MANUAL_COMPILE_WARN $warn" }
+foreach ($line in $artifacts.Excluded) { Write-Output "MANUAL_COMPILE_EXCLUDED $line" }
 
 # 2) source files as array (must not be joined into one arg)
 $sources = @(Get-ChildItem "$root\src\main\java" -Recurse -Filter "*.java" | ForEach-Object { $_.FullName })
@@ -71,7 +72,27 @@ foreach ($l in $argLines) { $escaped.Add($l.Replace('\', '\\')) }
 [System.IO.File]::WriteAllLines($argfile, $escaped)
 
 # 4) run javac (-proc:none skips Mixin AP mapping check; runtime remap unaffected)
-& $javac -proc:none "-J-Dfile.encoding=UTF-8" "@$argfile" *> $logFile
+#    【2026-10-10 修】原实现用固定日志名 "$root\build\manual_compile.log"。
+#    多个 agent / 会话并行跑本脚本时该文件被占用，PowerShell 的重定向（Out-File）打开失败，
+#    javac 根本没执行，而 $LASTEXITCODE 仍是上一条命令（上面 gen_build_info.py）的 0
+#    => 脚本会打印**假阳性**的 "COMPILE OK"。并发开发期这会让人误信编译通过。
+#    两道防线：(a) 日志名带 PID，从根本上消除占用冲突；
+#              (b) 先删后查——javac 跑完若日志文件不存在或没被本轮创建，判定为「编译未真正执行」并失败。
+$logFile = "$root\build\manual_compile.$PID.log"
+Remove-Item $logFile -Force -ErrorAction SilentlyContinue
+$logCreated = $false
+try {
+    & $javac -proc:none "-J-Dfile.encoding=UTF-8" "@$argfile" *> $logFile
+    $logCreated = Test-Path $logFile
+} catch {
+    Write-Output "===== COMPILE FAILED: 无法执行 javac 或无法写日志 $logFile ====="
+    Write-Output $_
+    exit 125
+}
+if (-not $logCreated) {
+    Write-Output "===== COMPILE FAILED: javac 未产生日志（重定向失败 / 未执行），不是编译通过 ====="
+    exit 125
+}
 $exitCode = $LASTEXITCODE
 $output = Get-Content $logFile -Encoding Default
 $errors = $output | Where-Object { $_ -match "error|cannot find|错误|符号" }

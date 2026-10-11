@@ -108,7 +108,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
      *     <tr><td>18</td><td>缓存区最大偏移（页）</td></tr>
      *     <tr><td>19</td><td>「多个输入面」开关位（位 = Direction.ordinal()，默认 63 = 六面全开）</td></tr>
      *     <tr><td>20</td><td>红石模式（0=忽略 / 1=高电平工作 / 2=低电平工作，与 RS 原版机器同一套编码）</td></tr>
-     *     <tr><td>21</td><td>经验形态（{@link XpForm#ordinal()}：0=经验球实体 / 1=液态经验；「自动」已删除）</td></tr>
+     *     <tr><td>21</td><td>经验存储形态（{@link XpForm#ordinal()}：0=折算成经验颗粒 / 1=折算成液态经验；「自动」已删除）</td></tr>
      *     <tr><td>22</td><td>「吸取所有物品」开关（1=开 / 0=关；开启后匹配区失效）</td></tr>
      *     <tr><td>23</td><td>「反转匹配」开关（1=开 / 0=关；匹配区白名单 ↔ 黑名单）</td></tr>
      *     <tr><td>24</td><td>缓存区物品总件数（销毁确认界面展示；截断）</td></tr>
@@ -148,7 +148,12 @@ public class CollectionCacheMenu extends AbstractContainerMenu
      * 因此读值时必须显式映射到方块实体的 16 —— 直接用默认分支会读到不存在的槽而恒为 0。</p>
      */
     private static final int BLOCK_DATA_REDSTONE_MODE = 16;
-    /** 经验形态（{@link XpForm#ordinal()}）：服务端写入方块实体、客户端据此刷新按钮文案。 */
+    /**
+     * 经验存储形态（{@link XpForm#ordinal()}）：服务端写入方块实体、客户端据此刷新按钮文案。
+     * <p><b>读侧必须走 {@link XpForm#byOrdinal(int)}</b>（见下方 {@code getXpForm()}）：槽里传的是序号，
+     * 液态的现行序号是 1 而旧存档写的是 2 —— 只认后者会把「液态」静默读成「颗粒」，
+     * 于是按钮怎么点都显示颗粒。这是本轮修的那个 bug 的两条落点之一（另一条是 C2S 包的解码）。</p>
+     */
     private static final int DATA_XP_FORM = 21;
     /**
      * 第 7 轮新增的两个开关（1=开 / 0=关）：

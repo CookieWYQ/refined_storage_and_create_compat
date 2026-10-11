@@ -21,6 +21,7 @@ import cretae.cookiewyq.rs_create_compat.network.SetStepMachinePacket;
 import cretae.cookiewyq.rs_create_compat.network.SetStepSkipDuplicatePacket;
 import cretae.cookiewyq.rs_create_compat.network.SyncChamberListPacket;
 import cretae.cookiewyq.rs_create_compat.network.SyncStepMachinesPacket;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -260,15 +261,35 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     private String lastSearch = "";
     /** 被点击选中的卡片行（全局步下标，-1 = 无）：用于卡片的“选中”三态。 */
     private int selectedRow = -1;
-    /** 配方类型 → 「能执行它的机器」缓存（客户端懒加载；避免每帧反查配方）。 */
-    private final java.util.Map<String, java.util.List<RecipeTypeMachines.Machine>> machineCache =
+    /**
+     * 配方类型 → 「能执行它的机器」缓存（键含客户端世界身份，换存档 / 换维度即失效）。
+     * <p><b>第 49 轮：从「每个界面实例一份」改成「整个客户端会话一份」</b>。旧实现把这几张缓存挂在
+     * 界面实例上（构造时新建），于是<b>每次按快捷键开终端都要重建一遍</b>：逐个配方类型去配方表里
+     * 反查机器（还要探 32 条配方的 {@code getToastSymbol()}），以及逐步骤按配方解析候选组 / 过渡件。
+     * 这些结果只取决于「客户端世界 + 配方表」，与界面实例无关，缓存跨实例复用是纯赚。
+     * 失效维度只有「客户端世界」：{@link #ensureCacheOwner()} 发现世界换了就整批清空。</p>
+     */
+    private static final java.util.Map<String, java.util.List<RecipeTypeMachines.Machine>> machineCache =
         new java.util.HashMap<>();
-    /** 序列装配配方 ingredient 的候选缓存（键 = 配方 id）：避免每帧重扫标签。 */
-    private final java.util.Map<String, List<ItemStack>> assemblyInputCache = new java.util.HashMap<>();
-    /** 「优先复用中间产物」打开时，该配方过渡件的解析结果缓存（键 = 候选缓存键）：避免每帧查配方。 */
-    private final java.util.Map<String, ItemStack> reuseIntermediateCache = new java.util.HashMap<>();
-    /** 每步处理配方 ingredient 的候选缓存（键 = 配方 id + '#' + 步序）。 */
-    private final java.util.Map<String, List<ItemStack>> stepInputCache = new java.util.HashMap<>();
+    /** 序列装配配方 ingredient 的候选缓存（键 = 配方 id）：跨界面实例复用，见 {@link #machineCache}。 */
+    private static final java.util.Map<String, List<ItemStack>> assemblyInputCache = new java.util.HashMap<>();
+    /** 「优先复用中间产物」打开时，该配方过渡件的解析结果缓存（键 = 候选缓存键）：跨界面实例复用。 */
+    private static final java.util.Map<String, ItemStack> reuseIntermediateCache = new java.util.HashMap<>();
+    /** 每步处理配方 ingredient 的候选缓存（键 = 配方 id + '#' + 步序）：跨界面实例复用。 */
+    private static final java.util.Map<String, List<ItemStack>> stepInputCache = new java.util.HashMap<>();
+    /** 上面四张缓存当前归属的客户端世界（用于判「世界换了 ⇒ 整批作废」）。 */
+    private static net.minecraft.world.level.Level cacheOwner;
+    /**
+     * 机器列表（{@code SyncChamberListPacket}）的派生缓存：上一次快照对象 + 「配方类型 + 搜索词」→ 列表。
+     * <p><b>为什么要它</b>：{@link #chambersFor} 在渲染时每个可见行要问它好几次（机器名、有没有机器、
+     * 箭头是否可点），而旧实现每次调用都<b>现场过滤 + 现场排序 + 现场分配</b>一个新列表
+     * （O(执行仓数 log 执行仓数) × 每帧 20 次以上）。列表本身只随服务端快照或搜索词变化，
+     * 因此按这两个维度缓存即可，命中时一次比较就能拿到同一份不可变列表。</p>
+     */
+    private static List<SyncChamberListPacket.Entry> chamberCacheSource = List.of();
+    private static String chamberCacheQuery = "";
+    private static final java.util.Map<String, List<SyncChamberListPacket.Entry>> chamberCache =
+        new java.util.HashMap<>();
 
     public SequencePatternTerminalScreen(final SequencePatternTerminalMenu menu,
                                          final Inventory inventory,
@@ -278,6 +299,22 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         this.imageHeight = BG_H;
         this.titleLabelY = 10000;     // 标题全部由本类按文档坐标绘制
         this.inventoryLabelY = 10000;
+    }
+
+    /**
+     * 四张跨实例缓存的世界归属检查：世界换了（换存档 / 换维度 / 退回标题）就整批清空。
+     * <p>不这样做的话，旧存档里某条配方 id 的候选组会被带进新存档显示（客户端缓存没有别的失效入口）。</p>
+     */
+    private static void ensureCacheOwner() {
+        final net.minecraft.world.level.Level level = Minecraft.getInstance().level;
+        if (level == cacheOwner) {
+            return;
+        }
+        cacheOwner = level;
+        machineCache.clear();
+        assemblyInputCache.clear();
+        reuseIntermediateCache.clear();
+        stepInputCache.clear();
     }
 
     @Override
@@ -579,23 +616,40 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         if (query.isEmpty()) {
             return chambersForType(recipeType);
         }
+        ensureChamberCache();
+        final String key = recipeType + "\u0000" + query;
+        final List<SyncChamberListPacket.Entry> cached = chamberCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
         final List<SyncChamberListPacket.Entry> result = new ArrayList<>();
         for (final SyncChamberListPacket.Entry chamber : chambersForType(recipeType)) {
             if (chamber.name().toLowerCase(Locale.ROOT).contains(query)) {
                 result.add(chamber);
             }
         }
-        return result;
+        // 冻结成不可变列表再入缓存：调用方只读，避免任何一条路径拿回去改坏缓存
+        final List<SyncChamberListPacket.Entry> frozen = List.copyOf(result);
+        chamberCache.put(key, frozen);
+        return frozen;
     }
 
     /**
      * 该配方类型下的<b>全部</b>候选执行仓（按坐标排序，<b>不</b>受顶部搜索框过滤）。
      * <p>给「机器选择」子界面用：它自带搜索框，若父界面先按自己的搜索词砍一刀，
      * 玩家在子界面里就搜不到那些被父界面过滤掉的机器。</p>
+     * <p><b>第 49 轮：结果按「快照 + 配方类型」缓存</b>。旧实现每次调用都现场过滤 + 现场排序 + 新建列表，
+     * 而渲染时每个可见行要问它好几次（机器名 / 有没有机器 / 箭头是否可点），一帧几十次分配与排序。
+     * 列表只随服务端快照变化，因此用快照对象身份做失效维度即可。</p>
      */
     private List<SyncChamberListPacket.Entry> chambersForType(final String recipeType) {
         if (recipeType == null || recipeType.isEmpty()) {
             return List.of();
+        }
+        ensureChamberCache();
+        final List<SyncChamberListPacket.Entry> cached = chamberCache.get(recipeType);
+        if (cached != null) {
+            return cached;
         }
         final List<SyncChamberListPacket.Entry> result = new ArrayList<>();
         for (final SyncChamberListPacket.Entry chamber : SyncChamberListPacket.getLastReceived()) {
@@ -604,7 +658,25 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             }
         }
         result.sort(java.util.Comparator.comparingLong((SyncChamberListPacket.Entry c) -> c.pos().asLong()));
-        return result;
+        final List<SyncChamberListPacket.Entry> frozen = List.copyOf(result);
+        chamberCache.put(recipeType, frozen);
+        return frozen;
+    }
+
+    /**
+     * 机器列表派生缓存的失效检查：服务端快照换了对象、搜索词变了 ⇒ 整批作废。
+     * <p>{@code SyncChamberListPacket.getLastReceived()} 每次收包都是一个新列表对象，因此身份比较就够了；
+     * 搜索词必须单独记一份，否则「同一份快照 + 换了搜索词」会命中按旧词过滤的缓存（筛错行）。</p>
+     */
+    private void ensureChamberCache() {
+        final List<SyncChamberListPacket.Entry> source = SyncChamberListPacket.getLastReceived();
+        final String query = searchQuery();
+        if (source == chamberCacheSource && query.equals(chamberCacheQuery)) {
+            return;
+        }
+        chamberCacheSource = source;
+        chamberCacheQuery = query;
+        chamberCache.clear();
     }
 
     /** 该步要显示的机器名（已指派用指派值；未指派用该配方类型下第一台作预览；都没有则空串）。 */
@@ -828,6 +900,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             return List.of();
         }
         final String key = candidateCacheKey(unit);
+        ensureCacheOwner(); // 换世界 ⇒ 整批作废（见 machineCache 的 javadoc）
         final List<ItemStack> cached = assemblyInputCache.get(key);
         if (cached != null) {
             return cached;
@@ -926,6 +999,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             return ItemStack.EMPTY;
         }
         final String key = candidateCacheKey(unit);
+        ensureCacheOwner(); // 换世界 ⇒ 整批作废（见 machineCache 的 javadoc）
         final ItemStack cached = reuseIntermediateCache.get(key);
         if (cached != null) {
             return cached;
@@ -1052,6 +1126,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         }
         final net.minecraft.world.level.Level level = clientLevel();
         final String key = candidateCacheKey(unit) + "#" + unit.step();
+        ensureCacheOwner(); // 换世界 ⇒ 整批作废（见 machineCache 的 javadoc）
         final List<ItemStack> cached = stepInputCache.get(key);
         if (cached != null) {
             return fromCache(cached, unit);
@@ -1596,6 +1671,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         if (recipeType == null || recipeType.isEmpty()) {
             return java.util.List.of();
         }
+        ensureCacheOwner(); // 换世界 ⇒ 整批作废（见 machineCache 的 javadoc）
         return machineCache.computeIfAbsent(recipeType, RecipeTypeMachines::forRecipeType);
     }
 
@@ -2078,8 +2154,10 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         if (!fluid.isEmpty()) {
             lines.add(Component.translatable(LANG + "card.fluid",
                 fluid.getHoverName(),
-                cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer
-                    .fluidAmount(fluid.getAmount())));
+                // 数量文案与 RS 规则一致（≥1 桶写 B、否则 mB），由本类的本地格式化给出：
+                // 共享的格式器（GhostMarkerRenderer#fluidAmount）正在被另一处改动删除，
+                // 本类不再依赖它，避免「别人的改动把本终端界面一起编译不过」。
+                fluidAmountText(fluid.getAmount())));
         }
         // 该步是否需要输入原料：判据必须<b>同时</b>覆盖物品与流体——
         // 否则「需要岩浆」这类纯流体步骤会被误报成「该步不需要输入原料」（用户实测问题）。
@@ -2091,6 +2169,22 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             lines.add(Component.translatable(LANG + "card.no_item_input"));
         }
         return lines;
+    }
+
+    /**
+     * 流体数量文案（与 RS 原版规则一致）：{@code ≥1 桶} 写 {@code B}（保留 1 位小数），否则写 {@code mB}。
+     * <p><b>为什么本类自带这一份</b>：原来调用的是 {@code GhostMarkerRenderer#fluidAmount}，
+     * 而那个共享方法在另一处改动中被删除（同一次改动还留在别的界面里没改完）。
+     * 终端界面的这一步 tooltip 与那个改动毫无关系，因此把这几行留在本类里，
+     * 保证「别人的改动」不会把本终端界面一起拖成编译不过；输出文本与旧实现逐字相同。</p>
+     */
+    private static String fluidAmountText(final long mB) {
+        if (mB >= 1000L) {
+            final long whole = mB / 1000L;
+            final long frac = (mB % 1000L) / 100L;
+            return frac == 0 ? whole + "B" : whole + "." + frac + "B";
+        }
+        return mB + "mB";
     }
 
     /** 方块世界实例（客户端菜单也持有 ClientLevel；不可用时返回 null）。 */

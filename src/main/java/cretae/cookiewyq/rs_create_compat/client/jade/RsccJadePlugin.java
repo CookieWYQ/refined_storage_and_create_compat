@@ -1,7 +1,10 @@
 package cretae.cookiewyq.rs_create_compat.client.jade;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.compat.jade.RsccBusJadeServerData;
 import cretae.cookiewyq.rs_create_compat.support.RsccCamouflageDisplay;
+import com.refinedmods.refinedstorage.common.exporter.ExporterBlock;
+import com.refinedmods.refinedstorage.common.importer.ImporterBlock;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
@@ -10,6 +13,7 @@ import org.jetbrains.annotations.Nullable;
 import snownee.jade.api.BlockAccessor;
 import snownee.jade.api.IBlockComponentProvider;
 import snownee.jade.api.IWailaClientRegistration;
+import snownee.jade.api.IWailaCommonRegistration;
 import snownee.jade.api.IWailaPlugin;
 import snownee.jade.api.ITooltip;
 import snownee.jade.api.WailaPlugin;
@@ -18,10 +22,29 @@ import snownee.jade.api.ui.IElement;
 import snownee.jade.api.ui.IElementHelper;
 
 /**
- * <b>Jade（指向信息模组）的可选接入</b>：让「被伪装的方块」在瞄准提示里显示成
- * <b>图标 = 填充方块</b>、<b>文本 = 原部件类型 +「（被伪装）」</b>、<b>详细信息 ID 仍按原部件</b>
- * （用户第 2 条）。三条口径<b>全部</b>取自 {@link RsccCamouflageDisplay} —— 本类只负责
- * 「把它们交给 Jade」，不自己判一次「是不是被伪装」（否则就是第二份口径，迟早漂移）。
+ * <b>Jade（指向信息模组）的可选接入</b>。本插件有两条互不干扰的接入：
+ *
+ * <ol>
+ *     <li><b>被伪装的方块</b>：让它在瞄准提示里显示成 <b>图标 = 填充方块</b>、
+ *     <b>文本 = 原部件类型 +「（被伪装）」</b>、<b>详细信息 ID 仍按原部件</b>（用户第 2 条）。
+ *     三条口径<b>全部</b>取自 {@link RsccCamouflageDisplay} —— 本类只负责「把它们交给 Jade」，
+ *     不自己判一次「是不是被伪装」（否则就是第二份口径，迟早漂移）；</li>
+ *     <li><b>序列装配总线的状态</b>（用户第 8 项 / 任务 A）：与哪台执行仓绑定、按
+ *     「原料 / 输入时原料 / 流体 / 成品 / 废料 / 中间产物」六节列出它此刻负责什么、
+ *     输入总线是否全自动。数据由 {@link RsccBusJadeServerData} 从<b>服务端</b>方块实体取
+ *     （客户端读不到，见那个类的说明），文案与分组在
+ *     {@code compat/jade/RsccBusJadePayload}，客户端只按配置决定显不显示
+ *     （{@code client/jade/RsccBusJadeProvider}）。</li>
+ * </ol>
+ *
+ * <h2>为什么客户端注册与服务端注册要分成两个方法（专服安全）</h2>
+ * <p>{@link #register(IWailaCommonRegistration)} 在<b>专用服务端</b>也会被 Jade 调用，
+ * 因此它<b>只</b>引用 {@link RsccBusJadeServerData}（公共类型：NBT / 注册表 / 现有的方块实体桥接接口），
+ * 一个 {@code net.minecraft.client.*} 类型都不碰；客户端专属的图标 / 文本提供者只出现在
+ * {@link #registerClient(IWailaClientRegistration)} 里 —— 那个方法在专服上根本不会被调用。
+ * 这条分工正是本工程「专服注册期绝不能引用客户端类型」硬约束的落点
+ * （见 {@code tools/selfcheck_round47_dedicated_server_safety.py} 与
+ * {@code tools/selfcheck_round54_jade_bus.py}）。</p>
  *
  * <h2>为什么这是「可选依赖」，未安装 Jade 一定不影响启动</h2>
  * <ul>
@@ -36,12 +59,16 @@ import snownee.jade.api.ui.IElementHelper;
  * <p>Jade 的插件发现走它自己的注解扫描（{@code @WailaPlugin} 类由 Jade 在加载期收集），
  * 因此本类必须留在<b>本模组自己的 jar</b> 里（不能搬去别的源集，否则它扫不到）。</p>
  *
- * <h2>为什么注册给 {@code Block.class}（所有方块）</h2>
+ * <h2>为什么伪装提供者注册给 {@code Block.class}（所有方块）</h2>
  * <p>被伪装的方块<b>不是某一个方块类型</b>：世界那一格仍然是 RS 的线缆 / 输入总线 / 输出总线，
  * 或 Create 的流体管道 / 传动杆 —— 四五个不同的类。Jade 的注册 API 按<b>方块类</b>注册，
  * 逐个列出必然漏掉将来新增的同族方块；注册给「所有方块」+ 在方法里先问一次数据来源
  * （{@link RsccCamouflageDisplay#hasFilledBlock} 是纯记录查询，未伪装的格子第一句就返回）代价极小，
  * 却天然覆盖全部现状与将来的同族方块。</p>
+ *
+ * <h2>为什么总线那两条注册只给「输入总线 / 输出总线」两个类</h2>
+ * <p>总线那条路要在<b>服务端</b>跑一遍组装（读归属 + 读类别快照）。注册给所有方块等于玩家看每一格
+ * 都白跑一次；注册给这两个具体类则只有真的在看总线时才跑（Jade 的层级查找自动覆盖两个类的染色变体）。</p>
  */
 @WailaPlugin
 public class RsccJadePlugin implements IWailaPlugin {
@@ -49,6 +76,28 @@ public class RsccJadePlugin implements IWailaPlugin {
     @Override
     public void registerClient(final IWailaClientRegistration registration) {
         registration.registerBlockComponent(new CamouflageProvider(), Block.class);
+        // 总线状态：输入总线 / 输出总线各注册同一条文本 provider（服务端数据的两条注册见 register()）
+        final RsccBusJadeProvider bus = new RsccBusJadeProvider();
+        registration.registerBlockComponent(bus, ImporterBlock.class);
+        registration.registerBlockComponent(bus, ExporterBlock.class);
+    }
+
+    /**
+     * 公共注册（<b>专用服务端也会走这里</b>）：把「总线状态」的服务端数据提供者挂到两条总线上。
+     *
+     * <p><b>为什么放在这里而不是自己发同步包</b>：Jade 官方的服务端数据通道就是为这件事准备的 ——
+     * 客户端请求、目标校验、只发给正在看这一格的玩家，全部由 Jade 负责；本模组一个自定义包都不用加。
+     * 两个方块类<b>共用同一个 provider 实例</b>：它无状态，且 Jade 按 UID 去重 / 排序，
+     * 多个实例只会让「同一个 UID 出现在两张表里」这种无意义的歧义出现。</p>
+     *
+     * <p><b>本方法内一个字都不能提客户端类型</b>：{@code RsccBusJadeServerData} 与它调用的
+     * {@code RsccBusJadePayload} 都只用公共类型（NBT / 注册表 / {@code Component}）。</p>
+     */
+    @Override
+    public void register(final IWailaCommonRegistration registration) {
+        final RsccBusJadeServerData provider = new RsccBusJadeServerData();
+        registration.registerBlockDataProvider(provider, ImporterBlock.class);
+        registration.registerBlockDataProvider(provider, ExporterBlock.class);
     }
 
     /**

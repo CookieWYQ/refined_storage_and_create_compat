@@ -107,8 +107,16 @@ def collapse_by_chain(sorted_positions, chambers):
 
 
 def ambiguous(reachable, exhaustive=True):
-    """LinkWalk#ambiguous 的复刻（reachable 已是按链去重的表）。"""
-    return len(reachable) >= 2 or (len(reachable) == 1 and not exhaustive)
+    """LinkWalk#ambiguous 的复刻（reachable 已是按链去重的表）。
+
+    2026-10-11（round60）更新：旧复刻是 `len(reachable) >= 2 or (len(reachable) == 1 and not exhaustive)`。
+    那个「恰好 1 条链但未穷尽 ⇒ 停用」的合取项已被本轮删除 —— 线缆一长 / 总线一多时旧实现的搜链
+    会**静默截断**，于是「暂时没扫完」被当成「归属未确定 ⇒ 停用」，正是玩家看到的
+    「总线变红条 / 变普通 / 整个停用」。现在停用只由「≥2 条不同的链（真歧义）」判定；
+    `exhaustive` 参数保留只为兼容既有调用点，不再参与判据
+    （详见 tools/selfcheck_round60_wirelink_exhaustive.py）。
+    """
+    return len(reachable) >= 2
 
 
 def report(reachable, exhaustive=True):
@@ -163,14 +171,24 @@ def main():
     section("K1 去重发生在「产出 reachable」的那一步（唯一实现里），不是判定侧")
     check("锚点① 唯一实现里新增 private static collapseByChain",
           "private static List<BlockPos> collapseByChain(" in linksearch)
-    check("锚点② searchChamberLink 在排序后立刻按链去重，LinkWalk 收的是去重表（不是原表）",
-          "final List<BlockPos> distinct = collapseByChain(reachable, chambers);" in linksearch
-          and "return new LinkWalk(chambers.get(distinct.get(0)), List.copyOf(distinct)," in linksearch
+    # 2026-10-11（round60）更新：②③ 原本锚定 `searchChamberLink` 里的「排序 → 去重 → new LinkWalk」
+    # 三段。本轮把搜链改成**可续扫洪泛**（只有整趟扫完才发布、续扫期间对外沿用上一次完整结果），
+    # 于是这三段落到了 `WireFlood#publish`（排序 + 去重 + 写快照）与 `WireFlood#toWalk`（快照 → LinkWalk）。
+    # 语义一字未变：仍是「先距离近、再坐标字典序」+「按链去重」，且 LinkWalk 收的仍是**去重后**的表。
+    # 断言按「方法体内是否出现该语义」写，不锚定局部变量名（改名不该让语义断言失败）。
+    publish_java = strip_comments(body(linksearch, "private void publish(final Level level, final long now) {",
+                                       "private LinkWalk toWalk("))
+    to_walk_java = strip_comments(body(linksearch, "private LinkWalk toWalk(", "\n    }\n"))
+    check("锚点② 唯一实现里「排序 → 按链去重 → 写快照 → 快照 → LinkWalk」是一条链，"
+          "LinkWalk 收的是去重表（不是原表）",
+          "snapshotReachable = List.copyOf(collapseByChain(" in publish_java
+          and "new LinkWalk(chamberAt(level, ownerPos), snapshotReachable, snapshotCluster,"
+          in to_walk_java
           and "List.copyOf(reachable)," not in linksearch)
     check("锚点③ 去重表仍是「先距离近、再坐标字典序」⇒ 第 0 个仍是旧语义的归属（owner 不变义）",
-          "reachable.sort((a, b) -> {" in linksearch
-          and "final int byDepth = Integer.compare(depths.getOrDefault(a, 0), depths.getOrDefault(b, 0));"
-          in linksearch)
+          ".sort((a, b) -> {" in publish_java
+          and "Integer.compare(chamberDepth.getOrDefault(a, 0)," in publish_java
+          and "lexicographic(a, b);" in publish_java)
     check("锚点④ reachableCount / 注释已明确为「链（逻辑执行仓）数」",
           "public int reachableCount() {" in linksearch
           and "线缆可达的<b>链（= 逻辑执行仓）数</b>" in linksearch)
@@ -241,10 +259,11 @@ def main():
     check("⑦ 够不到任何执行舱 ⇒ Report.CLEAR（disabled=false, count=0），去重不参与",
           report([]) == (False, 0) and collapse_by_chain([], CHAMBERS) == [])
 
-    # ⑧ 恰好一条链但探查不穷尽：保守分支不能被去重削弱
+    # ⑧ 恰好一条链 + 探查未穷尽：2026-10-11（round60）起**不再**单独构成停用
+    #    （截断 ≠ 停用：把「暂时没扫完」与「真歧义」混为一谈正是「总线一变红就停用」的根因）
     r = collapse_by_chain(["A2", "A4"], CHAMBERS)
-    check("⑧ 同链多台但探查未能穷尽 ⇒ 仍是「归属未确定」（宁可保护：别处可能还有一条链）",
-          report(r, exhaustive=False) == (True, 1), "%s" % (report(r, exhaustive=False),))
+    check("⑧ 同链多台但探查未能穷尽 ⇒ 不再单独构成停用（停用只由「≥2 条不同的链」判定）",
+          report(r, exhaustive=False) == (False, 1), "%s" % (report(r, exhaustive=False),))
 
     # ⑨ 唯一归属时去重是恒等（不含任何未定义行为）
     check("⑨ 单元素表的去重恒等（唯一归属 / 单台仓行为逐字不变）",
@@ -260,8 +279,12 @@ def main():
     check("⑩ 链 A 的每一台单独被够到时都判「连得上」（不存在只有代表台才行）", ok_all, " ".join(detail))
 
     # ⑪ 归入结论：Java 里同一套判据仍在（不是只在 Python 模型里成立）
-    check("⑪ Java 判据与模型同源：ambiguous() = 「≥2 条链」或「1 条链且不穷尽」",
-          "return reachable.size() >= 2 || (reachable.size() == 1 && !exhaustive);" in linksearch)
+    #    2026-10-11（round60）更新：断言改成新判据（只看「≥2 条链」），并按**代码**（去注释）比对 ——
+    #    `ambiguous()` 的 javadoc 里刻意保留了旧判据的原文作为历史说明，那不算实现。
+    ambiguous_java = strip_comments(body(linksearch, "public boolean ambiguous() {", "}"))
+    check("⑪ Java 判据与模型同源（round60 更新）：ambiguous() = 「≥2 条链」（不再含「未穷尽」这一项）",
+          "return reachable.size() >= 2;" in ambiguous_java
+          and "exhaustive" not in ambiguous_java)
     check("⑫ 两个 Mixin 仍以 reachableCount() == 1 作为「唯一归属」闸门（去重后 = 恰好一条链）",
           "rscc$linkedPosCache = rscc$forceNormalBus || report.disabled() || report.reachableCount() != 1"
           in exporter

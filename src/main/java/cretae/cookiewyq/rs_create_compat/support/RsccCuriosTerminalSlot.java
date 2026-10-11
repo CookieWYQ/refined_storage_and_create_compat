@@ -155,6 +155,36 @@ public final class RsccCuriosTerminalSlot {
     }
 
     /**
+     * 玩家身上<b>全部饰品槽</b>里的物品（Curios 缺失 / 没有任何饰品槽 / 反射链路失败 → 空表）。
+     *
+     * <p><b>为什么放在本类</b>：本工程对 Curios 的访问只有这一份反射实现（离线编译拿不到 Curios 制品，
+     * 见类注释），范围充电器要扫饰品槽时不应该再抄一份；本方法只做「把反射读到的存活栈交出去」，
+     * 不含任何充电策略。</p>
+     *
+     * <p><b>返回的是处理器内部的存活栈</b>（不是快照）：与 {@link #findAllTerminalReferences} 的
+     * {@code resolve} 语义一致，调用方对电量组件的写入会直接落在玩家饰品槽里的那件物品上。</p>
+     *
+     * <p><b>绝不抛异常</b>：未装 Curios 时 {@code curiosInventory} 第一句就返回 null，
+     * 反射失败也在 {@code slots} 内部被吞掉 —— 调用方（范围充电器）因此不需要任何 try/catch，
+     * 「没装 Curios」与「装了但槽位是空的」得到的是同一个结果：什么都不用充。</p>
+     */
+    public static List<ItemStack> allStacks(final LivingEntity player) {
+        final List<ItemStack> found = new ArrayList<>();
+        for (final String slotId : slotIds(player)) {
+            final List<ItemStack> stacks = slots(player, slotId);
+            if (stacks == null) {
+                continue; // 处理器形状认不出来（slots 已打过一条节流日志）：这一槽位跳过
+            }
+            for (final ItemStack stack : stacks) {
+                if (!stack.isEmpty()) {
+                    found.add(stack);
+                }
+            }
+        }
+        return found;
+    }
+
+    /**
      * 本次扫描要看的饰品槽 id 列表。
      * <p><b>优先枚举玩家实际拥有的全部饰品槽</b>（Curios 的 {@code getCurios()} 返回「槽位 id → 处理器」映射）：
      * 本模组不再自建槽位，终端由<b>前置槽位</b>的物品标签接纳；但终端也可能被塞进<b>别的模组</b>的

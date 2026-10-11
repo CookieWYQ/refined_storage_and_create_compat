@@ -106,6 +106,35 @@ public class SequenceAssemblyExecutorMenu extends AbstractContainerMenu
         return com.refinedmods.refinedstorage.common.support.RedstoneModeSettings.getRedstoneMode(data.get(0));
     }
 
+    /**
+     * <b>只读</b>：这一件是不是<b>本库 54 格里的那一件</b>（同一实例比对）。
+     *
+     * <h2>用途（用户第 11 项 / 任务 B）</h2>
+     * <p>序列装配样板库界面实现了 RS 的 {@code PatternOutputRenderingScreen}，于是 RS 的
+     * {@code AbstractGuiGraphicsMixin#renderItem} 会把样板画成<b>它合成的东西</b>
+     * （= 不按 Shift 也常显产物，与 RS 自动合成仓同一表现）。而那个钩子对界面上<b>每一件</b>
+     * 被绘制的物品都会问一次，因此本方法必须把范围收死在「本库的槽位」：
+     * 玩家背包 / 手上 / JEI 里的总样板是<b>别的实例</b>，这里返回 {@code false}，图标保持原样。</p>
+     *
+     * <h2>为什么按实例（{@code ==}）而不是按物品类型 / NBT 相等</h2>
+     * <p>口径直接照抄 RS 自己的 {@code AutocrafterContainerMenu#containsPattern}：它遍历
+     * {@code slot instanceof PatternSlot && slot.getItem() == stack}。RS 的渲染钩子拿到的就是
+     * 槽里那一个实例（{@code AbstractContainerScreen#renderSlot} 直接把 {@code slot.getItem()} 交给
+     * {@code GuiGraphics#renderItem}），因此按实例判定既精确又零成本；按 NBT 相等反而会把背包里
+     * 「内容相同」的那一张也算进来（那正是要避免的）。</p>
+     */
+    public boolean containsPattern(@Nullable final ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        for (final Slot slot : slots) {
+            if (slot instanceof PatternSlot patternSlot && patternSlot.getItem() == stack) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public ItemStack quickMoveStack(final Player player, final int index) {
         ItemStack stack = ItemStack.EMPTY;

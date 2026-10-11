@@ -70,11 +70,11 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private static final int INPUT_FACE_BTN_H = 14;
 
     /**
-     * 「经验形态」循环按钮（标题行，输入面按钮左侧的剩余留白内）：点击在 经验球实体 / 液态经验 之间循环
+     * 「经验存储形态」循环按钮（标题行，输入面按钮左侧的剩余留白内）：点击在 经验颗粒 / 液态经验 之间循环
      * （「自动」模式已按用户要求删除；缺前置的形态自动跳过）。
      * <p>位置说明：标题文字从 x=8 起（中英文最长约 84px，即到 x≈92），输入面按钮从 x=160 起；
      * 按钮取 100..156，两边各留 8px / 4px，不压任何槽位 / 滚动条 / 面板边框，也无需改动背景几何。
-     * 文案只用短名（56px 内可完整显示「经验:自动」/「XP:Nugget」），完整说明走 tooltip。</p>
+     * 文案只用短名（56px 内可完整显示「经验:液态经验」/「XP:Liquid XP」），完整说明走 tooltip。</p>
      */
     private static final int XP_FORM_BTN_X = 100;
     private static final int XP_FORM_BTN_Y = 4;
@@ -466,7 +466,9 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
                 INPUT_FACE_BTN_W, INPUT_FACE_BTN_H)
             .build();
         addRenderableWidget(inputFaceButton);
-        // 经验形态：标题行的循环按钮（经验球实体 / 液态经验）。点击只发 C2S 包，写入与持久化都由服务端负责
+        // 经验存储形态：标题行的循环按钮（折算成经验颗粒 / 折算成液态经验）。
+        // 两种形态的收集对象都是经验球，按钮只切换「经验点存成什么」；点击只发 C2S 包，
+        // 写入与持久化都由服务端负责（序号解码见 XpForm#byOrdinal，本轮修好了液态的解码）。
         xpFormButton = new Button.Builder(xpFormLabel(menu.getXpForm()), btn -> cycleXpForm())
             .bounds(leftPos + XP_FORM_BTN_X, topPos + XP_FORM_BTN_Y, XP_FORM_BTN_W, XP_FORM_BTN_H)
             .build();
@@ -593,9 +595,9 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         };
     }
 
-    // ==================== 经验形态（经验球实体 / 液态经验） ====================
+    // ==================== 经验存储形态（折算成经验颗粒 / 折算成液态经验） ====================
 
-    /** 经验形态的短名语言键（按钮文案用；tooltip 复用同一套短名）。 */
+    /** 经验存储形态的短名语言键（按钮文案用；tooltip 复用同一套短名）。 */
     private static String xpFormKey(final XpForm form) {
         return switch (form) {
             case ORB -> LANG + "xp_form.orb";
@@ -603,29 +605,31 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         };
     }
 
-    /** 按钮文案（形如「经验:经验球」）：按钮只有 60px 宽，故只用短名，完整说明走 tooltip。 */
+    /** 按钮文案（形如「经验:液态经验」）：按钮只有 60px 宽，故只用短名，完整说明走 tooltip。 */
     private Component xpFormLabel(final XpForm form) {
         return Component.translatable(LANG + "xp_form.btn", Component.translatable(xpFormKey(form)));
     }
 
     /**
-     * 点击循环：经验球 → 液态 → 经验球（<b>「自动」模式已按用户要求删除</b>）。
-     * <p>循环<b>自动跳过不可选的形态</b>：缺前置（没装「机械动力：覆膜工艺」）时液态整个跳过，
+     * 点击循环：颗粒 → 液态 → 颗粒（<b>「自动」模式已按用户要求删除</b>）。
+     * <p>循环<b>自动跳过不可选的形态</b>：缺前置（没装「机械动力：附魔工业」）时液态整个跳过，
      * 因此点按钮不会切到一个当前根本不可用的形态上（用户要求：缺前置时该选项不可选）。
      * 只发 C2S 包，服务端写入后方块实体并落 NBT（服务端还会再拦一道）。</p>
      */
     private void cycleXpForm() {
         final XpForm next = menu.getXpForm().nextSelectable();
         if (next == menu.getXpForm()) {
-            return; // 没有别的可选形态（例如只有经验球可用）：不发送无意义的包
+            return; // 没有别的可选形态（例如只有颗粒可用）：不发送无意义的包
         }
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
             new SetCollectionXpFormPacket(menu.containerId, next));
     }
 
     /**
-     * 每帧把服务端权威的经验形态写回按钮文案（与 4 个吸取开关同一套「服务端权威」刷新方式），
+     * 每帧把服务端权威的经验存储形态写回按钮文案（与 4 个吸取开关同一套「服务端权威」刷新方式），
      * 并同步按钮的可用性：只有「还能切换到别的可选形态」时按钮才可点（否则点它没有任何效果）。
+     * <p>按钮文案取自菜单数据槽 21 的解码结果，其解码口径是 {@link XpForm#byOrdinal(int)} ——
+     * 那里此前不认现行液态序号，于是无论怎么点都显示成颗粒（本轮已修）。</p>
      */
     private void refreshXpFormButton() {
         if (xpFormButton != null) {
@@ -1206,13 +1210,13 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
      * <p>所有 tooltip 一律<b>手动渲染</b>（本模组的 GUI 不会自动渲染 tooltip）。</p>
      */
     private void renderCacheTooltips(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
-        // 0) 经验形态按钮：当前值 + 每种形态收什么；缺前置的形态**明确说明缺哪个前置**（不是静默不可用）
+        // 0) 经验存储形态按钮：当前值 + 两种折算目标各存成什么；缺前置的形态**明确说明缺哪个前置**（不是静默不可用）
         if (xpFormButton != null && xpFormButton.isMouseOver(mouseX, mouseY)) {
             final List<RsccTooltipLayers.Line> lines = new ArrayList<>();
             lines.add(RsccTooltipLayers.shift(Component.translatable(LANG + "xp_form.tip.current",
                 Component.translatable(xpFormKey(menu.getXpForm())))));
             lines.add(RsccTooltipLayers.shift(Component.translatable(LANG + "xp_form.tip.orb")));
-            // 液态：装了「机械动力：覆膜工艺」才可选；没装时补一行「不可选 + 缺哪个前置」
+            // 液态：装了「机械动力：附魔工业」才可选；没装时补一行「不可选 + 缺哪个前置」
             // （用户要求：未安装该前置时该选项不可选，且必须说明缺少哪个前置）。
             final Component missing = XpForm.LIQUID.missingDependency();
             if (missing == null) {

@@ -76,6 +76,20 @@ public interface RsccImporterExecutorMode {
     void rscc$setImportCategoryIds(List<String> categoryIds);
 
     /**
+     * <b>剪贴板：把本条总线的玩家配置写进 {@code tag}</b>（复制档；服务端调用）。
+     * <p>写的是「玩家眼里这条总线的配置」：RS 过滤槽（含模糊模式）+ 类别勾选 + 「全自动收回」开关 +
+     * 「强制普通总线」开关。字段含义与格式只有一份定义，见 {@link RsccBusConfig}。</p>
+     */
+    void rscc$writeBusConfig(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider provider);
+
+    /**
+     * <b>剪贴板：从 {@code tag} 读回配置并写入本机</b>（粘贴档；服务端权威）。
+     * <p>实现必须先过 {@link RsccBusConfig#acceptsKind}（版本 + 种类）再写任何一个字段：
+     * 校验不过就<b>一个字节都不写</b>（输入总线的配置不会被粘到输出总线上）。</p>
+     */
+    void rscc$readBusConfig(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider provider);
+
+    /**
      * 本输入总线是否处于<b>全自动收回</b>模式（默认 {@code true}）。
      * <p><b>为什么默认全自动（用户要求）</b>：玩家不该为了收回中间产物 / 成品 / 废料去逐个勾选类别。
      * 全自动 = <b>自动收集「非输入类」</b>：中间产物（各个进度状态，含同 id 不同组件的过渡件）、

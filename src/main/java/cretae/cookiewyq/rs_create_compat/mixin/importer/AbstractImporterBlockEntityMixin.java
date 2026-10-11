@@ -7,11 +7,13 @@ import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import com.refinedmods.refinedstorage.common.api.importer.ImporterTransferStrategyFactory;
 import com.refinedmods.refinedstorage.common.importer.AbstractImporterBlockEntity;
 import com.refinedmods.refinedstorage.common.support.AbstractDirectionalBlock;
+import com.refinedmods.refinedstorage.common.support.FilterWithFuzzyMode;
 import com.refinedmods.refinedstorage.common.upgrade.UpgradeContainer;
 import cretae.cookiewyq.rs_create_compat.block.entity.SequenceExecutionChamberBlockEntity;
 import cretae.cookiewyq.rs_create_compat.mixin.accessor.MainNetworkNodeAccessor;
 import cretae.cookiewyq.rs_create_compat.report.RsccBusDisabledBanner;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusCategory;
+import cretae.cookiewyq.rs_create_compat.support.RsccBusConfig;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusInterference;
 import cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy;
 import cretae.cookiewyq.rs_create_compat.support.RsccImporterExecutorMode;
@@ -109,6 +111,18 @@ public abstract class AbstractImporterBlockEntityMixin implements RsccImporterEx
     @Final
     private UpgradeContainer upgradeContainer;
 
+    /**
+     * 过滤器（含模糊模式开关 + 过滤容器）。
+     * <p>该字段声明在目标类 {@link AbstractImporterBlockEntity} 自身（{@code private final
+     * FilterWithFuzzyMode filter}），故 {@code @Shadow} 可正确定位。
+     * <p><b>2026-10-10（用户第 9 条）为什么需要它</b>：本条总线是否「按普通输入总线处理」
+     * 要先看<b>过滤槽里有没有东西</b> —— 判据就在这个容器上（见 {@link #rscc$hasFilterEntries()}）。
+     * 在此之前本类读不到它（输出总线侧一直有这份 shadow，输入总线侧没有）。</p>
+     */
+    @Shadow
+    @Final
+    private FilterWithFuzzyMode filter;
+
     /** 本机选中的类别 id（有序、去重；空表 = 什么都不收回，这是默认值）。 */
     @Unique
     private final List<String> rscc$importCategoryIds = new ArrayList<>();
@@ -179,7 +193,9 @@ public abstract class AbstractImporterBlockEntityMixin implements RsccImporterEx
         // 语义：与输出总线侧逐字同一条规则 —— 线缆够得到<b>至少一台</b>「总线输出」执行舱
         // 即处在「延长型」布局（归属未确定时由 rscc$linkedExecutor() 退回 RS 原版策略）。
         // <b>「强制普通总线」开关（本轮新增）在这里收口</b>：玩家关掉自动判定后一律回到普通界面。
-        return rscc$isLinkedLayout() && !rscc$forceNormalBus;
+        // <b>「过滤槽里有东西 → 优先按普通总线」（2026-10-10 用户第 9 条）在同一处收口</b>：
+        // 见 rscc$hasFilterEntries()。
+        return rscc$isLinkedLayout() && !rscc$forceNormalBus && !rscc$hasFilterEntries();
     }
 
     @Override
@@ -240,6 +256,36 @@ public abstract class AbstractImporterBlockEntityMixin implements RsccImporterEx
         }
         rscc$autoCollect = auto;
         ((BlockEntity) (Object) this).setChanged(); // 落盘：开关本身也是玩家配置
+    }
+
+    /** 剪贴板复制：把「玩家眼里这条总线的配置」写进一段 NBT（格式见 {@link RsccBusConfig}）。 */
+    @Override
+    public void rscc$writeBusConfig(final CompoundTag tag, final HolderLookup.Provider provider) {
+        RsccBusConfig.writeHeader(tag, RsccBusConfig.KIND_IMPORTER);
+        RsccBusConfig.writeFilter(tag, filter, provider);
+        RsccBusConfig.writeCategories(tag, rscc$importCategoryIds);
+        tag.putBoolean(RsccBusConfig.KEY_AUTO, rscc$autoCollect);
+        tag.putBoolean(RsccBusConfig.KEY_FORCE_NORMAL, rscc$forceNormalBus);
+    }
+
+    /**
+     * 剪贴板粘贴：校验通过后才写入。
+     * <p><b>顺序是刻意的</b>：先写过滤槽（它是「本条总线算不算延长型」的判据，见
+     * {@link #rscc$hasFilterEntries()}），再写类别与两个开关 —— 这样粘贴后的工作状态与源总线逐一对应。
+     * 「全自动收回」开关照旧原样写回：本条规则<b>不</b>改写它，只是当过滤槽里有东西时它不参与判定
+     * （两者严格互斥，见 {@link #rscc$hasFilterEntries()} 的注释）。</p>
+     */
+    @Override
+    public void rscc$readBusConfig(final CompoundTag tag, final HolderLookup.Provider provider) {
+        if (!RsccBusConfig.acceptsKind(tag, RsccBusConfig.KIND_IMPORTER)) {
+            return; // 版本不认识 / 种类不符：一个字节都不写
+        }
+        if (!RsccBusConfig.readFilter(tag, filter, provider)) {
+            return;
+        }
+        rscc$setImportCategoryIds(RsccBusConfig.readCategories(tag));
+        rscc$setAutoCollect(tag.getBoolean(RsccBusConfig.KEY_AUTO));
+        rscc$setForceNormalBus(tag.getBoolean(RsccBusConfig.KEY_FORCE_NORMAL));
     }
 
     @Override
@@ -328,8 +374,53 @@ public abstract class AbstractImporterBlockEntityMixin implements RsccImporterEx
         if (level == null || level.isClientSide()) {
             return null;
         }
+        if (rscc$hasFilterEntries()) {
+            // 过滤槽里有东西 ⇒ 本条总线按<b>普通输入总线</b>处理（用户第 9 条）：不解析、不认归属。
+            // 于是 {@link RsccChamberImportStrategy} 不会装到节点上（或它自己走脱绑分支），
+            // 搬运回到 RS 原版「相邻容器 → 网络」＋ 玩家自己的过滤器。
+            return null;
+        }
         rscc$resolveLink();
         return RsccWireLinkSearch.chamberAt(level, rscc$linkedPosCache);
+    }
+
+    /**
+     * <b>「过滤槽里有东西」的唯一判据</b>（2026-10-10 用户第 9 条；与输出总线侧逐字同一套口径）。
+     *
+     * <h2>用户原话与规则</h2>
+     * <p>「这个输入输出总线他跟这个序列执行力（执行仓）绑定一起之后呢，他原本的（过滤）槽就没有意义了。
+     * 所以说如果说一个输入输出总线本身过滤槽中是有东西，那么就优先认为他是普通的（普通总线）。」</p>
+     *
+     * <h2>判据核实：是 RS 侧那份过滤容器，不是本模组的类别勾选</h2>
+     * <ol>
+     *     <li><b>RS 过滤槽</b> —— 方块实体里的 {@code FilterWithFuzzyMode}（字段名 {@code filter}，
+     *     声明在 {@link AbstractImporterBlockEntity} 自身，故上面的 {@code @Shadow} 可正确定位）；
+     *     它持有界面左侧那几格「物品 / 流体过滤器」（{@code ResourceContainer}），落盘在配置 NBT 的
+     *     {@code rf} 键（模糊开关在 {@code fm} 键）。<b>这一份才是玩家说的「过滤槽」</b>；</li>
+     *     <li>本模组的<b>类别勾选</b>（{@code rscc$importCategoryIds}）—— 它是延长型的产物，
+     *     只在延长模式下有意义，当判据就成了「自己判自己」。</li>
+     * </ol>
+     *
+     * <h2>与「全自动收回（自动模式）」的关系（用户特别点名要说明）</h2>
+     * <p>自动模式（{@code rscc$autoCollect}，默认开）是<b>延长型内部</b>的一条策略：「全自动 =
+     * 按非输入类自动决定收什么，玩家不勾类别」。它与本条规则<b>不在同一个层面</b>，因此不会打架：</p>
+     * <ul>
+     *     <li>过滤槽为空 ⇒ 才可能进入延长型；此时自动模式照旧按原样生效（手动 / 自动都一字未改）；</li>
+     *     <li>过滤槽有东西 ⇒ 本条总线根本不算延长型（不绑定、不显示类别条），
+     *     自动模式这个开关此时<b>既不参与判定也不生效</b> —— 决定搬运范围的是玩家自己的过滤器。
+     *     也就是说「有过滤 ⇒ 普通总线」这条规则的优先级<b>高于</b>自动模式，
+     *     而自动模式只在「没有过滤」的那一半世界里说话，两者严格互斥、不存在同时起作用的时刻；</li>
+     *     <li>清空过滤槽 ⇒ 立刻回到延长型，自动模式原样回来（开关本身是持久化字段，从未被本规则改写）。</li>
+     * </ul>
+     *
+     * <h2>即时切换</h2>
+     * <p>本判据每次现算（不缓存）；过滤槽每一次改动都会走 RS 自己的 {@code FilterWithFuzzyMode}
+     * 监听 → {@code setFilters(...)}（RS 在 {@code notifyListeners()} 里先更新容器再回调），
+     * 因此「有东西 ↔ 没东西」两个方向都在同一次改动的调用栈里翻转，不需要重放方块。</p>
+     */
+    @Unique
+    private boolean rscc$hasFilterEntries() {
+        return !filter.getFilterContainer().isEmpty();
     }
 
     /**

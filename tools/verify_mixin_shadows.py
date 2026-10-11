@@ -17,7 +17,8 @@ target class ...` 直接崩游戏。`@Inject/@Redirect/@Overwrite` 的目标方�
    `@Final` / `@Mutable` 标注；
 3. 用 `javap -p -s` 从**运行时真实 jar** 读出目标类及其父类/接口链的真实成员描述符：
    - Minecraft 类 → neoformruntime 的 `compiledWithNeoForge_*_output.jar`
-   - Refined Storage 类 → gradle 缓存的 `refinedstorage*.jar`（排除 sources/javadoc）
+   - Refined Storage 类 → gradle 缓存的 `refinedstorage-neoforge-<pin 版本>.jar`
+     （pin 版本取自 gradle.properties 的 refinedstorage_version，见下面「缓存判据」）
 4. 逐个 `@Shadow` 做「名字 + 描述符」精确匹配，输出 `[OK] / [缺失] / [描述符不符]`；
    描述符不符时同时打印「代码写的类型」与「真实描述符（含声明类）」；
 5. 顺带把每个 `@Inject / @Redirect / @Overwrite / @Accessor / @Invoker` 的目标成员
@@ -44,6 +45,18 @@ target class ...` 直接崩游戏。`@Inject/@Redirect/@Overwrite` 的目标方�
 ----
     python tools/verify_mixin_shadows.py
 
+缓存判据（2026-10-11 修 —— 这里曾经产生过假绿）
+--------------------------------------------
+本校验器的结论只对自己实际比对的 jar 成立，因此「看哪个缓存、取哪个版本」必须自证：
+  * **缓存根跟随 GRADLE_USER_HOME**（本机 = D:\\gradle ⇒ D:\\gradle\\caches，Gradle 真正在用的
+    那一个）。此前硬编码 `C:\\Users\\70432\\.gradle\\caches`，那是另一个根；两个根里的制品版本
+    并不一致（升级 RS 到 2.0.9 后本校验器仍比对 2.0.0，却报「0 问题」）。
+  * **同族多版本只取一个**：按 (group, artifact, classifier) 分组，优先 gradle.properties 里
+    pin 的版本（RS = refinedstorage_version），缓存里没有该版本才退回「mtime 最新」并**显式告警**，
+    绝不静默拿别的版本当证据。被排除的版本会打印出来。
+  * 反例自证（不改任何文件）：设环境变量 `RSCC_PIN_REFINEDSTORAGE_VERSION=2.0.0`，
+    本脚本应打印「使用 2.0.0（来自环境变量…）」。
+
 退出码：0 = 全部通过；1 = 存在问题。
 """
 
@@ -67,8 +80,13 @@ except Exception:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIXIN_DIR = os.path.join(ROOT, "src", "main", "java", "cretae", "cookiewyq",
                          "rs_create_compat", "mixin")
-GRADLE_CACHE = os.path.join(os.path.expanduser("~"), ".gradle", "caches")
 JAVAP = r"D:\java21\bin\javap.exe"
+
+# 缓存根定位 + 同族多版本挑选：唯一实现放在 tools\_gradle_cache.py（与 PowerShell 侧同一套判据）。
+# 以前这里写死 `os.path.expanduser("~")/.gradle/caches`，而本机 GRADLE_USER_HOME=D:\gradle
+# ⇒ 校验的其实是另一个缓存里的制品 —— 这正是「0 问题」却与真实编译/运行环境不符的来源。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gradle_cache as gc  # noqa: E402  （必须在 sys.path 调整之后再导入）
 
 # 基本类型 → 描述符
 PRIMITIVES = {
@@ -965,44 +983,54 @@ def check_injection(inj, target, index, out):
 # 主流程
 # ---------------------------------------------------------------------------
 
-def find_mc_jar():
-    pattern = os.path.join(GRADLE_CACHE, "neoformruntime", "intermediate_results",
-                           "compiledWithNeoForge_*_output.jar")
-    hits = glob.glob(pattern)
-    if not hits:
-        print("[FATAL] 找不到 Minecraft 编译产物（neoformruntime intermediate_results）")
-        print("        期望位置：%s" % pattern)
-        print("        提示：先跑一次 gradle 构建以生成 compiledWithNeoForge_*_output.jar")
-        sys.exit(2)
-    return sorted(hits, key=os.path.getmtime)[-1]
+def _fatal(title, notes, hint):
+    """统一的致命错误出口：把「期望位置 / 用的是哪个缓存」一并打出来，避免看不清失败原因。"""
+    print("[FATAL] %s" % title)
+    for line in notes:
+        print("        %s" % line)
+    print("        提示：%s" % hint)
+    sys.exit(2)
 
 
-def find_create_jar():
+def find_mc_jar(cache):
+    """MC 编译产物；多份候选（不同 parchment 映射批次）时取 mtime 最新并打印选了哪一份。"""
+    jar, notes = gc.find_mc_jar(root=cache)
+    if jar is None:
+        _fatal("找不到 Minecraft 编译产物（neoformruntime intermediate_results）", notes,
+               "先跑一次 gradle 构建以生成 compiledWithNeoForge_*_output.jar")
+    return jar, notes
+
+
+def find_create_jar(cache):
     """Create jar：本模组把 Create 作为硬依赖，且 create/FluidPipeBlockMixin 的
     目标类（com.simibubi.create.content.fluids.pipes.FluidPipeBlock）声明在 Create 里。
-    不把 Create 放进 classpath，这类 Mixin 的目标会被一律误判成「缺失」（假报警）。"""
-    base = os.path.join(GRADLE_CACHE, "modules-2", "files-2.1", "com.simibubi.create")
-    hits = [p for p in glob.glob(os.path.join(base, "**", "*.jar"), recursive=True)
-            if not re.search(r"(sources|javadoc)", os.path.basename(p))]
-    if not hits:
-        print("[FATAL] 找不到 Create jar")
-        print("        期望位置：%s\\**\\create*.jar" % base)
-        print("        提示：先跑一次 gradle 依赖解析以填充本地缓存")
-        sys.exit(2)
-    return sorted(hits, key=os.path.getmtime)[-1]
+    不把 Create 放进 classpath，这类 Mixin 的目标会被一律误判成「缺失」（假报警）。
+
+    按坐标 + pin 版本（gradle.properties:create_version）精确取，而不是「glob 里 mtime 最新」：
+    否则同族多版本并存时，取到哪一版取决于目录/时间，结论就不可复现。"""
+    jar, notes = gc.find_jar("com.simibubi.create", "create-1.21.1", classifier="slim",
+                             root=cache)
+    if jar is None:
+        _fatal("找不到 Create jar（com.simibubi.create:create-1.21.1）", notes,
+               "先跑一次 gradle 依赖解析以填充本地缓存")
+    return jar, notes
 
 
-def find_rs_jar():
-    base = os.path.join(GRADLE_CACHE, "modules-2", "files-2.1",
-                        "com.refinedmods.refinedstorage")
-    hits = [p for p in glob.glob(os.path.join(base, "**", "*.jar"), recursive=True)
-            if not re.search(r"(sources|javadoc)", os.path.basename(p))]
-    if not hits:
-        print("[FATAL] 找不到 Refined Storage jar")
-        print("        期望位置：%s\\**\\refinedstorage*.jar" % base)
-        print("        提示：先跑一次 gradle 依赖解析以填充本地缓存")
-        sys.exit(2)
-    return sorted(hits, key=os.path.getmtime)[-1]
+def pinned_rs_version():
+    """（保留的兼容入口）读出本工程编译基线所对的 RS 版本（gradle.properties:refinedstorage_version）。"""
+    pin = gc.pinned_versions().get("com.refinedmods.refinedstorage:refinedstorage-neoforge")
+    return pin[0] if pin else None
+
+
+def find_rs_jar(cache):
+    """RS jar：按坐标 + pin 版本精确选，找不到 pin 版本时由 _gradle_cache 显式告警后回退。"""
+    jar, notes = gc.find_jar("com.refinedmods.refinedstorage", "refinedstorage-neoforge",
+                             classifier="", root=cache)
+    if jar is None:
+        _fatal("找不到 Refined Storage jar"
+               "（com.refinedmods.refinedstorage:refinedstorage-neoforge）", notes,
+               "先跑一次 gradle 依赖解析以填充本地缓存")
+    return jar, notes
 
 
 def main():
@@ -1010,9 +1038,10 @@ def main():
         print("[FATAL] 找不到 javap：%s" % JAVAP)
         sys.exit(2)
 
-    mc_jar = find_mc_jar()
-    rs_jar = find_rs_jar()
-    create_jar = find_create_jar()
+    cache, cache_source = gc.cache_root()
+    mc_jar, mc_notes = find_mc_jar(cache)
+    rs_jar, rs_notes = find_rs_jar(cache)
+    create_jar, create_notes = find_create_jar(cache)
     classpath = mc_jar + os.pathsep + rs_jar + os.pathsep + create_jar
     index = JarIndex(classpath)
 
@@ -1020,6 +1049,12 @@ def main():
     print("=" * 100)
     print("Mixin @Shadow / 注入目标 校验器")
     print("  Mixin 目录 : %s" % MIXIN_DIR)
+    print("  Gradle 缓存: %s  [%s]" % (cache, cache_source))
+    for coord, (version, why) in sorted(gc.pinned_versions().items()):
+        print("  pin        : %s = %s  (%s)" % (coord, version, why))
+    # 选版说明（多版本并存 / pin 缺失告警）全部打印，绝不静默 —— 结论只对这里列出的 jar 成立。
+    for line in mc_notes + rs_notes + create_notes:
+        print("  " + line.strip())
     print("  MC  jar    : %s" % mc_jar)
     print("  RS  jar    : %s" % rs_jar)
     print("  Create jar : %s" % create_jar)

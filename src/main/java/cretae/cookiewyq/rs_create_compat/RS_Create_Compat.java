@@ -565,6 +565,11 @@ public class RS_Create_Compat {
         // （把「每 tick BFS」换成「缓存 + 事件驱动」，见 support/RsccMachineCluster）
         cretae.cookiewyq.rs_create_compat.support.RsccClusterInvalidation.register();
 
+        // 结构版本号（epoch）：方块放置 / 破坏 / 被替换时 +1，供「链成员」这类纯结构推导的
+        // 每 tick 备忘做失效判定（见 support/RsccStructureEpoch 与
+        // SequenceExecutionChamberBlockEntity#chainMembers）。刻意只做一次自增，不搜索、不取方块实体。
+        cretae.cookiewyq.rs_create_compat.support.RsccStructureEpoch.register();
+
         // 右键交互的三个挂点（都是 PlayerInteractEvent.RightClickBlock，同为 HIGH 优先级）。
         // 同一优先级内按<b>注册顺序</b>调用，因此顺序本身就是语义：
         //   ① 伪装外壳（最外面那一层）：选外壳 / 潜行取下；也不允许别人抢先处理已裹住的格子；

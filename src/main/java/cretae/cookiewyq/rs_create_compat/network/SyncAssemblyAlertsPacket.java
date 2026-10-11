@@ -1,6 +1,8 @@
 package cretae.cookiewyq.rs_create_compat.network;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import com.refinedmods.refinedstorage.common.api.support.resource.PlatformResourceKey;
+import com.refinedmods.refinedstorage.common.support.resource.ResourceCodecs;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -9,6 +11,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -71,9 +74,30 @@ public record SyncAssemblyAlertsPacket(List<Alert> alerts) implements CustomPack
      */
     public static final int ACTION_BIT_SUSPEND = 4;
 
-    /** 一条挂起任务（只读快照）。 */
+    /**
+     * 一条任务（只读快照）。
+     *
+     * <p><b>第 63 轮新增末位字段 {@code product}</b>（RS 平台资源键，物品 / 流体同一编码）：
+     * 它是<b>首个</b>能区分「这条任务要的是物品还是流体」的字段。旧快照只有
+     * {@code productName}（字符串）与 {@code productIcon}（{@code ItemStack}）——
+     * 流体只能被压成一个「装桶图标」（没有对应桶的气体甚至连图标都没有），
+     * 于是客户端拿到的那一行<b>无法如实说出它的产物是什么资源类型</b>。
+     * 现在按 RS 自己的口径（{@code ResourceCodecs.STREAM_CODEC}，物品 / 流体两端对称，
+     * 与 RS 的 {@code AutocraftingMonitorStreamCodecs} 对任务资源用的是同一个编码器）原样传过去。</p>
+     *
+     * <p><b>协议位置</b>：追加在<b>末尾</b>并带一个「有没有」布尔前缀（{@code null} = 没有资源键，
+     * 例如记录刚建、资源键不可用）。客户端 / 服务端在同一个 jar 里（本工程单 jar 双端），
+     * 因此这次协议变更两端天然同步；追加在末尾也保证字段顺序只增不改。</p>
+     *
+     * <p><b>为什么用这个编码器是安全的</b>：RS <b>自己</b>的监视器协议对每条任务的资源用的就是它
+     * （{@code AutocraftingMonitorStreamCodecs} 的 {@code INFO_STREAM_CODEC} 与
+     * {@code STATUS_ITEM_STREAM_CODEC} 都走 {@code ResourceCodecs.STREAM_CODEC}，
+     * 且都把资源强转成 {@code PlatformResourceKey}）—— 因此<b>凡是能在监视器上显示出来的任务，
+     * 它的资源必定能被这个编码器编出来</b>，本字段不会引入 RS 自己没有的失败面。</p>
+     */
     public record Alert(UUID taskId, int reason, int actions, String productName, ItemStack productIcon,
-                        long amount, List<Material> materials, List<OfflineStep> offlineSteps) {
+                        long amount, List<Material> materials, List<OfflineStep> offlineSteps,
+                        @Nullable PlatformResourceKey product) {
         public Alert {
             productIcon = productIcon == null ? ItemStack.EMPTY : productIcon;
             materials = List.copyOf(materials);
@@ -123,6 +147,14 @@ public record SyncAssemblyAlertsPacket(List<Alert> alerts) implements CustomPack
                     buf.writeVarInt(alert.actions());
                     buf.writeUtf(alert.productName());
                     ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, alert.productIcon());
+                    // 产物资源键（末位字段）：物品 / 流体走同一个编码器 ⇒ 两端对称、无需按类型分支。
+                    // 「有没有」用布尔前缀表达（null 也要能原样送达，且不引入第二种编码路径）。
+                    if (alert.product() == null) {
+                        buf.writeBoolean(false);
+                    } else {
+                        buf.writeBoolean(true);
+                        ResourceCodecs.STREAM_CODEC.encode(buf, alert.product());
+                    }
                     buf.writeVarLong(alert.amount());
                     buf.writeVarInt(alert.materials().size());
                     for (final Material material : alert.materials()) {
@@ -145,6 +177,8 @@ public record SyncAssemblyAlertsPacket(List<Alert> alerts) implements CustomPack
                     final int actions = buf.readVarInt();
                     final String productName = buf.readUtf();
                     final ItemStack productIcon = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf);
+                    final PlatformResourceKey product = buf.readBoolean()
+                        ? ResourceCodecs.STREAM_CODEC.decode(buf) : null;
                     final long amount = buf.readVarLong();
                     final int materialCount = buf.readVarInt();
                     final List<Material> materials = new ArrayList<>(materialCount);
@@ -157,7 +191,7 @@ public record SyncAssemblyAlertsPacket(List<Alert> alerts) implements CustomPack
                         steps.add(OfflineStep.STREAM_CODEC.decode(buf));
                     }
                     alerts.add(new Alert(taskId, reason, actions, productName, productIcon, amount,
-                        materials, steps));
+                        materials, steps, product));
                 }
                 return new SyncAssemblyAlertsPacket(alerts);
             }

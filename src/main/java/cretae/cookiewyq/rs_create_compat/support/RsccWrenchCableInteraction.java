@@ -87,9 +87,18 @@ public final class RsccWrenchCableInteraction {
     private RsccWrenchCableInteraction() {
     }
 
-    /** 注册到 NeoForge 全局事件总线（由主类构造函数调用一次）。 */
+    /**
+     * 注册到 NeoForge 全局事件总线（由主类构造函数调用一次）。
+     *
+     * <p><b>顺带注册「潜行 + 扳手 = 快速拆卸」挂点</b>（{@link RsccWrenchDismantle}）：
+     * 两者是同一把扳手在同一格上的两种手势（<b>不潜行</b> = 断开 / 恢复这一道线缆缝，
+     * <b>潜行</b> = 把本模组的方块直接拆下来并掉落），放在同一处注册可以让它们的先后顺序
+     * 在 {@link EventPriority#HIGH} 这一档里是确定的：主类先注册伪装外壳、分隔框架、本类，
+     * 本方法再注册快速拆卸 ⇒ 快速拆卸永远排在三条既有挂点之后，只处理它们没接管的右键。</p>
+     */
     public static void register() {
         NeoForge.EVENT_BUS.register(new RsccWrenchCableInteraction());
+        RsccWrenchDismantle.register();
     }
 
     @SubscribeEvent(priority = EventPriority.HIGH)

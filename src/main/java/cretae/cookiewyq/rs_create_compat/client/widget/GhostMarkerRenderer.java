@@ -80,7 +80,13 @@ public final class GhostMarkerRenderer {
         return fluid.getFluidType().getDescription();
     }
 
-    /** 流体数量格式化：>=1B 用 B（保留 1 位小数），否则用 mB。 */
+    /**
+     * 流体数量格式化：{@code >= 1000 mB} 用 B（保留 1 位小数），否则用 mB。
+     *
+     * <p><b>本方法不是定量保持器 tooltip 用的</b>：保持器的流体 tooltip 按用户要求渲染流体自身、
+     * 不显示任何数量。这里的格式化仍被其它界面用作<b>只读展示</b>（归流缓存仓的数量行、
+     * 匹配设置子窗口、总线条的类别数量 / 预估），删掉会连带编译失败，因此保留。</p>
+     */
     public static String fluidAmount(final long mB) {
         if (mB >= 1000L) {
             final long whole = mB / 1000L;
@@ -88,6 +94,40 @@ public final class GhostMarkerRenderer {
             return frac == 0 ? whole + "B" : whole + "." + frac + "B";
         }
         return mB + "mB";
+    }
+
+    /**
+     * 流体 / 气体的「自身 tooltip」（<b>唯一实现</b>）。
+     *
+     * <h2>为什么是这一份</h2>
+     * <p>用户反馈：熔岩那一格以前画的是<b>我们自己写</b>的一行（「数量：0 mB」），要改成
+     * 「像 JEI 那样渲染流体本身」。RS 2.0 官方给出的流体 tooltip 就是
+     * {@code FluidStackFluidRenderer#getTooltip} → {@code FluidStack#getHoverName()}，即
+     * <b>流体自身的悬停名</b>（等价于 {@code fluidType.getDescription()}，也就是
+     * {@link #fluidName}）——工程里既有的 {@link #fluidName} 与它逐字同源，
+     * 所以这里直接复用它，<b>不再新造第二套</b>，也不再手工拼接任何额外行。</p>
+     *
+     * <h2>本轮刻意删掉的东西</h2>
+     * <p>不再渲染数量：{@code gui.rs_create_compat.marker.amount} 那一行（以及它带来的
+     * 「0 mB」「数量：…」）整体移除。定量保持器的目标数量只存在于输入框里（可编辑、可校验），
+     * tooltip 不再复述，用户明确说过「不需要渲染它有多少个」。</p>
+     *
+     * @param matchNbt  是否附加「匹配 NBT」规则行（归流缓存仓等界面用）
+     * @param tagFilter 非空时附加「标签过滤器」说明行
+     */
+    public static void renderFluidTooltip(final GuiGraphics guiGraphics, final Font font,
+                                          final ResourceLocation id,
+                                          final boolean matchNbt, final String tagFilter,
+                                          final int mouseX, final int mouseY) {
+        final List<Component> lines = new java.util.ArrayList<>(3);
+        lines.add(fluidName(id)); // 流体自身的 tooltip：与 RS / JEI 同源，不叠加任何自绘数量
+        if (matchNbt) {
+            lines.add(Component.translatable("gui.rs_create_compat.marker.match_nbt"));
+        }
+        if (tagFilter != null && !tagFilter.isEmpty()) {
+            lines.add(Component.translatable("gui.rs_create_compat.marker.tag_filter", tagFilter));
+        }
+        renderLines(guiGraphics, font, lines, mouseX, mouseY);
     }
 
     // ==================== 标记条目的展示数据源（界面共用） ====================
@@ -254,24 +294,6 @@ public final class GhostMarkerRenderer {
         buffer.addVertex(matrix, x, y, 0)
             .setUv(sprite.getU0(), sprite.getV0()).setColor(r, g, b, alpha);
         BufferUploader.drawWithShader(buffer.buildOrThrow());
-    }
-
-    /** 流体 tooltip：名称 + 数量 + 可选匹配规则（自绘元素必须手动渲染 tooltip）。 */
-    public static void renderFluidTooltip(final GuiGraphics guiGraphics, final Font font,
-                                          final ResourceLocation id, final long amount,
-                                          final boolean matchNbt, final String tagFilter,
-                                          final int mouseX, final int mouseY) {
-        final List<Component> lines = new java.util.ArrayList<>(3);
-        lines.add(fluidName(id));
-        lines.add(Component.translatable("gui.rs_create_compat.marker.amount",
-            fluidAmount(amount)));
-        if (matchNbt) {
-            lines.add(Component.translatable("gui.rs_create_compat.marker.match_nbt"));
-        }
-        if (tagFilter != null && !tagFilter.isEmpty()) {
-            lines.add(Component.translatable("gui.rs_create_compat.marker.tag_filter", tagFilter));
-        }
-        renderLines(guiGraphics, font, lines, mouseX, mouseY);
     }
 
     /** 手动渲染多行 tooltip（本模组 GUI 不会自动渲染 tooltip）。 */

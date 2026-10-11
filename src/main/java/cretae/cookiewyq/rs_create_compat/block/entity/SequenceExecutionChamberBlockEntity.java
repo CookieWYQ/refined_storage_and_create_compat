@@ -39,6 +39,7 @@ import cretae.cookiewyq.rs_create_compat.support.RsccImporterExecutorMode;
 import cretae.cookiewyq.rs_create_compat.support.RsccMachineCluster;
 import cretae.cookiewyq.rs_create_compat.support.RsccRefillPolicy;
 import cretae.cookiewyq.rs_create_compat.support.RsccSlotNbt;
+import cretae.cookiewyq.rs_create_compat.support.RsccStructureEpoch;
 import cretae.cookiewyq.rs_create_compat.support.RsccSupplyPolicy;
 import cretae.cookiewyq.rs_create_compat.support.RsccSupplyStrategy;
 import cretae.cookiewyq.rs_create_compat.support.RsccWireBlocks;
@@ -227,12 +228,51 @@ public class SequenceExecutionChamberBlockEntity
     private OutputMode outputMode = OutputMode.FACE;
 
     // ---------- 输出总线绑定（动态类别 + 多选 + 共享均分；服务端权威） ----------
-    /** 连接检测（线缆 BFS）的最大步数（与输出总线侧同一上限，保证两侧判定一致）。 */
-    private static final int BUS_LINK_MAX_STEPS = 64;
-    /** 连接检测结果缓存时长（tick）：既避免每 tick 反复 BFS，也让「新放的线缆」最多 1s 内被发现。 */
+    /**
+     * 连接检测（线缆洪泛）<b>每 tick 的格数预算</b>。
+     *
+     * <h2>为什么把旧的「单次最多 {@code BUS_LINK_MAX_STEPS = 64} 格」换成「每 tick 预算 + 跨 tick 续扫」</h2>
+     * <p>旧上限到点就<b>静默结束</b>洪泛（{@code while (!queue.isEmpty() && steps <= 64)}），返回一份
+     * 「看起来完整、其实被砍掉尾巴」的集合。于是在「输出总线很多 / 线缆很长」的现场里：
+     * 排在后面的那几台总线<b>根本不在可达集合里</b> ⇒ ① 本仓的分享分派（{@link #pushBusTurnToExporters()}）
+     * 永远不会刷新它们的导出清单（它们拿着旧快照或空清单，一件都不推）；② 归属表照旧看不到它们，
+     * 于是「分配」永远不轮到它们。玩家看到的就是「总线一多，分配着分配着就卡住」。</p>
+     * <p>为什么有时恢复、有时不恢复：洪泛中途遇到<b>未加载区块</b>会跳过（{@code level.isLoaded}），
+     * 于是同一套布局在区块加载顺序不同时得到不同的截断结果 —— 加载上了就恢复，没加载上就永远不恢复。
+     * 现在洪泛<b>跨 tick 续扫</b>（见 {@link #advanceBusLinkFlood}）：本 tick 扫不完<b>不算</b>
+     * 「放弃这一轮」，下 tick 从上次的前沿继续，<b>并且只有整次洪泛扫完才发布新快照</b> ——
+     * 因此对外可见的可达集合永远是完整结果（续扫期间由上一份完整快照继续服务，绝不半途换人）。</p>
+     */
+    private static final int BUS_LINK_TICK_BUDGET = 256;
+    /**
+     * 单次洪泛的<b>硬上限</b>（格）。触顶也<b>不是静默截断</b>：会打一条
+     * {@code link_flood_cap} 锚点日志显式报出。取值远大于任何现实布局
+     * （{@value #BUS_LINK_HARD_CAP} 格线缆 ≈ 上千台总线），正常现场永远走不到这里。
+     */
+    private static final int BUS_LINK_HARD_CAP = 4096;
+    /** 连接检测结果缓存时长（tick）：既避免每 tick 反复洪泛，也让「新放的线缆」最多 1s 内被发现。 */
     private static final int BUS_CONNECT_CACHE_TICKS = 20;
     /** 类别列表重建 / 归属归一化的节流周期（tick）。 */
     private static final int BUS_SCHEDULE_INTERVAL_TICKS = 20;
+    /**
+     * 分享分派<b>每 tick 至多刷新几条总线</b>（前进保证：见 {@link #pushBusTurnToExporters()}）。
+     * <p>为什么必须有预算：刷新一条总线要跑完整套分类判据（在制名额 / 排队 / 份额 / 让位探针），
+     * 总线一多，「每 {@value #BUS_SCHEDULE_INTERVAL_TICKS} tick 把所有总线刷一遍」会变成几百毫秒的
+     * 单刻尖峰 —— 那就是玩家感觉到的「分配时突然卡住」。改成**轮转预算**后：每 tick 只做固定量，
+     * 游标保证<b>每台总线在 {@code ceil(台数 / 预算)} tick 内必被访问一次</b>，
+     * 本 tick 没轮完的下一 tick 接着轮（游标就是进度），<b>不存在「整轮放弃」</b>。</p>
+     */
+    private static final int BUS_TURN_BUDGET_PER_TICK = 8;
+    /**
+     * 分享分派的<b>停滞看门狗</b>窗口（tick）：归属表里的某台总线超过这么久<b>没有任何链上成员</b>
+     * 刷新过它，就强制作废连接检测、重扫一次并打一条锚点日志。
+     * <p>为什么必须有它：刷新是「总线拿到过滤项」的<b>唯一</b>入口。只要某台总线因为连接检测被截断 /
+     * 区块未加载 / 归属未解析而长期刷不到，它就永久拿不到过滤项 —— 这正是「最后一直卡在那、
+     * 啥也不动」里最难自愈的一种（没有任何东西会自己回退）。看门狗把这种状态变成
+     * 「最多 {@value #BUS_TURN_STALE_TICKS} tick 一次的强制重扫 + 一条可核对的日志」，
+     * 因此它要么被刷新、要么被日志点名，绝不会静默永久冻结。</p>
+     */
+    private static final int BUS_TURN_STALE_TICKS = 60;
 
     /**
      * 类别 id → 选择该类别、且<b>属于本仓所在链（分支）</b>的输出总线坐标（<b>按坐标升序</b>，服务端权威）。
@@ -243,21 +283,104 @@ public class SequenceExecutionChamberBlockEntity
      * {@link #isInMyChain(BlockPos)}），本仓物理上没贴着它也算；没串链时链 = 本仓自己，行为逐字不变。</p>
      */
     private final Map<String, List<BlockPos>> busCategoryOwners = new LinkedHashMap<>();
-    /** 连接检测缓存：从本仓沿线缆可达、且自身解析结果指向本仓的全部输出总线坐标（按坐标排序）。 */
-    private List<BlockPos> connectedExportersCache;
-    /** 连接检测缓存到期时刻（{@link Level#getGameTime()}）。 */
-    private long connectedExportersExpireAt;
     /**
-     * 连接检测缓存：从本仓沿线缆可达、且自身解析结果指向本仓的全部<b>输入总线</b>坐标（按坐标排序）。
+     * 连接检测的<b>可续扫洪泛</b>状态（从本仓沿线缆可达的输出总线）。见 {@link #BusLinkFlood} 与
+     * {@link #BUS_LINK_TICK_BUDGET}：旧实现的 {@code connectedExportersCache} 在这里被替换掉 ——
+     * 「扫不完的尾巴」不再被丢掉，而是留到下一 tick 继续扫。
+     */
+    private final BusLinkFlood floodChainExporters = new BusLinkFlood();
+    /** 连接检测的<b>纯线缆可达</b>洪泛（不做「属于本链」过滤；模式切换通知 / 链级总线集合用）。 */
+    private final BusLinkFlood floodReachExporters = new BusLinkFlood();
+    /**
+     * 连接检测的输入总线洪泛。
      *
      * <p><b>为什么需要它（用户第 1 条：已配置却报「缺输出总线配置」）</b>：本模组的架构里
      * 「机器的产出 / 废料 / 中间产物」是由<b>输入总线</b>收回网络的（全自动模式默认收全部非输入类），
      * 而不是靠输出总线去勾成品 / 废料类别。因此「这一步的产出有没有总线负责」必须把输入总线也算进来，
      * 否则一套完全正确的配置会被判成「缺输出总线配置」—— 这正是上一轮的假阳性来源之一。</p>
      */
-    private List<BlockPos> connectedImportersCache;
-    /** 输入总线连接检测缓存的到期时刻（{@link Level#getGameTime()}）。 */
-    private long connectedImportersExpireAt;
+    private final BusLinkFlood floodChainImporters = new BusLinkFlood();
+    /**
+     * 每台总线<b>最近一次被刷新导出清单</b>的时刻（{@link Level#getGameTime()}；本仓视角）。
+     * <p>用途见 {@link #pushBusTurnToExporters()}：轮转游标保证公平，本表保证「有没有人漏掉」可被查证 ——
+     * 看门狗据此把「永久刷不到」变成「强制重扫 + 日志点名」。</p>
+     */
+    private final Map<BlockPos, Long> busTurnRefreshAt = new HashMap<>();
+    /** 分享分派的轮转游标（前进保证：本 tick 没轮完的，下一 tick 从这里继续）。 */
+    private int busTurnCursor;
+    /**
+     * 是否有一轮轮转<b>还没扫完</b>（游标尚未回到 0）。
+     * <p>为什么需要它：分派平时每 {@value #BUS_SCHEDULE_INTERVAL_TICKS} tick 起一轮，但一轮要
+     * {@code ceil(台数 / 预算)} 次调用才走得完。若仍按 20 tick 一次调用，200 台总线就要 25 次调用
+     * = 500 tick = 25 秒才轮到最后一台 —— 那本身就是一种「卡住」。因此只要一轮没扫完，调度器就
+     * <b>每 tick 继续调</b>（见 {@code tickBusScheduler} 的刷新段），于是整轮耗时被夹在
+     * {@code ceil(台数 / 预算)} tick（200 台 = 25 tick = 1.25 秒）。</p>
+     */
+    private boolean busTurnSweepActive;
+    /** 停滞看门狗的复查时刻（避免每 tick 重复扫描归属表）。 */
+    private long busTurnWatchdogTick = Long.MIN_VALUE;
+
+    /**
+     * 一次「线缆可达集合」洪泛的<b>可中断状态</b>：队列 + 已访问集 + 已完成快照。
+     *
+     * <h2>三条不变量（这就是「前进保证」的落点）</h2>
+     * <ol>
+     *     <li><b>只有整次洪泛扫完才发布新快照</b>：因此对外可见的集合永远是<b>完整</b>的一次洪泛结果，
+     *     绝不会因为「本 tick 预算用尽」而少几台总线（旧的 64 格上限正是这么丢掉尾巴的）；</li>
+     *     <li><b>续扫期间继续返回上一份完整快照</b>（旧结果服务到新结果就绪，绝不半途换人）；</li>
+     *     <li><b>首次调用（还没有任何快照）时一次扫完</b>（{@link #advanceBusLinkFlood} 的 bootstrap 分支），
+     *     因此「刚读档 / 刚开界面」的那一刻拿到的仍是完整集合，不会出现「前几秒总线全都不见了」。</li>
+     * </ol>
+     * <p>终止性：{@code polled} 单调递增且被 {@link #BUS_LINK_HARD_CAP} 夹住，每 tick 至少推进一格，
+     * 因此一次洪泛最多 {@code ceil(HARD_CAP / TICK_BUDGET)} tick 内必然结束（要么扫完、要么触顶报出）。</p>
+     */
+    private static final class BusLinkFlood {
+        final ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        final Set<BlockPos> visited = new HashSet<>();
+        final Set<BlockPos> foundSet = new LinkedHashSet<>();
+        /** 上一份<b>完整</b>洪泛的排序结果（对外可见的唯一数据源）。 */
+        @org.jetbrains.annotations.Nullable
+        List<BlockPos> snapshot;
+        boolean running;
+        /** 本次洪泛已出队的格数（预算与硬上限都夹它）。 */
+        int polled;
+        /** 本次洪泛是否触到硬上限（触顶时打一条锚点日志，绝不静默）。 */
+        boolean capped;
+        long lastAdvanceTick = Long.MIN_VALUE;
+        /** 下一次「定期复扫」的开始时刻。 */
+        long nextScanAt = Long.MIN_VALUE;
+
+        /** 开始一次全新的洪泛（清空前沿与已访问集，但<b>保留</b>旧快照直到新结果就绪）。 */
+        void restart(final BlockPos origin, final long now) {
+            queue.clear();
+            visited.clear();
+            foundSet.clear();
+            polled = 0;
+            capped = false;
+            running = true;
+            lastAdvanceTick = Long.MIN_VALUE;
+            nextScanAt = now + BUS_CONNECT_CACHE_TICKS;
+            visited.add(origin);
+            queue.add(origin);
+        }
+    }
+
+    /**
+     * 作废全部连接检测状态（结构 / 模式 / 区块加载可能变了）。
+     * <p>只丢快照、不立刻重扫：下一次访问该集合时按「首次调用 ⇒ 一次扫完」的 bootstrap 分支拿到完整结果，
+     * 因此作废永远不会让调用方看到半份集合。</p>
+     */
+    private void invalidateBusLinkFloods() {
+        floodChainExporters.snapshot = null;
+        floodChainExporters.running = false;
+        floodReachExporters.snapshot = null;
+        floodReachExporters.running = false;
+        floodChainImporters.snapshot = null;
+        floodChainImporters.running = false;
+        // 刻意<b>不</b>清 busTurnRefreshAt / busTurnCursor：它们描述的是「分派轮转的进度」，
+        // 与连接检测是否作废无关；清掉它们会让看门狗把「刚作废、还没轮到」误读成「没人刷过」。
+        // 台账的有界化由看门狗里的体量裁剪负责。
+    }
     /** 动态类别列表缓存（由单元样板 + Create 配方数据推出；定期重建）。 */
     private List<BusCategoryInfo> busCategoriesCache;
     /**
@@ -277,6 +400,45 @@ public class SequenceExecutionChamberBlockEntity
      */
     private long occupiedAtProbeTick = Long.MIN_VALUE;
     private final Map<BlockPos, Set<Item>> occupiedAtProbeCache = new HashMap<>();
+    /**
+     * 工位归属探针（{@link #stationKey}）的<b>每 tick 备忘</b>，以及由它派生的「工位 → 同工位的全部供料目标」分组。
+     *
+     * <h2>为什么这两个可以安全备忘，而「容器里压着什么」不可以</h2>
+     * <p>{@code stationKey} 是<b>结构性</b>的（一台机器 / 机械手的操作对象由朝向与方块状态决定），
+     * 同一 tick 内<b>不会</b>因为我们往别处推了一份料而改变；而供料目标的坐标集合同理。
+     * 反之，「容器里此刻压着什么」会被<b>本 tick 自己刚推的那一份</b>改变 —— 那条判据
+     * （{@link #supplyTargetHoldsItem}）正是「同一工位最多一份未消耗投入物」这条硬不变式的唯一凭据，
+     * 一旦用上一 tick 的旧值，就会出现「份额内的机器刚收到料、份额外的总线又把同一份推给第二台机器」
+     * 的回归（用户实测过的那一类）。因此这里只备忘结构性探针，容器内容一律<b>现读</b>。</p>
+     * <p>备忘掉的是「每次调用都把全部供料目标的工位重算一遍」这一项 —— 它原先在让位判据的内层循环里
+     * 被反复执行，是总线台数一多就卡住的主要成本之一。</p>
+     */
+    private long stationKeyProbeTick = Long.MIN_VALUE;
+    private final Map<BlockPos, BlockPos> stationKeyProbeCache = new HashMap<>();
+    /** 「工位 → 同工位的全部供料目标」分组（每 tick 一份，与 {@link #stationKeyProbeCache} 同源）。 */
+    private long stationSiblingsProbeTick = Long.MIN_VALUE;
+    private Map<BlockPos, List<BlockPos>> stationSiblingsProbeCache = Map.of();
+    /**
+     * 「供料目标」两份口径（链 / 物理）的<b>每 tick 备忘</b>：见 {@link #supplyTargets}
+     * （其中解释了「不做备忘就随总线台数平方 / 立方增长」这一成本来源）。
+     */
+    private long supplyTargetsProbeTick = Long.MIN_VALUE;
+    @org.jetbrains.annotations.Nullable
+    private List<BlockPos> supplyTargetsProbeChain;
+    @org.jetbrains.annotations.Nullable
+    private List<BlockPos> supplyTargetsProbeSelf;
+    /** 「供料工位」表的每 tick 备忘（见 {@link #supplyStations}；由上面那份目标表派生）。 */
+    private long supplyStationsProbeTick = Long.MIN_VALUE;
+    @org.jetbrains.annotations.Nullable
+    private Map<BlockPos, BlockPos> supplyStationsProbe;
+    /**
+     * 「本仓产线里的物品种类」并集的每 tick 备忘（见 {@link #pipelineCategoryItems}）。
+     * <p>把 {@link #machineBusyOnPipeline} 里「遍历全部类别 × 每类物品」的 O(类别×物品) 扫描换成
+     * 一次集合构建 + O(1) 查表：<b>判定完全等价</b>（原判据就是「这一格压着的东西是不是本仓任一类别的物品」），
+     * 只是不再在让位判据的内层循环里重算同一份并集。</p>
+     */
+    private long pipelineCategoryItemsTick = Long.MIN_VALUE;
+    private Set<Item> pipelineCategoryItemsCache = Set.of();
     /**
      * 「步骤专用投入物」表缓存（配方 id → 单循环步序 → 该步要投入的物品），与类别表同一节拍重建。
      * <p>见 {@link #inputMaterialWantedNow}：机械手每步要拿的东西各不相同，只有按「当前待加工步」
@@ -1142,6 +1304,16 @@ public class SequenceExecutionChamberBlockEntity
      */
     private int chainSanitizeCooldown;
 
+    /**
+     * <b>链成员推导的每 tick 备忘</b>（第 59 轮；见 {@link #chainMembers()} 的失效说明）。
+     * <p>只存「本台自己」的一份列表 + 生成它时的 tick 与结构版本。两层失效：结构版本变了立刻重建；
+     * 同一 tick 内直接复用。刻意<b>不</b>记进 NBT、不跨 tick 保存 —— 它描述的是「此刻的世界」。
+     */
+    private long chainMembersProbeTick = Long.MIN_VALUE;
+    private long chainMembersProbeEpoch = Long.MIN_VALUE;
+    @org.jetbrains.annotations.Nullable
+    private List<SequenceExecutionChamberBlockEntity> chainMembersMemo;
+
     /** 引擎节流计数（倒计时到 0 才做一次全表扫描）。 */
     private int engineCooldown;
     /** 日志节流计数。 */
@@ -1387,8 +1559,7 @@ public class SequenceExecutionChamberBlockEntity
         markDirtyAndSync();
         // 模式变了：类别可见性 / 归属可能整体变化，立刻归一一次
         busCategoriesCache = null;
-        connectedExportersCache = null;
-        connectedImportersCache = null;
+        invalidateBusLinkFloods(); // 连接检测（可续扫洪泛）同源作废：下次访问按「一次扫完」拿完整集合
         normalizeBusOwners();
         // 通知六个相邻的「输出总线」重新检测（它们据此进入 / 退出延长型输出模式）
         notifyAdjacentExporters();
@@ -1404,9 +1575,11 @@ public class SequenceExecutionChamberBlockEntity
     /**
      * 让「与本仓六向相邻或用 RS 线缆相连」的输出总线立刻重新检测本仓的输出模式。
      * <p><b>本轮收紧了连接判定</b>：不再按「同一张 RS 网络」广播（那会让隔得很远的输出总线也生效），
-     * 改为沿线缆 BFS（{@link #reachableExporterPositions()}，只经过线缆、不穿机器、上限
-     * {@link #BUS_LINK_MAX_STEPS} 步）逐台通知。线缆连接的输出总线可能离本仓较远、相邻扫描覆盖不到，
-     * 但它一定在这条线缆上，因此能被枚举到。</p>
+     * 改为沿线缆巡线（{@link #reachableExporterPositions()}，只经过线缆、不穿机器）逐台通知。
+     * 线缆连接的输出总线可能离本仓较远、相邻扫描覆盖不到，但它一定在这条线缆上，因此能被枚举到。</p>
+     * <p><b>本轮上限口径修正</b>：这条巡线不再有「单次 64 格、到点静默丢尾巴」的上限
+     * （见 {@link #collectBusPositions}）—— 换模式是极低频操作，走的是一次扫完的 bootstrap 分支，
+     * 因此「线缆很长时的输出总线收不到模式通知」这类漏通知也一并消失。</p>
      * <p>只在玩家切换输出模式的瞬间执行（极低频），不做任何周期轮询。</p>
      */
     private void notifyAdjacentExporters() {
@@ -2873,6 +3046,79 @@ public class SequenceExecutionChamberBlockEntity
     /** 见 {@link InFlightUnit} 的说明。 */
     private final Map<BlockPos, InFlightUnit> inFlightUnits = new java.util.LinkedHashMap<>();
 
+    /**
+     * <b>「死件登记」</b>：工位坐标 → 本仓观察到的「这一格连续拒收本仓推送、而本仓也没再成功推过它」
+     * 的起始时刻（见 {@link #rscc$abandonedRegisteredUnits()}）。
+     *
+     * <h2>它修的是哪一种「永久不再装配」（用户实测：先快 → 突然全停 → 部分永不恢复）</h2>
+     * <p>在制名额（{@code startCapacityForRecipe}）扣的是
+     * {@code inFlightBreakdownForRecipe} 的四个分量，其中分量①是「登记表里的工位<b>此刻还压着东西</b>」
+     * （只问那一格是不是空的，{@link #stationIsOccupied}）。于是一件<b>永远不会被消耗、也永远不会被搬走</b>
+     * 的东西压在工位上（无组件的起步原料残留在机器里、机器手里那件再也做不完的件），
+     * 就会让<b>整条配方</b>的名额恒为 0：分量①恒 &gt; 0 ⇒ {@code capacity = allowed − inFlight ≤ 0}
+     * ⇒ 备料侧 {@code clampStartIngredientTargets} 把起步原料整条去掉、推料侧 {@code unitCapacityLeftFor}
+     * 恒假 ⇒ <b>该配方那一台机器永久不再装配</b>（同一网络里别的工位照旧，因此表现成「部分恢复、
+     * 部分永不恢复」，而且看起来完全随机 —— 取决于哪一台先咬住一件死件）。</p>
+     *
+     * <p><b>判据必须是「可证死」，不是「等得久」</b>（否则会把还活着的件判死 ⇒ 多开件 ⇒
+     * 退回用户早年实测的「下单 1 个坚固板消耗两份粉」）。这里用的证据是执行舱自己已有的那本账：
+     * {@link #refusedTargetAt}（该格<b>连续</b>拒收本仓推送）＋ {@link #lastSuccessfulPushAt} /
+     * {@link #rscc$lastPushOkAge}（本仓向该格<b>成功推过东西</b>的时刻）。两条同时成立满
+     * {@link #UNIT_DEADLOCK_TICKS} 才算死：<b>机器一直拒收 = 它手上的那件没有被消化</b>，
+     * 而<b>我们在这整段时间里一次都没推成功过</b> = 它手上的不是我们推进去的那件（或者是，
+     * 但已经彻底不动了）—— 两种情况都说明这份登记已经不代表「一件在制件」。</p>
+     *
+     * <p>只读世界 + 只写这张本地表，<b>绝不搬运 / 销毁任何资源</b>；一旦该格重新收下我们的推送
+     * （{@link #rscc$notePushSucceeded}）或该格变空，登记立刻恢复计数（见
+     * {@code reconcileInFlightUnits}）。</p>
+     */
+    private final Map<BlockPos, Long> abandonedInFlightAt = new java.util.HashMap<>();
+
+    /**
+     * 每个登记工位「本仓最近一次亲眼确认它在动 / 目标可达」的时刻（只写内存采样，不搬运资源）。
+     * <p>它是「死件」判定的观测起点：只有「从这一刻起就一直拒收本仓推送」才算死
+     * （见 {@link #registeredUnitDead(BlockPos, long)}）。判不出来（不是容器 / 区块未加载）时按
+     * 「这一轮没看见」处理 —— 推进采样起点，绝不据此判死（与「判不出来一律不拦」同一方向）。</p>
+     */
+    private final Map<BlockPos, Long> unitLivenessAt = new java.util.HashMap<>();
+
+    /** 被判定为「死件」的登记数（诊断；口径见 {@link #abandonedInFlightAt}）。 */
+    private int inFlightAbandonedCount;
+
+    /**
+     * <b>「机器清理」的节流</b>（tick，2 秒）：见 {@link #clearDeadStationPieces()}。
+     * <p>为什么需要它：这一步要读每个登记工位的物品能力并可能真的搬运一件，因此不能每 tick 跑；
+     * 2 秒足够快（玩家观感是「它自己清了」），也足够省。</p>
+     */
+    private static final long DEAD_STATION_CLEAR_INTERVAL_TICKS = 40L;
+
+    /** 上一次跑 {@link #clearDeadStationPieces()} 的 tick。 */
+    private long deadStationClearAt = Long.MIN_VALUE;
+
+    /**
+     * <b>「机器清理」的节流计数</b>：本方法每 tick 至多搬一件的额外护栏
+     * （与 {@link #DEAD_STATION_CLEAR_INTERVAL_TICKS} 一起构成「有界」）。
+     */
+    private int deadStationClearBurst;
+
+    /** {@code reconcileInFlightUnits} 的每 tick 缓存（同一 tick 内多路查询只对账一次）。 */
+    private long inFlightReconcileTick = Long.MIN_VALUE;
+
+    /**
+     * 「死件登记」的判定窗口（tick，30 秒）。
+     * <p>取值依据：Create 的一步（冲压 / 注液 / 机械手施加）在正常供电下是<b>秒级</b>；
+     * 30 秒里该工位<b>一次都没收下过</b>我们的推送，且<b>一直在拒收</b>，
+     * 已远超任何正常加工节奏 —— 与 {@link #REFUSED_TARGET_RECOVER_TICKS}（10 秒）同向、更保守。</p>
+     */
+    private static final long UNIT_DEADLOCK_TICKS = 600L;
+
+    /**
+     * 连续拒绝推断的<b>采样间隔</b>（tick）：为了不误判「拒收与接受交替」，需要一个
+     * {@code lastSeen} 到 {@code now} 之间「基本一直在拒」的证据。采样间隔取判定窗口的 1/4，
+     * 因此至少要有 4 个采样点都观察到拒收才会判死。
+     */
+    private static final long UNIT_DEADLOCK_SAMPLE_TICKS = UNIT_DEADLOCK_TICKS / 4L;
+
     /** 登记表诊断日志的节流。 */
     private long inFlightLogAt = Long.MIN_VALUE / 2;
 
@@ -2935,7 +3181,16 @@ public class SequenceExecutionChamberBlockEntity
      */
     @org.jetbrains.annotations.Nullable
     public InFlightUnit rscc$registeredUnitAt(@org.jetbrains.annotations.Nullable final BlockPos station) {
-        return station == null ? null : inFlightUnits.get(station.immutable());
+        if (station == null) {
+            return null;
+        }
+        // 已判死件的登记对外<b>不再表现为「我们推进去的那件在制件」</b>：看门狗的「机器正拿着它加工」
+        // 保护（AssemblyWatchdog#holdsOurInFlightPiece）据此不再被一份死账挡住 —— 这正是
+        // 「零进展 + 拒收」能被正确判出来的前提，也是死件不再永远沉默地占着名额的对偶面。
+        if (abandonedInFlightAt.containsKey(station.immutable())) {
+            return null;
+        }
+        return inFlightUnits.get(station.immutable());
     }
 
     /**
@@ -2961,10 +3216,364 @@ public class SequenceExecutionChamberBlockEntity
 
     /** 任务确认结束：整表清空（东西都要还回网络）。 */
     public void rscc$clearAllUnits() {
+        boolean changed = false;
         if (!inFlightUnits.isEmpty()) {
             inFlightUnits.clear();
+            changed = true;
+        }
+        // 死件标记与活性采样同样归零：任务结束 = 上一段的观察全部作废，绝不带到下一单
+        //（否则「上一单遗留的死件结论」会把新订单的第一件也一并压掉）。
+        if (!abandonedInFlightAt.isEmpty()) {
+            abandonedInFlightAt.clear();
+            inFlightAbandonedCount = 0;
+            changed = true;
+        }
+        if (!unitLivenessAt.isEmpty()) {
+            unitLivenessAt.clear();
+        }
+        if (changed) {
             setChanged();
         }
+    }
+
+    // ==================== 在制登记表的对账 / 自愈（修「永久不再装配」） ====================
+
+    /**
+     * <b>在制登记表的对账（每 tick 至多一次，只读世界 + 只改本地表）</b>。
+     *
+     * <h2>为什么必须有它（这是本轮「部分工位永久不再装配」的唯一根因修复点）</h2>
+     * <p>登记表由「每一次成功推料」写、只在「任务确认结束」整表清（{@link #rscc$clearAllUnits}）。
+     * 一条登记的<b>生命周期</b>是：本仓把某件推给某格 → 那件在那一格上被加工 / 被别的仓接走。
+     * 可「被接走」这件事本身<b>不会</b>回头改本仓的登记：登记仍然写着「那一格上有本配方的一件」。
+     * 而名额（{@code startCapacityForRecipe}）只问「那一格<b>是不是空的</b>」
+     * （{@link #stationIsOccupied}），于是只要那一格上压着一件<b>永远不会被消耗、也不会被搬走</b>
+     * 的东西，这份登记就<b>永久</b>占着一个名额 ⇒ {@code capacity = allowed − inFlight ≤ 0}
+     * ⇒ 该配方的起步原料被整条去掉（{@code clampStartIngredientTargets}）⇒ 那一台机器<b>永久不再装配</b>。
+     * <p>这与区块加载无关、也与会话长度无关，只与「哪一格先咬住一件死件」有关 ——
+     * 正是用户描述的第 ③ 条（部分恢复、部分永久不恢复）与第 ④ 条（看起来完全随机）。</p>
+     *
+     * <h2>这里做三件事，全部只动本地表</h2>
+     * <ol>
+     *     <li><b>清孤儿</b>：登记的工位已经拆掉 / 不再是容器 ⇒ 直接删掉这条登记条目
+     *     （删的是本模组自己的内存账，不碰世界上任何一个物品）；</li>
+     *     <li><b>标死件</b>：{@link #registeredUnitDead} 证明「该格一直拒收我们的推送、而我们一次都没
+     *     推成功过」且持续满 {@link #UNIT_DEADLOCK_TICKS} ⇒ 标记为死件，
+     *     <b>不再计入名额</b>（名额自愈）；</li>
+     *     <li><b>撤死件</b>：一旦该格重新收下过我们的推送（{@link #rscc$notePushSucceeded}）、
+     *     或本仓又往该格推成功过一件（登记被重写）、或该格变空，死件标记立刻撤销 ⇒ 计数恢复。
+     *     这一条保证「自愈是双向的」，不会把一次误判永久留着。</li>
+     * </ol>
+     * <p><b>为什么只标记「不计入」而不直接删登记</b>：登记的 {@code sinceTick} 还是
+     * {@code AssemblyWatchdog} 判「本仓向这一格的最近一次成功推送」的唯一凭据
+     * （{@link #rscc$lastPushOkAge}）；删掉会让看门狗把「我们其实推成功过」这件事忘掉 ⇒
+     * 反而更容易误弹「堵了」。因此死件标记与登记本体分开存放。</p>
+     */
+    private void reconcileInFlightUnits() {
+        final Level level = getLevel();
+        if (level == null || level.isClientSide()) {
+            return;
+        }
+        final long now = level.getGameTime();
+        if (now == inFlightReconcileTick) {
+            return; // 同一 tick 多路查询只对账一次（与既有的每 tick 探针缓存同一手法）
+        }
+        inFlightReconcileTick = now;
+        if (inFlightUnits.isEmpty()) {
+            if (!abandonedInFlightAt.isEmpty()) {
+                abandonedInFlightAt.clear();
+                inFlightAbandonedCount = 0;
+            }
+            unitLivenessAt.clear();
+            return;
+        }
+        // 快照遍历：下面会就地删条目 / 改标记
+        for (final BlockPos station : new ArrayList<>(inFlightUnits.keySet())) {
+            if (station == null) {
+                continue;
+            }
+            final net.neoforged.neoforge.items.IItemHandler handler =
+                cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy
+                    .itemHandlerAt(level, station);
+            if (handler == null) {
+                // 工位没了 / 未加载 / 不再是容器。两种情况必须分开处理（否则会与「区块加载无关」
+                // 这条现场事实自相矛盾，也会凭空改名额）：
+                //   * <b>坐标未加载</b>（level.isLoaded 为假）⇒ <b>什么都不做</b>：看不见不等于没有
+                //     （这是瞬时态，删了条目会让名额凭空恢复 ⇒ 可能多开一件）；
+                //   * <b>坐标已加载、却没有物品能力</b> ⇒ 那一格真的没了 / 被换成非容器 ⇒ 这是本仓
+                //     账本里的孤儿条目，删掉（只删本模组自己的内存账，世界上没有任何东西被搬动；且所有
+                //     消费方本来就要求「那一格是容器且非空」，因此删掉不改变任何判定）。
+                if (level.isLoaded(station)) {
+                    inFlightUnits.remove(station);
+                    unitLivenessAt.remove(station);
+                    abandonedInFlightAt.remove(station);
+                    inFlightAbandonedCount = abandonedInFlightAt.size();
+                    setChanged();
+                }
+                continue;
+            }
+            final boolean occupied = stationIsOccupied(level, station);
+            final Long abandonedSince = abandonedInFlightAt.get(station);
+            if (abandonedSince != null) {
+                // 已标死件 ⇒ 每 tick 只看「它是否已经动过」：动过就撤标记（双向自愈）
+                if (stationLive(level, station)) {
+                    abandonedInFlightAt.remove(station);
+                    unitLivenessAt.put(station, now);
+                    inFlightAbandonedCount = abandonedInFlightAt.size();
+                }
+                continue;
+            }
+            // 活性采样：只在「这一格压着东西、且本仓判得出它可达」时推进观测起点。
+            // 判不出来（未加载 / 无能力）时也推进 —— 绝不用「看不见」当「死了」的证据。
+            final Long lastLive = unitLivenessAt.get(station);
+            if (lastLive == null || now - lastLive >= UNIT_DEADLOCK_SAMPLE_TICKS) {
+                unitLivenessAt.put(station, now);
+                continue;
+            }
+            if (!occupied) {
+                continue; // 空的：下一件推过来会重写登记，这里不做任何事
+            }
+            final InFlightUnit unit = inFlightUnits.get(station);
+            final long since = unit == null ? now : unit.sinceTick();
+            if (now - since < UNIT_DEADLOCK_TICKS) {
+                continue; // 登记还年轻：正常加工完全可能这么久，绝不判死
+            }
+            if (registeredUnitDead(station, lastLive)) {
+                abandonedInFlightAt.put(station, now);
+                inFlightAbandonedCount = abandonedInFlightAt.size();
+                RsccAssemblyDebug.event(RsccAssemblyDebug.machine("chamber", worldPosition)
+                    + " inflight_stale {station=" + RsccAssemblyDebug.at(station)
+                    + " item=" + (unit == null || unit.item() == null
+                        ? "-" : RsccAssemblyDebug.itemId(unit.item()))
+                    + " age=" + (now - since) + "}"
+                    + " -> released reason=dead_registration_no_progress"
+                    + " (该格持续拒收本仓推送、本仓在此期间一次都没推成功过 ⇒ 这份在制登记已不代表"
+                    + " 一件在做的东西，不再占名额；该格一旦重新收料或变空即自动恢复计数)");
+            }
+        }
+    }
+
+    /**
+     * <b>只读</b>：这一格是不是「已经动过 / 重新可达」—— 死件标记的撤销判据。
+     * <p>三条任一成立即可：① 该格重新收下过我们的推送（{@link #rscc$notePushSucceeded} 清了拒收记录）、
+     * ② 该格<b>不再</b>拒收我们的推送（拒收记录为空）、③ 该格变空（东西被拿走了）。
+     * 用「拒收记录为空」而不是「有成功推送」是刻意的：前者是「本仓此刻敲得开门」这个更强的证据，
+     * 而且不依赖我们这期间真的又推过一次。</p>
+     */
+    private boolean stationLive(final Level level, final BlockPos station) {
+        if (!stationIsOccupied(level, station)) {
+            return true; // 东西已经被拿走 / 被消耗 ⇒ 这份登记不再压着名额
+        }
+        final Long refusedAt = refusedTargetAt.get(station);
+        return refusedAt == null
+            || level.getGameTime() - refusedAt > PUSH_STALL_WINDOW_TICKS;
+    }
+
+    /**
+     * <b>只读</b>：这份登记是不是<b>可证的死件</b>（判据见 {@link #abandonedInFlightAt} 的说明）。
+     *
+     * <p>三条必须同时成立，缺一都不判：</p>
+     * <ol>
+     *     <li>本仓<b>此刻</b>还在被这一格拒收（{@code now − refusedTargetAt[station] ≤ 窗口}）——
+     *     机器一直不肯收 ⇒ 它手上的那件没有被消化；</li>
+     *     <li>这份拒收<b>贯穿整个观测窗口</b>（它的起点早于或等于本段观测起点 {@code lastLive}）——
+     *     排除「刚刚才堵了一下」；</li>
+     *     <li>本仓在这段时间里<b>一次都没往这一格推成功过</b>（{@link #rscc$lastPushOkAge} 为
+     *     {@code -1} 或 &gt; 观测窗口）——「成功推过」会被 {@link #rscc$notePushSucceeded} 清掉拒收记录，
+     *     因此与第 1 条互斥，这条是冗余保险，也是「东西确实没在流动」的第二重证据。</li>
+     * </ol>
+     * <p>判不出来（无世界 / 无记录）一律返回 {@code false} —— 绝不用「看不见」当「死了」的证据。</p>
+     */
+    private boolean registeredUnitDead(final BlockPos station, final long lastLive) {
+        final Level level = getLevel();
+        if (level == null || station == null) {
+            return false;
+        }
+        final long now = level.getGameTime();
+        final Long refusedAt = refusedTargetAt.get(station);
+        if (refusedAt == null || now - refusedAt > PUSH_STALL_WINDOW_TICKS) {
+            return false;
+        }
+        if (refusedAt > lastLive) {
+            return false; // 拒收是「本段观测开始之后」才出现的：可能只是刚开始堵，再等等
+        }
+        final long pushOkAge = rscc$lastPushOkAge(station);
+        return pushOkAge < 0L || pushOkAge > UNIT_DEADLOCK_TICKS;
+    }
+
+    /** <b>只读</b>：本仓被标成「死件」的登记数（诊断用；口径见 {@link #abandonedInFlightAt}）。 */
+    public int rscc$abandonedRegisteredUnits() {
+        return inFlightAbandonedCount;
+    }
+
+    /** <b>只读</b>：该工位上的登记此刻是否已被判为死件（不计入在制名额）。 */
+    public boolean rscc$isAbandonedStation(@org.jetbrains.annotations.Nullable final BlockPos station) {
+        return station != null && abandonedInFlightAt.containsKey(station.immutable());
+    }
+
+    /**
+     * <b>只读</b>：本仓此刻「压着名额、却<b>既没在动、本仓也推不进去</b>」的工位坐标清单
+     * （= 已被判死件的那些格）。
+     *
+     * <p>供装配看门狗 / 诊断导出让玩家看见「是哪一台机器咬住了一件东西、导致这一条配方的名额归零」——
+     * 这条边界以前完全没有证据（用户只能看到「它突然不装配了」）。只读，不改任何状态、不搬运任何资源。</p>
+     */
+    public java.util.List<BlockPos> rscc$abandonedStations() {
+        return java.util.List.copyOf(abandonedInFlightAt.keySet());
+    }
+
+    /**
+     * <b>只读</b>：这一份登记此刻是否<b>仍应计入在制名额</b>
+     * （未被判死件；{@link #rscc$isAbandonedStation} 的取反）。
+     */
+    private boolean registrationCounts(final BlockPos station) {
+        return station != null && !abandonedInFlightAt.containsKey(station);
+    }
+
+    // ==================== 机器清理：把「配方已经没有订单」的死件从工位上收回来 ====================
+
+    /**
+     * <b>把「本仓推过去、但那一步已经没有机器再认领」的</b>过渡件从工位上收回网络（有界、只搬本仓自己的件）。
+     *
+     * <h2>它修的是「部分工位永久不再装配」的另一半（登记表自愈只治账，治不了物）</h2>
+     * <p>{@link #reconcileInFlightUnits} 能让名额自愈，但工位上那件东西<b>还在原地</b>：机器只有一个加工位，
+     * 它被一件「这一步已经没有机器认领」的过渡件（跨舱链里另一台仓被拆 / 换样板 / 该步的机器离线）占住，
+     * 那一台机器就<b>永远</b>不会再装配任何东西 —— 而这条链剩下的件只能堆在缓存池里等（用户实测：
+     * 「有的一些可能后面一直就不装配了」）。既有的两条回收路径都到不了它：</p>
+     * <ul>
+     *     <li>{@link #recoverBlockingTargetItem()} 明确<b>不碰过渡件</b>（它是在制品，抢回等于把产线往回拽）；</li>
+     *     <li>{@link #flushStationStartIngredients} 只在<b>任务结束边沿</b>跑一次，而且只收起步原料。</li>
+     * </ul>
+     *
+     * <h2>判据（全部成立才搬；任一条不成立都一个字节都不动）—— 全部复用既有口径，不新增第二套</h2>
+     * <ol>
+     *     <li><b>本仓整条产线此刻一条相关订单都没有</b>（{@link #hasGoalTask()} 为假）—— 没有人再要它，
+     *     收回来只会让网络多一份可复用的半成品（与「没订单绝不搬运」的既有硬约束一字不差）；</li>
+     *     <li>该工位在<b>在制件登记表</b>里且本仓已经确认<b>任务结束</b>（{@code busTaskEndFired}，
+     *     连续空闲超过 {@code BUS_GATE_END_CONFIRM}）—— 唯一凭据仍是「这一份是本仓推过去的」；</li>
+     *     <li>那一件<b>不带 {@code create:sequenced_assembly} 组件</b>、或它所记的配方<b>此刻没有任何活跃订单</b>
+     *     （{@link #recipeOrdered(String)} 为假）—— 绝不抢「还在被加工的件」（与
+     *     {@code flushStationStartIngredients} 的过渡件分支逐字同源）；</li>
+     *     <li>它<b>不是</b>输出总线此刻会推给它自己那一格的东西（{@link #busTargetAccepts}）—— 是则说明
+     *     它是这条链的正常待加工件，一律不碰；</li>
+     *     <li>件本身属于本仓这条产线（{@link #isTransitionOfMyRecipes}）—— 别的配方 / 别的模组的东西不碰。</li>
+     * </ol>
+     * <p><b>不丢不复制</b>：走与 {@link #recoverBlockingTargetItem()} 完全相同的搬运通道
+     * （先 SIMULATE 夹量 → 精确抽取 → 进本仓内部存储），本仓装不下就<b>一个字节都不动</b>。
+     * 有界：每 {@value #DEAD_STATION_CLEAR_INTERVAL_TICKS} tick 至多跑一次、每次至多搬一件。</p>
+     *
+     * @return 实际搬动的件数（0 = 没有可清的工位）
+     */
+    private int clearDeadStationPieces() {
+        final Level level = getLevel();
+        if (level == null || level.isClientSide() || inFlightUnits.isEmpty()) {
+            return 0;
+        }
+        final long now = level.getGameTime();
+        if (now - deadStationClearAt < DEAD_STATION_CLEAR_INTERVAL_TICKS) {
+            return 0;
+        }
+        // 只在「任务已确认结束」或「本仓被挂起冻结」时动手：
+        //   * 前者 = 与既有的任务结束回流同一语义；
+        //   * 后者 = 看门狗自动挂起会把本仓<b>全面冻结</b>（连输入总线的回收都短路），
+        //     而挂起本身<b>不会自动恢复</b>（只有玩家点「继续」）—— 若这一步也不做，
+        //     「挂起 ⇒ 机器上那件永远拿不走 ⇒ 名额恒 0 ⇒ 恢复后照样装配不出来」就成了闭环。
+        //     因此这里必<b>须</b>在冻结态也允许「把已经没有订单的死件还回网络」这一件只读判定 + 回收动作；
+        //     逐件的判据（见 clearDeadStationPieceAt）已经保证「该配方还有活跃订单的件一律不碰」，
+        //     所以这不是放宽「挂起不动东西」，而是补上「冻结态下唯一能打破死锁的那条回收」。
+        if (!busTaskEndFired && !busFrozenGate) {
+            return 0;
+        }
+        deadStationClearAt = now;
+        deadStationClearBurst = 0;
+        for (final Map.Entry<BlockPos, InFlightUnit> entry : new ArrayList<>(inFlightUnits.entrySet())) {
+            if (deadStationClearBurst > 0) {
+                break; // 有界：每轮至多搬一件
+            }
+            final BlockPos station = entry.getKey();
+            if (station == null) {
+                continue;
+            }
+            // 已判死件的优先清（那一格正是把名额压成 0 的那一格）；否则也照同样判据清理。
+            final int moved = clearDeadStationPieceAt(level, station);
+            if (moved > 0) {
+                deadStationClearBurst += moved;
+                RsccAssemblyDebug.event(RsccAssemblyDebug.machine("chamber", worldPosition)
+                    + " dead_station_cleared station=" + RsccAssemblyDebug.at(station)
+                    + " moved=" + moved
+                    + " (该格压着一件「本步已经没有任何订单 / 机器」的过渡件，"
+                    + "它会把机器唯一的加工位永久占死；已按任务结束同一通道收回本仓)");
+            }
+        }
+        return deadStationClearBurst;
+    }
+
+    /**
+     * {@link #clearDeadStationPieces()} 的逐格实现（判据见那个方法的 javadoc）。
+     *
+     * @return 该格实际搬动的件数（0 = 它没堵 / 不应该碰）
+     */
+    private int clearDeadStationPieceAt(final Level level, final BlockPos station) {
+        final net.neoforged.neoforge.items.IItemHandler handler =
+            cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy.itemHandlerAt(level, station);
+        if (handler == null) {
+            return 0; // 不是容器 / 未加载：判不了就不动
+        }
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            try {
+                final ItemStack inSlot = handler.getStackInSlot(slot);
+                if (inSlot.isEmpty()) {
+                    continue;
+                }
+                final Item item = inSlot.getItem();
+                if (!isTransitionOfMyRecipes(item)) {
+                    continue; // 不是本仓这条产线的过渡件：一律不碰（别的配方 / 别的模组的东西）
+                }
+                final SequencedAssembly assembly = inSlot.get(AllDataComponents.SEQUENCED_ASSEMBLY);
+                // 带进度组件且该配方还有活跃订单 ⇒ 它是「正在被加工 / 还要继续做」的件，寸步不让
+                if (assembly != null && recipeOrdered(assembly.id().toString())) {
+                    continue;
+                }
+                // 输出总线此刻仍会把它推给它自己那一格 ⇒ 它是这条链的正常件，不碰
+                if (busTargetAccepts(station, item)) {
+                    continue;
+                }
+                final int accepted = canAcceptTransitionLocally(inSlot);
+                if (accepted <= 0) {
+                    return 0; // 本仓装不下：原地留下，绝不留半份
+                }
+                final ItemStack taken = handler.extractItem(slot, Math.min(accepted, inSlot.getCount()), false);
+                if (taken.isEmpty()) {
+                    return 0;
+                }
+                final int leftover = acceptTransitionLocally(taken);
+                final int moved = taken.getCount() - leftover;
+                if (moved <= 0) {
+                    handler.insertItem(slot, taken, false); // 收不进去 ⇒ 原样还回去，绝不吞掉玩家资源
+                    return 0;
+                }
+                // 这一格已经清出来 ⇒ 撤掉该格的死件标记与拒收证据（下一件推过来时重新计）
+                abandonedInFlightAt.remove(station);
+                inFlightAbandonedCount = abandonedInFlightAt.size();
+                refusedTargetAt.remove(station);
+                unitLivenessAt.put(station, level.getGameTime());
+                setChanged();
+                return moved;
+            } catch (final RuntimeException failure) {
+                // 逐格隔离：一格抛了只跳过它，绝不让整个清理路径中断（否则这条自愈通道等于不存在）
+                if (RsccAssemblyDebug.changed("dead_station_failed@" + RsccAssemblyDebug.at(worldPosition)
+                        + "#" + slot, failure.getClass().getName())) {
+                    RsccAssemblyDebug.warn("dead_station_failed@" + RsccAssemblyDebug.at(worldPosition)
+                            + "#" + slot,
+                        RsccAssemblyDebug.machine("chamber", worldPosition)
+                            + " dead_station_failed station=" + RsccAssemblyDebug.at(station)
+                            + " slot=" + slot
+                            + " error=" + failure.getClass().getSimpleName()
+                            + " message=" + failure.getMessage());
+                }
+                continue;
+            }
+        }
+        return 0;
     }
 
     /** 只读：本仓登记了几件在制件（诊断用）。 */
@@ -5314,17 +5923,173 @@ public class SequenceExecutionChamberBlockEntity
         }
     }
 
-    /** 逐台通知相连的输出总线按当前轮次重建导出清单（共享均分的执行端）。 */
+    /**
+     * 逐台通知相连的输出总线按当前归属重建导出清单（<b>「分配」的驱动端</b>）。
+     *
+     * <h2>为什么必须改成「轮转预算 + 故障隔离 + 停滞看门狗」（本轮修正）</h2>
+     * <p>旧实现是「一次遍历，把 {@link #connectedExporterPositions()} 里的每一台都刷一遍」。
+     * 这不只是慢（每条总线都要跑完整套分类判据，总线一多就是单刻尖峰 = 玩家感觉到的「分配时突然卡住」），
+     * 更要命的是<b>没有任何东西保证每一台都会被刷到</b>，于是存在两种永久卡死：</p>
+     * <ol>
+     *     <li><b>一台总线抛异常 ⇒ 后面所有总线这一轮全都不刷</b>。刷新循环里没有 try/catch：
+     *     任一格的能力查询 / 方块实体读取抛出去，控制流直接跳出整个循环（进 RS 的 tick 兜底），
+     *     排在它后面的总线这一轮就都拿不到导出清单；下一次重算还要等
+     *     {@value #BUS_SCHEDULE_INTERVAL_TICKS} tick，且下一次迭代顺序相同、同一台仍然抛 ——
+     *     于是「排在故障总线后面的那些总线」永久拿不到过滤项（= 永久卡死，
+     *     除非玩家把那条总线拆掉或改朝向）。现在每台各自 try/catch：一台坏掉只损失它自己这一轮。</li>
+     *     <li><b>集合里根本没有它 ⇒ 永远刷不到</b>（连接检测被截断 / 区块未加载 / 归属未解析）。
+     *     旧实现对此<b>完全沉默</b>。现在有 {@link #BUS_TURN_STALE_TICKS} 的停滞看门狗：
+     *     归属表里的每台总线若在窗口内没有被链上任何成员刷过，就强制作废连接检测、重扫并打一条
+     *     {@code bus_turn_stale} 锚点日志 —— 要么被刷到，要么在日志里被点名，绝不静默冻结。</li>
+     * </ol>
+     *
+     * <h2>前进保证（逐条可核对）</h2>
+     * <ul>
+     *     <li><b>有界</b>：每 tick 至多刷 {@link #BUS_TURN_BUDGET_PER_TICK} 台（游标 = 进度）；</li>
+     *     <li><b>不放弃整轮</b>：本 tick 没轮完的，下一 tick 从 {@link #busTurnCursor} 继续；
+     *     因此任何一台每 {@code ceil(台数 / 预算)} tick 必被访问一次（台数 200 ⇒ 每 25 tick 一轮）；</li>
+     *     <li><b>有明确重试点</b>：刷失败的总线在它下一次被轮到时自动重试（不是「永久不可用」）；</li>
+     *     <li><b>有兜底</b>：停滞看门狗保证「谁也刷不到」的状态最多持续 {@link #BUS_TURN_STALE_TICKS} tick
+     *     就会被强制重扫一次并留下日志。</li>
+     * </ul>
+     */
     private void pushBusTurnToExporters() {
         final Level level = getLevel();
         if (level == null || level.isClientSide()) {
             return;
         }
-        for (final BlockPos pos : connectedExporterPositions()) {
-            if (level.isLoaded(pos)
-                && level.getBlockEntity(pos) instanceof final RsccExporterExecutorMode exporter) {
-                exporter.rscc$refreshBusTurn();
+        final List<BlockPos> buses = connectedExporterPositions();
+        if (buses.isEmpty()) {
+            busTurnCursor = 0;
+            busTurnSweepActive = false;
+            busTurnWatchdog(level);
+            return;
+        }
+        final int total = buses.size();
+        if (busTurnCursor >= total) {
+            busTurnCursor = 0; // 上一轮已扫完：从头开始，保证公平（不是「放弃」）
+        }
+        // 轮转预算：从上次停下的游标继续（游标就是「本 tick 处理到哪」的进度记录）。
+        int budget = BUS_TURN_BUDGET_PER_TICK;
+        int visited = 0;
+        while (budget > 0 && visited < total) {
+            // <b>越界检查必须在循环内</b>：本 tick 的「已访问数」（visited）与游标的绝对值是两件事 ——
+            // 游标从中间一路走到末尾时，visited 还很小的情形完全正常（例：游标 8、共 10 台）。
+            // 只靠循环外的检查会让 buses.get(cursor) 越界抛异常，而抛异常恰好就是本轮要修的
+            // 「一台出问题 ⇒ 后面全不刷」那一类事故，绝不能自己制造。
+            if (busTurnCursor >= total) {
+                busTurnCursor = 0; // 一轮走到底：从头继续（同一 tick 内仍保证每台至多访问一次）
             }
+            final BlockPos pos = buses.get(busTurnCursor);
+            busTurnCursor++;
+            visited++;
+            budget--;
+            if (!level.isLoaded(pos)) {
+                continue; // 区块未加载：不记「已刷」，看门狗会把它算成「没刷到」
+            }
+            final BlockEntity blockEntity = level.getChunkAt(pos)
+                .getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK);
+            if (!(blockEntity instanceof final RsccExporterExecutorMode exporter)) {
+                continue;
+            }
+            try {
+                exporter.rscc$refreshBusTurn();
+                busTurnRefreshAt.put(pos, level.getGameTime());
+            } catch (final RuntimeException failure) {
+                // <b>故障隔离</b>：一台总线的刷新失败绝不能带走排在它后面的所有总线（见上方 javadoc ①）。
+                // 只记一条翻转日志（同一条总线同一原因只打一次），它下一次被轮到时照旧重试。
+                if (RsccAssemblyDebug.isEnabled()) {
+                    RsccAssemblyDebug.transition(
+                        "busturnfail@" + RsccAssemblyDebug.at(pos),
+                        failure.getClass().getSimpleName(),
+                        RsccAssemblyDebug.machine("exporter", pos)
+                            + " bus_turn_refresh_failed: " + failure.getClass().getName()
+                            + ": " + failure.getMessage()
+                            + " (只跳过这一台；下一轮重试，其余总线不受影响)");
+                }
+            }
+        }
+        // 扫完判定 = <b>本 tick 的进度</b>（visited 是否已覆盖全部台数），而不是「游标是否恰好越界」：
+        // 没扫完 ⇒ 下一 tick 继续调（见 tickBusScheduler 的刷新段），
+        // 因此整轮耗时 = ceil(台数 / 预算) tick，而不是「等下一个 20 tick 节拍 × 轮数」。
+        if (busTurnCursor >= total) {
+            busTurnCursor = 0;
+        }
+        busTurnSweepActive = visited < total;
+        busTurnWatchdog(level);
+    }
+
+    /**
+     * 分享分派的<b>停滞看门狗</b>：归属表里的某台总线超过 {@link #BUS_TURN_STALE_TICKS} tick
+     * 没有被链上任何成员刷新过 ⇒ 强制作废连接检测并重扫（下一次访问即重新扫完），并打一条锚点日志。
+     *
+     * <p><b>为什么判据是「链上任何成员」而不是「本仓」</b>：一条总线可能只贴在链上另一台仓旁边，
+     * 由那台仓负责刷新它（归属表是链级的）。只查本仓会把这种正常布局误判成停滞，
+     * 于是每次窗口都白做一次强制重扫。</p>
+     * <p>只读 + 幂等：同一份状态最多每 {@link #BUS_TURN_STALE_TICKS} tick 触发一次重扫，
+     * 且只作废缓存（下一次访问自会重建），不搬运任何资源。</p>
+     */
+    private void busTurnWatchdog(final Level level) {
+        final long now = level.getGameTime();
+        if (busTurnWatchdogTick == Long.MIN_VALUE) {
+            // 宽限期：第一次只上表、不判定 —— 否则「刚读档 / 刚建好归属表、还一台都没轮到」会被误判成停滞，
+            // 白做一次强制重扫（并且把已经刷过的那几台的时间戳一起丢掉）。
+            busTurnWatchdogTick = now + BUS_TURN_STALE_TICKS;
+            return;
+        }
+        if (now < busTurnWatchdogTick) {
+            return;
+        }
+        busTurnWatchdogTick = now + BUS_TURN_STALE_TICKS;
+        if (busCategoryOwners.isEmpty()) {
+            return;
+        }
+        final List<SequenceExecutionChamberBlockEntity> members = chainMembers();
+        final long staleBefore = now - BUS_TURN_STALE_TICKS;
+        BlockPos starved = null;
+        for (final List<BlockPos> owners : busCategoryOwners.values()) {
+            for (final BlockPos pos : owners) {
+                long lastRefresh = Long.MIN_VALUE;
+                for (final SequenceExecutionChamberBlockEntity member : members) {
+                    final Long at = member.busTurnRefreshAt.get(pos);
+                    if (at != null && at > lastRefresh) {
+                        lastRefresh = at;
+                    }
+                }
+                if (lastRefresh < staleBefore) {
+                    starved = pos;
+                    break;
+                }
+            }
+            if (starved != null) {
+                break;
+            }
+        }
+        // 台账有界化：超过窗口若干倍的旧条目直接清掉（幂等、无泄漏）。
+        if (busTurnRefreshAt.size() > 256) {
+            busTurnRefreshAt.values().removeIf(at -> at < now - BUS_TURN_STALE_TICKS * 4L);
+        }
+        if (starved == null) {
+            return; // 每台都有人刷过（或表里没有属主总线 = 没人在用总线输出）：没有「分配」可谈
+        }
+        // 强制重扫：作废连接检测 ⇒ 下一次访问重新扫完（可能把原本漏掉的那台总线找回来）。
+        invalidateBusLinkFloodsForChain(members);
+        if (RsccAssemblyDebug.isEnabled()) {
+            RsccAssemblyDebug.transition(
+                "busturnstale@" + RsccAssemblyDebug.at(worldPosition),
+                RsccAssemblyDebug.at(starved),
+                RsccAssemblyDebug.machine("chamber", worldPosition)
+                    + " bus_turn_stale: " + RsccAssemblyDebug.machine("exporter", starved)
+                    + " 已超过 " + BUS_TURN_STALE_TICKS + " tick 没有任何链上成员刷新过它"
+                    + " (强制重扫连接检测；若它仍然不可达，它会继续被点名而不会静默占着份额)");
+        }
+    }
+
+    /** 对链上每台成员作废连接检测与分派台账（停滞看门狗的强制重扫入口）。 */
+    private void invalidateBusLinkFloodsForChain(
+        final List<SequenceExecutionChamberBlockEntity> members) {
+        for (final SequenceExecutionChamberBlockEntity member : members) {
+            member.invalidateBusLinkFloods();
         }
     }
 
@@ -5823,18 +6588,48 @@ public class SequenceExecutionChamberBlockEntity
      * 因此「机器真的被别的东西占死」时仍然会走让位分支，不会死锁。只读，绝不搬运 / 销毁。</p>
      */
     private boolean machineBusyOnPipeline(final Level level, final BlockPos target) {
+        // <b>刻意现读</b>（不做每 tick 备忘）：本判据是与 {@link #supplyTargetHoldsItem} 并列的
+        // 「前位机器正在干活 ⇒ 不让位」凭据，必须看得见「本 tick 自己刚推的那一份」。
         final Set<Item> held = occupiedItemsOf(level, target);
         if (held.isEmpty()) {
             return false;
         }
-        for (final BusCategoryInfo info : busCategories()) {
-            for (final Item item : info.items()) {
-                if (item != null && held.contains(item)) {
-                    return true;
-                }
+        // 判据与原实现<b>完全等价</b>（原来就是「遍历全部类别 × 每类物品，看 held 里有没有它」），
+        // 只是把那份并集改成每 tick 构建一次、之后 O(1) 查表（见 pipelineCategoryItems 的说明）。
+        final Set<Item> pipeline = pipelineCategoryItems();
+        if (pipeline.isEmpty()) {
+            return false;
+        }
+        for (final Item item : held) {
+            if (pipeline.contains(item)) {
+                return true;
             }
         }
         return false;
+    }
+
+    /**
+     * 只读：本仓全部类别的<b>物品种类并集</b>（= 「本仓产线里会出现的东西」），每 tick 至多构建一次。
+     * <p>用途只有一处：{@link #machineBusyOnPipeline}。它的判据本身就是「这一格压着的是不是本仓任一类别的
+     * 物品」，因此换成这份并集<b>不改变任何结论</b>，只是把 O(类别×物品) 的重复扫描换成一次构建。
+     * 类别表本来就按 {@link #BUS_SCHEDULE_INTERVAL_TICKS} tick 重建，本备忘与之同源、跨 tick 自动失效。</p>
+     */
+    private Set<Item> pipelineCategoryItems() {
+        final Level level = getLevel();
+        final long now = level == null ? Long.MIN_VALUE : level.getGameTime();
+        if (now != pipelineCategoryItemsTick) {
+            pipelineCategoryItemsTick = now;
+            final Set<Item> items = new HashSet<>();
+            for (final BusCategoryInfo info : busCategories()) {
+                for (final Item item : info.items()) {
+                    if (item != null) {
+                        items.add(item);
+                    }
+                }
+            }
+            pipelineCategoryItemsCache = items.isEmpty() ? Set.of() : Set.copyOf(items);
+        }
+        return pipelineCategoryItemsCache;
     }
 
     /**
@@ -6360,6 +7155,11 @@ public class SequenceExecutionChamberBlockEntity
         if (level == null || level.isClientSide()) {
             return 0L;
         }
+        // <b>名额读取之前先对账</b>（每 tick 至多一次）：把「工位已经拆掉」的孤儿登记清掉、
+        // 把「该格一直拒收我们的推送且我们一次都没推成功过」的死件登记标出来（不再占名额）。
+        // 为什么挂在这里：名额只有两个读取入口（本方法与 inFlightBreakdownForRecipe），
+        // 两者都必然会问「在制件数」，因此对账一定跑得到，不会因为某条路径没走到而永远不对账。
+        reconcileInFlightUnits();
         final long now = level.getGameTime();
         if (now == inFlightProbeTick) {
             return inFlightProbeValue;
@@ -6430,6 +7230,11 @@ public class SequenceExecutionChamberBlockEntity
         final Map<BlockPos, BlockPos> stations = supplyStations(level);
         long busy = 0L;
         for (final BlockPos station : new ArrayList<>(inFlightUnits.keySet())) {
+            // 已判死件的登记不再占名额（它是「一台机器咬住一件永远不动的东西」的唯一泄漏点；
+            // 判据与自愈见 reconcileInFlightUnits / abandonedInFlightAt 的说明）。
+            if (!registrationCounts(station)) {
+                continue;
+            }
             if (stationIsOccupied(level, station)) {
                 busy++;
                 continue;
@@ -6834,6 +7639,9 @@ public class SequenceExecutionChamberBlockEntity
             if (chamber == null) {
                 continue;
             }
+            // 每台仓各自对账一次（同 tick 内重复调用由它自己的 inFlightReconcileTick 吸收）：
+            // 名额读数必须是「对账之后」的口径，否则同一 tick 里诊断行与实际判定会各说各话。
+            chamber.reconcileInFlightUnits();
             if (chamber == this) {
                 sawSelf = true;
             }
@@ -6845,6 +7653,11 @@ public class SequenceExecutionChamberBlockEntity
                     continue; // 别的配方的在制件 / 步骤投入物 / 成品：不占这条配方的名额
                 }
                 final BlockPos station = entry.getKey();
+                // <b>死件登记不占名额</b>（跨仓同样成立：登记写在推料那一台仓上，因此这里必须
+                // 逐仓问它自己有没有把这一格标成死件）。判据 / 自愈见 reconcileInFlightUnits。
+                if (!chamber.registrationCounts(station)) {
+                    continue;
+                }
                 if (stationIsOccupied(level, station)) {
                     if (countedPositions.add(station.asLong())) {
                         parts[0]++;
@@ -7108,6 +7921,12 @@ public class SequenceExecutionChamberBlockEntity
         final Map<BlockPos, BlockPos> stations = supplyStations(level);
         for (final Map.Entry<BlockPos, InFlightUnit> entry : new ArrayList<>(inFlightUnits.entrySet())) {
             if (!registeredUnitMatches(entry.getValue(), recipeId, markers)) {
+                continue;
+            }
+            // 死件登记不算「机器正在做它的件」（与 inFlightBreakdownForRecipe 的第 ① 分量同一口径：
+            // 这条兜底路径供 machineHasWorkFor / loserOnMyStations 使用，两处必须一致，否则
+            // 「排队赢家还有没有活」与「名额」会各说各话）。
+            if (!registrationCounts(entry.getKey())) {
                 continue;
             }
             if (stationIsOccupied(level, entry.getKey())) {
@@ -7686,6 +8505,57 @@ public class SequenceExecutionChamberBlockEntity
     }
 
     /**
+     * {@link #stationKey} 的<b>每 tick 备忘</b>入口（唯一实现仍是上面那个静态方法，本方法只是转发 + 缓存）。
+     *
+     * <h2>为什么要备忘（总线越多越卡的一条主要成本）</h2>
+     * <p>{@link #supplyTargetHoldsItem} / {@link #stationTwinHoldsStepExtra} 原先都要「把<b>全部</b>供料目标
+     * 的工位重算一遍」来找同工位的兄弟目标 —— 每次调用 N 次 {@code operatingPosOf}（一次方块实体查询），
+     * 而它们在让位判据的内层循环里被反复调用，于是刷一遍清单的代价随总线台数<b>平方</b>增长。
+     * 工位归属是<b>结构性</b>的（朝向 / 操作对象），同一 tick 内不会因为我们推了一份料而改变，
+     * 因此它可以安全备忘；「容器里压着什么」不可以（见 {@link #stationKeyProbeCache} 字段处的说明）。</p>
+     */
+    private BlockPos stationKeyCached(final Level level, final BlockPos target) {
+        if (level == null || target == null) {
+            return target;
+        }
+        final long now = level.getGameTime();
+        if (now != stationKeyProbeTick) {
+            stationKeyProbeTick = now;
+            stationKeyProbeCache.clear();
+        }
+        final BlockPos cached = stationKeyProbeCache.get(target);
+        if (cached != null) {
+            return cached;
+        }
+        final BlockPos key = stationKey(level, target);
+        stationKeyProbeCache.put(target, key);
+        return key;
+    }
+
+    /**
+     * 只读：<b>同一个物理工位</b>上的全部供料目标（含工位本体；每 tick 一份，由 {@link #stationKeyCached} 派生）。
+     * <p>把「遍历全部供料目标找同工位兄弟」从 O(全部目标) 降到 O(同工位目标数)（通常 1~3）。
+     * 判定完全等价：原判据就是「{@code stationKey(other) == station} 的那些目标里有没有握着这一件」。</p>
+     */
+    private List<BlockPos> stationSiblings(final Level level, final BlockPos station) {
+        if (level == null || station == null) {
+            return List.of();
+        }
+        final long now = level.getGameTime();
+        if (now != stationSiblingsProbeTick) {
+            stationSiblingsProbeTick = now;
+            final Map<BlockPos, List<BlockPos>> grouped = new LinkedHashMap<>();
+            for (final BlockPos target : busSupplyTargets()) {
+                grouped.computeIfAbsent(stationKeyCached(level, target), key -> new ArrayList<>(2))
+                    .add(target);
+            }
+            stationSiblingsProbeCache = grouped;
+        }
+        final List<BlockPos> siblings = stationSiblingsProbeCache.get(station);
+        return siblings == null ? List.of() : siblings;
+    }
+
+    /**
      * 只读：把本仓的供料目标按其<b>物理工位</b>归并（键 = {@link #stationKey}，值 = 该工位的代表目标）。
      *
      * <p>去重的直接效果（用户实测的两条抱怨都由此而来）：</p>
@@ -7694,14 +8564,31 @@ public class SequenceExecutionChamberBlockEntity
      *     <li>「这台是不是已经握着这件料」不再被拆成两个各说各话的答案（见
      *     {@link #supplyTargetHoldsItem}）。</li>
      * </ul>
-     * <p>每 tick 至多调用几次，规模 = 供料目标数（个位数），只读、不搬运。</p>
+     * <p><b>每 tick 只真算一次</b>（见字段 {@code supplyStationsProbe}）：本表在推料 / 备料 / 在制计数
+     * 三条路径上被反复读（{@link #inFlightBreakdownForRecipe} 还会逐仓读），而它每次都要对每个供料目标
+     * 做一次「谁是它的操作对象」的探测。结算成每 tick 一份之后：同一份世界状态给出同一份表，
+     * 判定一字未改，重复的只读探测全部消失（总线越多收益越大）。只读、不搬运。</p>
      */
     private Map<BlockPos, BlockPos> supplyStations(final Level level) {
+        if (level == null) {
+            return Map.of();
+        }
+        final long now = level.getGameTime();
+        if (now != supplyStationsProbeTick) {
+            supplyStationsProbeTick = now;
+            supplyStationsProbe = null;
+        }
+        final Map<BlockPos, BlockPos> memo = supplyStationsProbe;
+        if (memo != null) {
+            return memo;
+        }
         final Map<BlockPos, BlockPos> stations = new LinkedHashMap<>(4);
         for (final BlockPos target : busSupplyTargets()) {
-            stations.putIfAbsent(stationKey(level, target), target);
+            stations.putIfAbsent(stationKeyCached(level, target), target); // 工位归属走每 tick 备忘
         }
-        return stations;
+        final Map<BlockPos, BlockPos> result = java.util.Collections.unmodifiableMap(stations);
+        supplyStationsProbe = result;
+        return result;
     }
 
     /**
@@ -7744,16 +8631,19 @@ public class SequenceExecutionChamberBlockEntity
         if (level == null || target == null || item == null) {
             return false;
         }
-        final BlockPos station = stationKey(level, target);
+        final BlockPos station = stationKeyCached(level, target);
         if (holdsItemAt(level, target, item) || holdsItemAt(level, station, item)) {
             return true;
         }
         // 同一工位上的另一台机器（机械手）也要看：料可能正攥在手里，而不是摆在台上。
-        for (final BlockPos other : busSupplyTargets()) {
+        // <b>本轮修正（成本）</b>：兄弟目标来自每 tick 一份的工位分组（{@link #stationSiblings}），
+        // 不再现场遍历全部供料目标 —— 判定一字未改（仍是「同工位里有没有握着这一件」），
+        // 但「每次调用 N 次方块实体查询」的平方开销消失。容器内容仍是<b>现读</b>（不变式要求）。
+        for (final BlockPos other : stationSiblings(level, station)) {
             if (other.equals(target) || other.equals(station)) {
                 continue;
             }
-            if (stationKey(level, other).equals(station) && holdsItemAt(level, other, item)) {
+            if (holdsItemAt(level, other, item)) {
                 return true;
             }
         }
@@ -7792,14 +8682,16 @@ public class SequenceExecutionChamberBlockEntity
         if (level == null || level.isClientSide()) {
             return false; // 客户端不参与搬运
         }
-        final BlockPos station = stationKey(level, target);
-        for (final BlockPos other : busSupplyTargets()) {
+        final BlockPos station = stationKeyCached(level, target);
+        // 同工位的兄弟目标来自每 tick 一份的工位分组（与 supplyTargetHoldsItem 同一份数据源）；
+        // 判定与原先逐格重算 stationKey 完全等价，只是不再「每次调用都遍历全部供料目标」。
+        for (final BlockPos other : stationSiblings(level, station)) {
             // 跳过自己、也跳过「工位本体」（置物台 / 传送带表面）—— 与 supplyTargetHoldsItem 的循环
             // 同一口径：台面上的散落件（废料 / 成品）不该阻止机械手去拿它那一步该拿的投入物。
             if (other.equals(target) || other.equals(station)) {
                 continue;
             }
-            if (stationKey(level, other).equals(station) && holdsItemAt(level, other, item)) {
+            if (holdsItemAt(level, other, item)) {
                 return true; // 同一工位的另一台机器已经握着这一件 ⇒ 本总线不再推第二份
             }
         }
@@ -8016,6 +8908,13 @@ public class SequenceExecutionChamberBlockEntity
             if (available <= 0) {
                 continue;
             }
+            // <b>故障隔离（本轮）：逐资源 try/catch，一台坏不连累其余</b>。
+            // 为什么必须有：这是备料侧的热路径（每 tick 一次，遍历<b>网络上全部资源</b>），
+            // 而循环体里要读方块能力 / 解析配方 / 真的搬运。任一条资源上抛出（附属模组的自定义能力、
+            // 异常的数据组件），异常会冲出整个循环、进 RS 的 tick 兜底 ⇒ <b>本 tick 排在它后面的
+            // 全部资源都不再被备料</b>；下一 tick 顺序相同、同一条资源仍然抛 ⇒ 「整条产线再也备不进料」
+            // = 用户实测的「突然全停」这一类永久卡死。逐条隔离之后，坏的只损失它自己这一轮。
+            try {
             if (key instanceof final ItemResource itemResource) {
                 final Long target = itemTargets.get(itemResource.item());
                 if (target != null) {
@@ -8040,6 +8939,20 @@ public class SequenceExecutionChamberBlockEntity
                 final Long target = fluidTargets.get(fluidResource.fluid());
                 if (target != null) {
                     pullFluid(storage, fluidResource, available, target);
+                }
+            }
+            } catch (final RuntimeException failure) {
+                // 隔离并留痕（限频：同一（仓 + 资源 + 异常类型）只记一条），
+                // <b>绝不重抛</b> —— 重抛等于把「后面所有资源这一轮都不备料」这条永久卡死重新引回来。
+                if (RsccAssemblyDebug.changed("pull_failed@" + RsccAssemblyDebug.at(worldPosition)
+                        + "#" + key, failure.getClass().getName())) {
+                    RsccAssemblyDebug.warn("pull_failed@" + RsccAssemblyDebug.at(worldPosition)
+                            + "#" + key,
+                        RsccAssemblyDebug.machine("chamber", worldPosition)
+                            + " pull_failed resource=" + key
+                            + " error=" + failure.getClass().getSimpleName()
+                            + " message=" + failure.getMessage()
+                            + " (该资源本轮跳过；其余资源照常备料)");
                 }
             }
         }
@@ -9075,8 +9988,68 @@ public class SequenceExecutionChamberBlockEntity
             tracePullHold(resource, available, why, why + " target=" + target, available);
             return false;
         }
-        final long extracted = storage.extract(resource, Math.min(deficit, available),
-            Action.EXECUTE, Actor.EMPTY);
+        // <b>取用侧接线（「不抽走别人在途自动合成任务等着的量」的最后一环）。</b>
+        // 为什么必须接在这里、而不是继续用上面那个 {@code available}（存量）：
+        // RS 2.0 的网络存储<b>没有「预留」这个概念</b> —— {@code RootStorageImpl#extract} 是裸委托、
+        // 没有任何抽取侧 listener，任务「还没拿到」的量只记在它自己的 {@code initialRequirements} 上
+        // （对外报成 {@code TaskStatus.Item#extracting}，见 {@link SequenceMaterialGuard} 的推导与
+        // {@code tools/selfcheck_round58_reserved_stock_guard.py} 的源码锚点），而且<b>没有超时</b>。
+        // 本仓每 {@value #ENGINE_INTERVAL_TICKS} tick 就判一次并抽走，RS 任务只在自身 step 试一次 ⇒
+        // 仓有<b>系统性优势</b>：先把「既是任务在等着的量、又是本仓要喂机械手的投入物」的
+        // {@code create:cogwheel} 这类原料抽走，那条任务就<b>永久停在 EXTRACTING_INITIAL_RESOURCES</b>
+        // （用户实测：「齿轮被提前消耗 ⇒ 齿轮 / 大齿轮的合成任务卡在那里不动」）。
+        // 因此这里把可用量换成 {@link SequenceMaterialGuard#availableForTake} 的结果（存量 − 在途预留），
+        // 并用「同 tick 同网络共享」的账本承诺量夹一次本轮取用量（多仓合计不超可用量）。
+        // <b>每次现算、绝不缓存</b>：存量与任务状态每 tick 都在变，缓存会让「该等的不等 / 该取的不取」。
+        final Network reserveNetwork = getNode().getNetworkOrNull();
+        final AutocraftingNetworkComponent reserveAutocrafting = reserveNetwork == null ? null
+            : reserveNetwork.getComponent(AutocraftingNetworkComponent.class);
+        final List<TaskStatus> reserveStatuses = reserveAutocrafting == null
+            ? List.of() : reserveAutocrafting.getStatuses();
+        // 「本模组自己下的任务」（{@link #requestMissingViaAutocraft} 的 ensureTask）不算别人的预留：
+        // 否则「为补某个缺料而开的合成任务」会把那份原料也锁住 ⇒ 本模组把自己堵死。
+        // <b>拿不到精确的 taskId 集合</b>：RS 的 {@code EnsureResult} 只回三个枚举值、{@code TaskStatus}
+        // 不带 actor、公开 API 也没有任何「枚举本模组创建的任务」的入口。因此退化为唯一可读且不靠猜的
+        // 判据：<b>任务产物落在本仓「输入类 / 中间产物类」类别里</b> —— 这正是
+        // {@link #requestMissingViaAutocraft} 会替本仓向 RS 请求合成的那一类资源（两处口径同源于
+        // {@link #busCategories()}）。本仓自己那条产线的<b>成品</b>任务（玩家为本产线下单的那一条）
+        // 不在这两个集合里（成品 / 废料是 RESULT_/SCRAP_ 前缀的类别），因此它的预留照旧被尊重 ——
+        // 那正是本轮要修的那条任务。
+        final Set<Item> ownProducts = new LinkedHashSet<>();
+        for (final BusCategoryInfo category : busCategories()) {
+            if (category.isInput() || category.isIntermediate()) {
+                for (final Item own : category.items()) {
+                    if (own != null) {
+                        ownProducts.add(own);
+                    }
+                }
+            }
+        }
+        final Set<String> ownTaskIds = new LinkedHashSet<>();
+        for (final TaskStatus status : reserveStatuses) {
+            if (status != null && status.info() != null && status.info().id() != null
+                && status.info().resource() instanceof final ItemResource ownProduct
+                && ownProducts.contains(ownProduct.item())) {
+                ownTaskIds.add(status.info().id().id().toString());
+            }
+        }
+        final long takeable = SequenceMaterialGuard.availableForTake(available,
+            SequenceMaterialGuard.pendingExtraction(reserveStatuses, ownTaskIds)
+                .getOrDefault(resource, 0L));
+        final SequenceMaterialGuard.TakeLedger takeLedger = SequenceMaterialGuard.sharedLedger(
+            reserveNetwork == null ? storage : reserveNetwork, now);
+        final long granted = takeLedger.claim(resource, Math.min(deficit, takeable), takeable);
+        if (granted <= 0L) {
+            // 获批 0（本轮可用量已被在途任务等着 / 已被同 tick 的其它仓承诺走）：走<b>既有</b>的「等待」通道
+            // （与 {@code already_enough} / {@code storage_full} / {@code extract_zero} 同一个 pull_hold，
+            // 状态翻转才打一条，因此<b>不会自旋刷屏</b>）。<b>绝不硬抽</b>、也不改任何任务状态：
+            // 等那条任务把它抽走（或交割回网络），下一轮自然取得到（{@code extracting} 单调减少 ⇒ 必然收敛）。
+            tracePullHold(resource, available, SequenceMaterialGuard.HOLD_INFLIGHT_TASK_NEED,
+                SequenceMaterialGuard.HOLD_INFLIGHT_TASK_NEED + " stored=" + available
+                    + " takeable=" + takeable + " target=" + target, available);
+            return false;
+        }
+        final long extracted = storage.extract(resource, granted, Action.EXECUTE, Actor.EMPTY);
         if (extracted <= 0) {
             // 追踪：网络「说有货」却一件都抽不出来（与别的任务争抢 / 被别的东西先取走）—— 原先静默
             tracePullHold(resource, available, "extract_zero", "extract_zero", available);
@@ -9158,8 +10131,61 @@ public class SequenceExecutionChamberBlockEntity
             }
             return;
         }
-        final long extracted = storage.extract(resource, Math.min(deficit, available),
-            Action.EXECUTE, Actor.EMPTY);
+        // <b>取用侧接线（与物品侧完全同源，见 {@link #pullItem} 里那一整段推导）。</b>
+        // 流体侧此前同样把 {@code fillInternalForBus} 读到的<b>存量</b>当可用量（见上面的 available），
+        // 因此存在同一类问题：RS 已经在途等着抽取的流体照样会被本仓先抽走 —— 那条流体任务会永久停在
+        // {@code EXTRACTING_INITIAL_RESOURCES}（无超时）。故与物品侧逐条对称：可用量 = 存量 − 在途预留，
+        // 并用同 tick 同网络共享账本夹本轮取用量；获批 0 时走既有的「等待 / 上报」通道
+        // （{@link RsccAssemblyDebug#transition}，状态翻转才打一条），绝不硬抽、绝不自旋。
+        final Level fluidLevel = getLevel();
+        final long fluidNow = fluidLevel == null ? 0L : fluidLevel.getGameTime();
+        final Network reserveNetwork = getNode().getNetworkOrNull();
+        final AutocraftingNetworkComponent reserveAutocrafting = reserveNetwork == null ? null
+            : reserveNetwork.getComponent(AutocraftingNetworkComponent.class);
+        final List<TaskStatus> reserveStatuses = reserveAutocrafting == null
+            ? List.of() : reserveAutocrafting.getStatuses();
+        // 本模组自己下的任务不算别人的预留（判据与理由见 {@link #pullItem} 里同一段说明：拿不到精确的
+        // taskId 集合，退化为「任务产物落在本仓输入类 / 中间产物类类别里」，此处取那些类别的流体那一侧）。
+        final Set<Fluid> ownFluidProducts = new LinkedHashSet<>();
+        for (final BusCategoryInfo category : busCategories()) {
+            if (category.isInput() || category.isIntermediate()) {
+                for (final Fluid own : category.fluids()) {
+                    if (own != null) {
+                        ownFluidProducts.add(own);
+                    }
+                }
+            }
+        }
+        final Set<String> ownTaskIds = new LinkedHashSet<>();
+        for (final TaskStatus status : reserveStatuses) {
+            if (status != null && status.info() != null && status.info().id() != null
+                && status.info().resource() instanceof final FluidResource ownProduct
+                && ownFluidProducts.contains(ownProduct.fluid())) {
+                ownTaskIds.add(status.info().id().id().toString());
+            }
+        }
+        final long takeable = SequenceMaterialGuard.availableForTake(available,
+            SequenceMaterialGuard.pendingExtraction(reserveStatuses, ownTaskIds)
+                .getOrDefault(resource, 0L));
+        final SequenceMaterialGuard.TakeLedger takeLedger = SequenceMaterialGuard.sharedLedger(
+            reserveNetwork == null ? storage : reserveNetwork, fluidNow);
+        final long granted = takeLedger.claim(resource, Math.min(deficit, takeable), takeable);
+        if (granted <= 0L) {
+            // 获批 0：本轮可用量已被在途任务等着 / 已被同 tick 的其它仓承诺走 ⇒ 等待 + 上报，不硬抽、不自旋。
+            if (RsccAssemblyDebug.isEnabled()) {
+                RsccAssemblyDebug.transition(
+                    "holdfluid@" + RsccAssemblyDebug.at(worldPosition) + "#"
+                        + RsccAssemblyDebug.fluidId(resource.fluid()),
+                    SequenceMaterialGuard.HOLD_INFLIGHT_TASK_NEED,
+                    RsccAssemblyDebug.machine("chamber", worldPosition)
+                        + " pull {fluid=" + RsccAssemblyDebug.fluidId(resource.fluid()) + "} got=0"
+                        + " reason=" + SequenceMaterialGuard.HOLD_INFLIGHT_TASK_NEED
+                        + " stored=" + available + " takeable=" + takeable + " target=" + target
+                        + " (已被在途合成任务等着抽取：等它抽走 / 交割回网络，不硬抽)");
+            }
+            return;
+        }
+        final long extracted = storage.extract(resource, granted, Action.EXECUTE, Actor.EMPTY);
         if (extracted <= 0) {
             return;
         }
@@ -9729,6 +10755,12 @@ public class SequenceExecutionChamberBlockEntity
                 }
             }
         }
+        // <b>机器清理（本轮）：任务已确认结束、或本仓被挂起冻结时</b>，把压在工位上、
+        // 「该配方已经没有任何活跃订单」的过渡件收回本仓 —— 否则那一台机器唯一的加工位被永久占死，
+        // 下一单里这一台「永不再装配」（用户实测：部分恢复、部分永久不恢复）。
+        // 为什么放在门控节流<b>之外</b>：挂起冻结时 {@code idleNow} 恒为假，若挂在里面，
+        // 恰恰是「最需要它」的那个状态永远跑不到。判据与有界性见 clearDeadStationPieces 的 javadoc。
+        clearDeadStationPieces();
         if (--busScheduleCooldown <= 0) {
             busScheduleCooldown = BUS_SCHEDULE_INTERVAL_TICKS;
             // 顺序要点：先重建「本仓负责的步」（类别表读它，用来给每个步各出一个中间产物类别），
@@ -9764,10 +10796,13 @@ public class SequenceExecutionChamberBlockEntity
         // 现在改为：共享类别仍每 tick 重推（份额轮次依赖它），其余类别每
         // {@value #BUS_SCHEDULE_INTERVAL_TICKS} tick 重推一次（≤1 秒），因此「空转判定」从
         // 每 tick 一次降到每次重算一次，而机器一空出来 / 料一备好最多 1 秒就恢复供料。
+        // <b>本轮补充（前进保证）</b>：分派改成「轮转预算」之后，一轮要 ceil(台数 / 预算) 次调用才走得完；
+        // 只要还没扫完（{@link #busTurnSweepActive}）就<b>每 tick 继续</b>，因此整轮耗时被夹在
+        // ceil(台数 / 预算) tick，而不是「每轮之间还要等一个 20 tick 节拍」。
         if (--busExportRefreshCooldown <= 0) {
             busExportRefreshCooldown = BUS_SCHEDULE_INTERVAL_TICKS;
             pushBusTurnToExporters();
-        } else if (busRoundRobinActive) {
+        } else if (busRoundRobinActive || busTurnSweepActive) {
             pushBusTurnToExporters();
         }
     }
@@ -9921,6 +10956,12 @@ public class SequenceExecutionChamberBlockEntity
         lastSuccessfulPushAt = level.getGameTime();
         if (target != null) {
             refusedTargetAt.remove(target);
+            // <b>死件自愈的关键一步</b>：这一格重新收下了我们的东西 ⇒ 它显然活着。
+            // 同时把活性观测起点推到现在、并撤掉死件标记（若曾标过）—— 见 abandonedInFlightAt 的说明。
+            unitLivenessAt.put(target.immutable(), lastSuccessfulPushAt);
+            if (abandonedInFlightAt.remove(target.immutable()) != null) {
+                inFlightAbandonedCount = abandonedInFlightAt.size();
+            }
         }
     }
 
@@ -10205,6 +11246,10 @@ public class SequenceExecutionChamberBlockEntity
             return 0;
         }
         for (int slot = 0; slot < handler.getSlots(); slot++) {
+            // <b>故障隔离（本轮）</b>：逐格 try/catch。这一格读不出来（附属模组的自定义容器在某个槽位抛）
+            // 时，跳过这一格、继续看下一格 —— 否则异常会冲出「堵塞自愈」整个方法，
+            // 让<b>其余每一台被堵的机器这一轮都不再自愈</b>，正是「一台坏连累全部」的形态。
+            try {
             final ItemStack inSlot = handler.getStackInSlot(slot);
             if (inSlot.isEmpty() || !belongsToMyPipeline(inSlot)) {
                 continue;
@@ -10277,12 +11322,29 @@ public class SequenceExecutionChamberBlockEntity
                     + " (占住供料目标的废料 / 过渡件已收回本仓，随后按既有回流写回网络)");
             }
             return moved;
+            } catch (final RuntimeException failure) {
+                // 逐格隔离：这一格判定 / 抽取抛了，只跳过这一格（后面的格子照旧有机会被自愈），
+                // 绝不把异常抛给 RS 的 tick —— 那会让「所有被堵的机器」这一轮一起失去自愈机会。
+                if (RsccAssemblyDebug.changed("unblock_failed@" + RsccAssemblyDebug.at(worldPosition)
+                        + "#" + slot, failure.getClass().getName())) {
+                    RsccAssemblyDebug.warn("unblock_failed@" + RsccAssemblyDebug.at(worldPosition)
+                            + "#" + slot,
+                        RsccAssemblyDebug.machine("chamber", worldPosition)
+                            + " unblock_failed target=" + RsccAssemblyDebug.at(target)
+                            + " slot=" + slot
+                            + " error=" + failure.getClass().getSimpleName()
+                            + " message=" + failure.getMessage()
+                            + " (该格本轮跳过，其余格子照常尝试)");
+                }
+                continue;
+            }
         }
         // 找到了目标、却没有任何「本产线的件」可收：分两种情形，都必须留下可查的证据 ——
         //   * 工位是空的 / 装的是别人的东西 ⇒ 与堵塞无关（安静返回即可）；
         //   * 工位装的是本产线的件、但都属于「我方想推的那一件」⇒ 竞态保护拦下了（也安静）。
         // 真正需要告警的是「有件、但我方判定不属于本产线」——那往往意味着判定口径漏了一种废料。
         for (int slot = 0; slot < handler.getSlots(); slot++) {
+            try {
             final ItemStack inSlot = handler.getStackInSlot(slot);
             if (inSlot.isEmpty() || belongsToMyPipeline(inSlot)) {
                 continue;
@@ -10298,6 +11360,11 @@ public class SequenceExecutionChamberBlockEntity
                         + " (工位上有件但不属于本仓这条产线 ⇒ 保守不动；若它确实堵住了本产线请反馈此件名)");
             }
             return 0;
+            } catch (final RuntimeException ignored) {
+                // 只读诊断循环：这一格读不出来就跳过它，绝不让「打印一条日志」把整个自愈方法打断
+                //（本方法第一段循环已经隔离过一次；这里同样必须隔离，否则异常仍会冲出方法）。
+                continue;
+            }
         }
         return 0;
     }
@@ -11299,6 +12366,10 @@ public class SequenceExecutionChamberBlockEntity
             if (item == null) {
                 continue;
             }
+            // <b>故障隔离（本轮）</b>：逐个工位 try/catch。一个工位的残留回流失败
+            // （附属模组容器在某个槽位抛 / 入网模拟抛）绝不能让整段收尾中断 ——
+            // 否则后面每一台机器的残留都留在原地，机器永久占死（= 「部分工位永久不再装配」的另一条路径）。
+            try {
             // <b>2026-10-06 配套修复（同伴 D 指出的必要补充）：工位侧的过渡件也要能收。</b>
             //
             // 把 {@link #isTransitionOfMyRecipes} 改成数据驱动之后，坚固板的工位件不再被
@@ -11346,6 +12417,8 @@ public class SequenceExecutionChamberBlockEntity
                 continue; // 工位没了 / 区块未加载 / 不是容器 ⇒ 判不了就不动
             }
             for (int slot = 0; slot < handler.getSlots(); slot++) {
+                // 逐格也隔离一次：同一个工位里一个槽位读不出来，不能把该工位其余槽位一起丢掉。
+                try {
                 final ItemStack inSlot = handler.getStackInSlot(slot);
                 if (inSlot.isEmpty() || inSlot.getItem() != item) {
                     continue; // 只收「登记表记的那一件」，别的物品（含玩家放的）一律不碰
@@ -11399,6 +12472,25 @@ public class SequenceExecutionChamberBlockEntity
                                     .networkItemAmount(storage, taken.getItem())));
                     }
                 }
+                } catch (final RuntimeException ignored) {
+                    continue; // 逐格隔离：这一格读不出来就跳过它，绝不中断整个工位的回流
+                }
+            }
+            } catch (final RuntimeException failure) {
+                // <b>故障隔离（本轮）</b>：一个工位的回流失败（能力读取 / 同物品解析 / 入网模拟抛）
+                // 绝不能让整段「任务结束收尾」中断 —— 否则后面每一个工位的残留都留在原地，
+                // 正是「取消 / 结束后东西还在机器上、机器永久占死」那一类后果。
+                if (RsccAssemblyDebug.changed("flush_station_failed@"
+                        + RsccAssemblyDebug.at(worldPosition) + "#" + RsccAssemblyDebug.at(station),
+                        failure.getClass().getName())) {
+                    RsccAssemblyDebug.warn("flush_station_failed@"
+                            + RsccAssemblyDebug.at(worldPosition) + "#" + RsccAssemblyDebug.at(station),
+                        RsccAssemblyDebug.machine("chamber", worldPosition)
+                            + " flush_station_failed station=" + RsccAssemblyDebug.at(station)
+                            + " error=" + failure.getClass().getSimpleName()
+                            + " message=" + failure.getMessage()
+                            + " (该工位本轮跳过，其余工位照常回流)");
+                }
             }
         }
         return new long[]{moved, kept};
@@ -11441,6 +12533,12 @@ public class SequenceExecutionChamberBlockEntity
      * 就等于接在整条链（整个分支）上 —— 因此这里收的是「链上任一台仓认领的总线」，而不是
      * 「物理上只贴着本仓的那一条」。判定走唯一事实源 {@link #isInMyChain(BlockPos)}（← {@link #chainMembers()}）；
      * 没串链时链就是本仓自己，行为与改造前<b>逐字一致</b>。</p>
+     * <p><b>本轮（第 57 轮）缓存口径修正</b>：不再是「单次扫完 + 到点重扫、扫不完就丢尾巴」，
+     * 而是 {@link #collectBusPositions} 的可续扫洪泛：定期复扫每
+     * {@value #BUS_CONNECT_CACHE_TICKS} tick 起一次、跨 tick 续扫、<b>只有扫完才替换快照</b>。
+     * 因此本方法返回的永远是<b>一份完整</b>的可达集合（续扫期间由上一份完整快照继续服务），
+     * 最坏情形只比旧实现多「一次洪泛的续扫时长」（≤ {@code ceil(格数 / }{@value #BUS_LINK_TICK_BUDGET}{@code )} tick）；
+     * 而旧实现在线缆一长时会返回被截断的集合 —— 那正是「总线一多就分配不到、且永久不恢复」的机制。</p>
      */
     public List<BlockPos> connectedExporterPositions() {
         return collectExporters(true);
@@ -11481,6 +12579,17 @@ public class SequenceExecutionChamberBlockEntity
     /**
      * {@link #busSupplyTargets()} / {@link #selfBusSupplyTargets()} 的唯一实现。
      *
+     * <h2>为什么必须做「每 tick 每个口径只算一次」的备忘（本轮修正：总线越多越卡）</h2>
+     * <p>本方法原先<b>每次调用</b>都要把「链上全部输出总线」枚举一遍（每台各一次
+     * {@code getChunkAt().getBlockEntity(CHECK)} + {@code rscc$supplyTargetPos()}），而它的调用点
+     * 全都在<b>按总线循环的内部</b>（让位判据 {@link #shareFrontBusyFor} 里对每个前位工位调一次
+     * {@link #supplyTargetHoldsItem}，后者内部又调本方法；{@link #machineBusyOnPipeline} 亦然）。
+     * 于是刷新清单的代价随总线台数<b>平方 / 立方</b>增长：台数一多，单刻的方块实体查询就上千次 ——
+     * 这正是「总线一多，分配着分配着就卡住」的直接成本来源。</p>
+     * <p>备忘的口径与既有的 {@code occupiedProbeTick} / {@code occupiedAtProbeTick} 一族<b>完全一致</b>：
+     * 同一 tick 内世界状态视为不变（服务端同一 tick 内本模组只推料、不改变任何总线的朝向 / 连接），
+     * 跨 tick 自动失效。因此判定结果一字未改，只是不再重复做同一件只读的事。</p>
+     *
      * @param wholeChain {@code true} = 链（分支）口径（同链任一台仓认领的总线都算本仓的）；
      *                   {@code false} = 只算「总线自身解析出的执行仓就是本仓」的那些
      */
@@ -11491,6 +12600,16 @@ public class SequenceExecutionChamberBlockEntity
         final Level level = getLevel();
         if (level == null || level.isClientSide()) {
             return List.of();
+        }
+        final long now = level.getGameTime();
+        if (now != supplyTargetsProbeTick) {
+            supplyTargetsProbeTick = now;
+            supplyTargetsProbeChain = null; // 惰性：两条口径各自在本 tick 内至多真算一次
+            supplyTargetsProbeSelf = null;
+        }
+        final List<BlockPos> memo = wholeChain ? supplyTargetsProbeChain : supplyTargetsProbeSelf;
+        if (memo != null) {
+            return memo;
         }
         final List<BlockPos> targets = new ArrayList<>(2);
         for (final BlockPos pos : connectedExporterPositions()) {
@@ -11511,7 +12630,13 @@ public class SequenceExecutionChamberBlockEntity
             }
         }
         targets.sort(Comparator.comparingLong(BlockPos::asLong));
-        return targets;
+        final List<BlockPos> result = List.copyOf(targets);
+        if (wholeChain) {
+            supplyTargetsProbeChain = result;
+        } else {
+            supplyTargetsProbeSelf = result;
+        }
+        return result;
     }
 
     /** 与本仓「相邻或线缆相连」的全部输出总线（不做「属于本仓 / 本链」过滤；仅供模式切换时通知用）。 */
@@ -11520,35 +12645,111 @@ public class SequenceExecutionChamberBlockEntity
     }
 
     /**
-     * 沿「可穿行集合」（{@link RsccWireBlocks}：RS 线缆 + 其它输出总线 / 输入总线）BFS 收集与本仓相连的输出总线。
+     * 沿「可穿行集合」（{@link RsccWireBlocks}：RS 线缆 + 其它输出总线 / 输入总线）收集与本仓相连的输出总线。
      * <p><b>最终判定规则</b>：从本仓出发，只允许经过可穿行集合，<b>不穿过任何机器 / 容器</b>；
      * 与「本仓或任意可达导线」六向相邻的输出总线方块实体即为相连。
-     * 步数上限 {@link #BUS_LINK_MAX_STEPS}（与输出总线侧同一上限，两侧判定一致）；{@code restrictToMyChain}
-     * 为真时还要求该总线<b>自身 BFS 解析出的执行仓与本仓同属一条链（分支）</b>
+     * {@code restrictToMyChain} 为真时还要求该总线<b>自身解析出的执行仓与本仓同属一条链（分支）</b>
      * （见 {@link #isInMyChain(BlockPos)}：本仓自己当然算，因此「只贴着本仓」的旧口径是它的子集），
      * 于是「线缆分叉到两台仓」时只会把<b>同链</b>的那一台算进来，别的链上的仓照旧不算。</p>
+     * <p><b>上限口径（本轮修正）</b>：旧实现是「单次最多 {@code 64} 格，到点静默结束」——
+     * 总线一多就用不完整的结果冒充完整结果（排在后面的总线永远拿不到过滤项 = 永久卡住）。
+     * 现在改为「每 tick {@link #BUS_LINK_TICK_BUDGET} 格预算 + 跨 tick 续扫 + 只有扫完才发布」，
+     * 见 {@link #advanceBusLinkFlood} 与 {@link BusLinkFlood}。</p>
      */
     private List<BlockPos> collectExporters(final boolean restrictToMyChain) {
+        return collectBusPositions(restrictToMyChain, false);
+    }
+
+    /**
+     * {@link #collectExporters(boolean)} 的<b>输入总线</b>版（同一套洪泛 / 预算 / 「只读状态、不初始化邻块」口径）。
+     * <p>用途：把「机器的产出由哪条总线负责」也算进来，避免把「靠输入总线全自动收回产出」的正确配置
+     * 误判成「缺输出总线配置」。</p>
+     */
+    private List<BlockPos> collectImporters(final boolean restrictToMyChain) {
+        return collectBusPositions(restrictToMyChain, true);
+    }
+
+    /**
+     * 输出总线 / 输入总线连接检测的<b>唯一实现</b>（两个洪泛参数：是否只要同链、是否收输入总线）。
+     *
+     * <h2>前进保证（「卡住 → 恢复」与「永久卡死」两种表现都被它掐掉）</h2>
+     * <ol>
+     *     <li><b>本 tick 扫不完不算放弃</b>：每 tick 只推进 {@link #BUS_LINK_TICK_BUDGET} 格，
+     *     前沿留在 {@link BusLinkFlood#queue} 里，下 tick 接着扫 —— 游标就是进度；</li>
+     *     <li><b>只有扫完才发布新快照</b>：因此「预算用尽 / 区块临时未加载」都不会让任何一台总线
+     *     从集合里消失（旧实现正是在这里丢掉尾巴，且丢掉之后没有任何机制会让它回来）；</li>
+     *     <li><b>首次调用（无快照）一次扫完</b>：读档 / 开界面 / 换模式的那一刻拿到的仍是完整集合，
+     *     不会出现「前几秒总线全都不见」的窗口；</li>
+     *     <li><b>触顶显式报出</b>（{@code link_flood_cap} 锚点日志）而不是静默截断。</li>
+     * </ol>
+     */
+    private List<BlockPos> collectBusPositions(final boolean restrictToMyChain, final boolean importers) {
         final Level level = getLevel();
         if (level == null || level.isClientSide()) {
             return List.of();
         }
+        final BusLinkFlood flood = importers
+            ? floodChainImporters
+            : (restrictToMyChain ? floodChainExporters : floodReachExporters);
         final long now = level.getGameTime();
-        if (restrictToMyChain && connectedExportersCache != null && now < connectedExportersExpireAt) {
-            return connectedExportersCache;
+        // <b>没有快照时必须无条件重开一次洪泛</b>（`snapshot == null` 这一支覆盖了「刚作废」）：
+        // 否则「作废发生在下一次定期复扫时刻之前」时，本 tick 既不会重开、也不会推进（running=false），
+        // 于是快照一直是 null ⇒ 调用方看到**空的可达集合**（所有总线这一段时间都拿不到过滤项）。
+        if (!flood.running && (flood.snapshot == null || now >= flood.nextScanAt)) {
+            flood.restart(worldPosition, now); // 定期复扫：新放的线缆最多 BUS_CONNECT_CACHE_TICKS 内被发现
         }
-        final List<BlockPos> found = new ArrayList<>();
-        final Set<BlockPos> visited = new HashSet<>();
-        final ArrayDeque<BlockPos> queue = new ArrayDeque<>();
-        visited.add(worldPosition);
-        queue.add(worldPosition);
-        int steps = 0;
-        while (!queue.isEmpty() && steps <= BUS_LINK_MAX_STEPS) {
-            final BlockPos cell = queue.poll();
-            steps++;
+        if (flood.snapshot == null) {
+            // 还没有任何完整结果：本次调用把它扫完（有界：HARD_CAP 夹住），因此调用方绝看不到半份集合。
+            stepBusLinkFlood(level, flood, restrictToMyChain, importers, Integer.MAX_VALUE);
+        } else {
+            // 已有完整结果：每 tick 只推进定量的一小步，扫完才替换快照（旧快照继续服务）。
+            advanceBusLinkFlood(level, flood, restrictToMyChain, importers);
+        }
+        final List<BlockPos> snapshot = flood.snapshot;
+        return snapshot == null ? List.of() : snapshot;
+    }
+
+    /** 每 tick 至多推进一次洪泛（多个调用方共享同一份进度，绝不重复做功）。 */
+    private void advanceBusLinkFlood(final Level level, final BusLinkFlood flood,
+                                     final boolean restrictToMyChain, final boolean importers) {
+        if (!flood.running) {
+            return;
+        }
+        final long now = level.getGameTime();
+        if (flood.lastAdvanceTick == now) {
+            return;
+        }
+        flood.lastAdvanceTick = now;
+        stepBusLinkFlood(level, flood, restrictToMyChain, importers, BUS_LINK_TICK_BUDGET);
+    }
+
+    /**
+     * 洪泛的一步（至多 {@code budget} 格；{@code Integer.MAX_VALUE} = 一次扫完）。
+     * <p>迭代体逐字保留旧 BFS 的三件事：只读方块状态判「能不能穿行」、只对确认是同类的总线取方块实体
+     * （{@code CHECK}，绝不为邻块强制初始化）、总线本身也算导线的一部分。</p>
+     */
+    private void stepBusLinkFlood(final Level level, final BusLinkFlood flood,
+                                  final boolean restrictToMyChain, final boolean importers,
+                                  final int budget) {
+        int left = budget;
+        while (flood.running && left > 0) {
+            if (flood.queue.isEmpty()) {
+                flood.running = false;
+                publishBusLinkSnapshot(flood, importers); // 扫完：这时才发布
+                return;
+            }
+            if (flood.polled >= BUS_LINK_HARD_CAP) {
+                flood.running = false;
+                flood.capped = true;
+                publishBusLinkSnapshot(flood, importers); // 触顶：仍然发布，但显式报出（不静默截断）
+                return;
+            }
+            final BlockPos cell = flood.queue.poll();
+            flood.polled++;
+            left--;
             for (final Direction direction : Direction.values()) {
                 final BlockPos neighbor = cell.relative(direction);
-                if (!visited.add(neighbor)) {
+                if (!flood.visited.add(neighbor)) {
                     continue;
                 }
                 if (!level.isLoaded(neighbor)) {
@@ -11556,30 +12757,44 @@ public class SequenceExecutionChamberBlockEntity
                 }
                 // 只读方块状态来判定：不对「仅用于穿行」的方块取方块实体（避免探测时强制初始化邻块 → 递归）
                 final BlockState neighborState = level.getBlockState(neighbor);
-                if (RsccWireBlocks.isExporterBus(neighborState)) {
-                    // 只有确认是「输出总线方块」后才取它的方块实体，且「只取已存在的、不创建」
+                if (importers ? RsccWireBlocks.isImporterBus(neighborState)
+                    : RsccWireBlocks.isExporterBus(neighborState)) {
+                    // 只有确认是「总线方块」后才取它的方块实体，且「只取已存在的、不创建」
                     final BlockEntity blockEntity = level.getChunkAt(neighbor)
                         .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
-                    if (blockEntity instanceof RsccExporterExecutorMode exporter) {
-                        final BlockPos exporterPos = blockEntity.getBlockPos();
-                        if (!found.contains(exporterPos)
-                            && (!restrictToMyChain || isInMyChain(exporter.rscc$linkedExecutorPos()))) {
-                            found.add(exporterPos);
+                    if (importers) {
+                        if (blockEntity instanceof RsccImporterExecutorMode importer
+                            && (!restrictToMyChain || isInMyChain(importer.rscc$linkedExecutorPos()))) {
+                            flood.foundSet.add(blockEntity.getBlockPos());
                         }
-                        // 输出总线本身也算导线的一部分：继续往后穿行（用户要求「紧贴的输出总线 / 输入总线也能被识别」）
+                    } else if (blockEntity instanceof RsccExporterExecutorMode exporter
+                        && (!restrictToMyChain || isInMyChain(exporter.rscc$linkedExecutorPos()))) {
+                        flood.foundSet.add(blockEntity.getBlockPos());
                     }
+                    // 总线本身也算导线的一部分：继续往后穿行（用户要求「紧贴的输出总线 / 输入总线也能被识别」）
                 }
                 if (RsccWireBlocks.isWire(neighborState)) {
-                    queue.add(neighbor); // RS 线缆 / 其它输出总线 / 输入总线：继续穿行
+                    flood.queue.add(neighbor); // RS 线缆 / 其它输出总线 / 输入总线：继续穿行
                 }
             }
         }
+    }
+
+    /** 发布一份<b>完整</b>洪泛结果（排序后的不可变列表）。触顶时打一条可核对的锚点日志。 */
+    private void publishBusLinkSnapshot(final BusLinkFlood flood, final boolean importers) {
+        final List<BlockPos> found = new ArrayList<>(flood.foundSet);
         found.sort(Comparator.comparingLong(BlockPos::asLong));
-        if (restrictToMyChain) {
-            connectedExportersCache = found;
-            connectedExportersExpireAt = now + BUS_CONNECT_CACHE_TICKS;
+        flood.snapshot = List.copyOf(found);
+        if (flood.capped && RsccAssemblyDebug.isEnabled()) {
+            RsccAssemblyDebug.transition(
+                "linkcap@" + RsccAssemblyDebug.at(worldPosition) + (importers ? "#in" : "#out"),
+                Integer.toString(found.size()),
+                RsccAssemblyDebug.machine("chamber", worldPosition)
+                    + " link_flood_cap reached: polled=" + flood.polled
+                    + " cap=" + BUS_LINK_HARD_CAP
+                    + " found=" + found.size()
+                    + " (线缆网络异常巨大：可达集合按上限截断并已显式报出，绝不静默)");
         }
-        return found;
     }
 
     /**
@@ -11589,59 +12804,6 @@ public class SequenceExecutionChamberBlockEntity
      */
     public List<BlockPos> connectedImporterPositions() {
         return collectImporters(true);
-    }
-
-    /**
-     * {@link #collectExporters(boolean)} 的<b>输入总线</b>版（同一套 BFS / 上限 / 「只读状态、不初始化邻块」口径）。
-     * <p>用途见 {@link #connectedImportersCache}：把「机器的产出由哪条总线负责」也算进来，
-     * 避免把「靠输入总线全自动收回产出」的正确配置误判成「缺输出总线配置」。</p>
-     */
-    private List<BlockPos> collectImporters(final boolean restrictToMyChain) {
-        final Level level = getLevel();
-        if (level == null || level.isClientSide()) {
-            return List.of();
-        }
-        final long now = level.getGameTime();
-        if (restrictToMyChain && connectedImportersCache != null && now < connectedImportersExpireAt) {
-            return connectedImportersCache;
-        }
-        final List<BlockPos> found = new ArrayList<>();
-        final Set<BlockPos> visited = new HashSet<>();
-        final ArrayDeque<BlockPos> queue = new ArrayDeque<>();
-        visited.add(worldPosition);
-        queue.add(worldPosition);
-        int steps = 0;
-        while (!queue.isEmpty() && steps <= BUS_LINK_MAX_STEPS) {
-            final BlockPos cell = queue.poll();
-            steps++;
-            for (final Direction direction : Direction.values()) {
-                final BlockPos neighbor = cell.relative(direction);
-                if (!visited.add(neighbor) || !level.isLoaded(neighbor)) {
-                    continue;
-                }
-                final BlockState neighborState = level.getBlockState(neighbor);
-                if (RsccWireBlocks.isImporterBus(neighborState)) {
-                    final BlockEntity blockEntity = level.getChunkAt(neighbor)
-                        .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
-                    if (blockEntity instanceof RsccImporterExecutorMode importer) {
-                        final BlockPos importerPos = blockEntity.getBlockPos();
-                        if (!found.contains(importerPos)
-                            && (!restrictToMyChain || isInMyChain(importer.rscc$linkedExecutorPos()))) {
-                            found.add(importerPos);
-                        }
-                    }
-                }
-                if (RsccWireBlocks.isWire(neighborState)) {
-                    queue.add(neighbor);
-                }
-            }
-        }
-        found.sort(Comparator.comparingLong(BlockPos::asLong));
-        if (restrictToMyChain) {
-            connectedImportersCache = found;
-            connectedImportersExpireAt = now + BUS_CONNECT_CACHE_TICKS;
-        }
-        return found;
     }
 
     /** 样板带配方 id 时，按配方 id 取出所属的序列装配配方；否则 null。 */
@@ -11949,10 +13111,51 @@ public class SequenceExecutionChamberBlockEntity
      * 本仓所在链的全部执行仓（含自身），按坐标升序；不与任何执行舱相连时只含自身。
      * <p>做法：先沿朝向走到链首（端点），再从链首沿「谁指向我」反向 BFS。链的方向由方块朝向定义
      * （所有人都指向链首），因此成员只能从链首那一侧往下数。写入 / 广播 / 快照都以本方法的结果为准。</p>
+     *
+     * <h2>2026-10-11 第 59 轮：为什么这里必须做「每 tick 一次 + 结构版本」备忘</h2>
+     * <p><b>它是唯一还没有任何备忘的热结构查询</b>：本类其余每一条「按世界状态推导」的探测
+     * （{@code supplyTargets} / {@code supplyStations} / {@code stationKeyCached} / {@code occupiedAtProbe} /
+     * {@code machineReservedRecipe} / {@code pendingStepOn}）都已有「每 tick 至多真算一次」的守卫，
+     * 唯独链成员推导<b>每次调用都从零重跑两趟行走</b>（{@link #chainHead()} 逐台前进 +
+     * {@link #collectUpstream} 反向 BFS，每台各 6 次 {@code chamberAt}）。</p>
+     * <p>而它的调用点在<b>按总线 × 按链成员</b>的循环里：{@code busExportFilters}（链级展开）、
+     * {@link #chainBusOwners()}、{@link #chainExporterPositions()}、{@link #chainMemberPositions()} 等，
+     * 全文件共 <b>19 处真调用</b>。每 tick 最多推进 {@code BUS_TURN_BUDGET_PER_TICK}（8）台总线，
+     * 每台一次 {@code busExportFilters} 内部又至少走一趟链 —— 因此「一次清单刷新」会重复推导
+     * 同一个纯结构结果许多次。链成员<b>在同一个 tick 内不会因为我们推了一份料而改变</b>
+     * （它只由方块状态 / 朝向 / 配方类型 / 区块加载决定），因此备忘它<b>判定完全等价</b>。</p>
+     *
+     * <h2>失效（两层，缺一不可）</h2>
+     * <ol>
+     *     <li><b>结构版本（主）</b>：{@link RsccStructureEpoch}。方块放置 / 破坏 / 被替换（含扳手拆线、
+     *     套壳 / 断缝那些「不走 BreakEvent」的路径）都会 +1 ⇒ 下一次读取立刻重建，
+     *     <b>不必逐个事件去猜该清哪个缓存</b>（显式钩子会漏，版本号不会）；</li>
+     *     <li><b>tick（兜底）</b>：同一 tick 内直接复用。即使某个结构变化既没走方块事件、也没推版本，
+     *     最多也就晚到「本 tick 结束」，与既有一整族 {@code xxxProbeTick} 备忘的兜底口径完全一致。</li>
+     * </ol>
+     * <p><b>为什么不额外加 TTL</b>：本备忘的寿命本来就是「一个 tick」，比既有的
+     * {@code BUS_SCHEDULE_INTERVAL_TICKS}（20 tick）整表重建<b>更短</b>，因此不存在「靠 TTL 兜住」的必要。</p>
+     *
+     * <p><b>不泄漏</b>：只存「本台自己」的一份列表，且列表里的元素是<b>当时的方块实体引用</b> ——
+     * 它随本台方块实体一起被丢弃（区块卸载 / 方块被拆即无引用），因此不存在跨区块的强引用滞留；
+     * 反向的 {@code chainHead()} / {@code collectUpstream} 走的也是逐次解析（不持有引用）。</p>
      */
     public List<SequenceExecutionChamberBlockEntity> chainMembers() {
+        final Level level = getLevel();
+        final long tick = level == null ? Long.MIN_VALUE : level.getGameTime();
+        final long epoch = RsccStructureEpoch.current();
+        final List<SequenceExecutionChamberBlockEntity> memo = chainMembersMemo;
+        if (memo != null && tick != Long.MIN_VALUE && tick == chainMembersProbeTick && epoch == chainMembersProbeEpoch) {
+            return memo; // 同一 tick、且结构版本未变：直接复用（判定与重算逐字等价）
+        }
         final List<SequenceExecutionChamberBlockEntity> members = collectUpstream(chainHead());
         members.sort(Comparator.comparingLong(member -> member.worldPosition.asLong()));
+        if (tick != Long.MIN_VALUE) {
+            // 无世界（区块已卸载的边界）时不备忘：那种场合连链首都推不出来，缓存它只会让下一次读取更晚发现
+            chainMembersProbeTick = tick;
+            chainMembersProbeEpoch = epoch;
+            chainMembersMemo = members;
+        }
         return members;
     }
 
@@ -12555,8 +13758,7 @@ public class SequenceExecutionChamberBlockEntity
     /** 标记方块实体需保存，并在服务端向客户端同步一次方块更新。 */
     private void markDirtyAndSync() {
         setChanged();
-        connectedExportersCache = null; // 结构 / 模式可能变了：连接检测缓存作废
-        connectedImportersCache = null; // 输入总线的连接检测同源作废（用户第 1 条：校验要算上它）
+        invalidateBusLinkFloods(); // 结构 / 模式可能变了：连接检测（可续扫洪泛）与分派台账同源作废
         busCategoriesCache = null;      // 类别列表随之作废（下次访问时重建）
         ownedStepsCache = null;         // 「本仓负责的步」同源作废（它也是按步判定的唯一数据源）
         stepExtraInputsCache = null;    // 「步骤专用投入物」表读上面那份步表，必须一起作废

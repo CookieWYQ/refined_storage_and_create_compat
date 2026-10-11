@@ -3,6 +3,8 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.client.widget.RepeatButton;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccKeeperGeometry;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccNumberField;
 import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -16,8 +18,13 @@ import net.neoforged.neoforge.fluids.FluidStack;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 定量保持器界面：标记槽（物品/流体样板，不消耗物品）+ 插件槽 + 目标数量（[-]输入框[+]，shift 加速）
+ * 定量保持器界面：标记槽（物品/流体样板，不消耗物品）+ 插件槽 + 目标数量（[-]输入框[+]）
  * + 销毁过量开关 + 自动合成开关（未装自动合成升级时禁用）。
+ *
+ * <p><b>目标数量这一行（本轮重排）</b>：顺序固定为 标签 → [−] → 输入框 → [+] → 单位状态，
+ * 几何全部取自 {@link RsccKeeperGeometry}。输入框宽 86px（文本区 77px）——正好装得下
+ * {@code 100,000,000}（= 1000 桶 = 1 亿 mB）的千分位写法，玩家一眼就能确认自己没有数错 0。
+ * 输入框下面那行给出「原始 mB = 多少桶」的换算提示（1 桶 = 1000 mB），<b>框里存的仍是原始 mB</b>。</p>
  */
 public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeperMenu> {
     private static final ResourceLocation TEXTURE =
@@ -58,44 +65,55 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         this.syncedFluidMarkerNbt = nbt == null ? new net.minecraft.nbt.CompoundTag() : nbt;
     }
 
+    /** 输入框文本区可用像素宽（几何与「放得下才加千分位」的判定同源）。 */
+    private static int textWindow() {
+        return RsccNumberField.textWindow(RsccKeeperGeometry.BASIC_BOX_W);
+    }
+
     @Override
     protected void init() {
         super.init();
-        // 目标数量：[-] 输入框 [+] 一字排开（输入框居中于 ±）。整列统一上移：目标 y20 / 销毁 y40 / 自动合成 y60，
+        // 目标数量：[−] 输入框 [+] 一字排开（输入框居中于 ±）。整列统一上移：目标 y20 / 销毁 y40 / 自动合成 y60，
         // 勾叉按钮与其文字同排对齐（文字 y = 按钮 y + 4），避免与下方玩家背包(起点 y85)重叠。
-        final EditBox box = new EditBox(font, leftPos + 96, topPos + 21, 42, 12, Component.literal("target"));
-        box.setMaxLength(10);
-        box.setValue(Integer.toString(menu.getTargetAmount()));
-        box.setResponder(text -> {
-            if (!text.matches("\\d*")) {
-                box.setValue(text.replaceAll("\\D", ""));
-            }
-            // 仅用户聚焦输入时才标记"本地编辑"并应用；初始化/同步 setValue 不标记，保证服务端值能回填
+        // 本轮把输入框加宽到 86px（文本区 77px ⇒ "100,000,000" 连千分位一眼看全），
+        // 为了不压住那颗「+」按钮，[−] 左移、[+] 右移到单位文字右边 —— 三者两两不重叠由
+        // RsccKeeperGeometry 的常量 + selfcheck_round50 的几何穷举共同锁死。
+        final EditBox box = new EditBox(font,
+            leftPos + RsccKeeperGeometry.BASIC_BOX_X, topPos + RsccKeeperGeometry.BASIC_BOX_Y,
+            RsccKeeperGeometry.BASIC_BOX_W, RsccKeeperGeometry.BOX_H, Component.literal("target"));
+        box.setValue(RsccNumberField.editable(menu.getTargetAmount(), textWindow()));
+        // 解析口径只有一份实现（RsccNumberField.wire）：千分位 / 后缀 / 科学计数都在里面，
+        // 发出去的永远是原始数值（mB 或个数），绝不换算后落盘
+        RsccNumberField.wire(box, value -> {
             if (box.isFocused()) {
-                lastLocalEditTick = minecraft != null && minecraft.level != null ? minecraft.level.getGameTime() : 0;
-                applyTargetIfValid(); // 输入即应用
+                markLocalEdit();
             }
+            applyTargetIfValid(value); // 输入即应用
         });
         targetBox = box;
         addRenderableWidget(box);
         // ± 按钮点击立即生效（shift ±5），按住持续重复（setValue → responder → SetQuantityTargetPacket）
-        minusButton = new RepeatButton(leftPos + 76, topPos + 19, 18, 14, Component.literal("-"), btn -> {
+        minusButton = new RepeatButton(leftPos + RsccKeeperGeometry.BASIC_MINUS_X,
+            topPos + RsccKeeperGeometry.BASIC_BOX_Y,
+            RsccKeeperGeometry.BASIC_BTN_W, RsccKeeperGeometry.BOX_H, Component.literal("-"), btn -> {
             final int step = hasShiftDown() ? 5 : 1;
             markLocalEdit();
-            targetBox.setValue(Integer.toString(Math.max(0, targetValue() - step)));
-            applyTargetIfValid();
+            setTargetField(Math.max(0L, currentValue() - step));
         });
         addRenderableWidget(minusButton);
-        plusButton = new RepeatButton(leftPos + 140, topPos + 19, 18, 14, Component.literal("+"), btn -> {
+        plusButton = new RepeatButton(leftPos + RsccKeeperGeometry.BASIC_PLUS_X,
+            topPos + RsccKeeperGeometry.BASIC_BOX_Y,
+            RsccKeeperGeometry.BASIC_BTN_W, RsccKeeperGeometry.BOX_H, Component.literal("+"), btn -> {
             final int step = hasShiftDown() ? 5 : 1;
             markLocalEdit();
-            targetBox.setValue(Integer.toString(Math.max(0, targetValue() + step)));
-            applyTargetIfValid();
+            setTargetField(Math.max(0L, currentValue() + step));
         });
         addRenderableWidget(plusButton);
         // 销毁过量开关（勾 = 开/绿，叉 = 关/红），与标签同排
         destroyButton = new Button.Builder(Component.literal("§a✓"), btn -> sendButton(2))
-            .bounds(leftPos + 76, topPos + 39, 16, 14)
+            .bounds(leftPos + RsccKeeperGeometry.BASIC_TOGGLE_X,
+                topPos + RsccKeeperGeometry.BASIC_TOGGLE_Y,
+                16, RsccKeeperGeometry.BASIC_TOGGLE_H)
             .build();
         addRenderableWidget(destroyButton);
         // 自动合成开关：未装自动合成升级时禁用（灰色 ✗），装上后才可切换
@@ -103,7 +121,8 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
             if (menu.hasAutocraftingUpgrade()) {
                 sendButton(3);
             }
-        }).bounds(leftPos + 76, topPos + 59, 16, 14).build();
+        }).bounds(leftPos + RsccKeeperGeometry.BASIC_TOGGLE_X,
+            topPos + RsccKeeperGeometry.BASIC_TOGGLE_Y + 20, 16, RsccKeeperGeometry.BASIC_TOGGLE_H).build();
         addRenderableWidget(autoCraftButton);
         // 红石模式（忽略 / 高电平 / 低电平）：复用 RS 原版侧边按钮，挂在面板左侧外缘
         rscc$redstoneMode = cretae.cookiewyq.rs_create_compat.client.widget.RsccRedstoneModeButton.attach(this);
@@ -118,15 +137,27 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         }
     }
 
-    /** 目标数量当前值（优先输入框，其次服务端同步值）。 */
-    private int targetValue() {
+    /** 目标数量当前值（优先输入框，其次服务端同步值）；后缀 / 科学计数都会被正确解析。 */
+    private long currentValue() {
         if (targetBox != null) {
             final String text = targetBox.getValue();
-            if (text.matches("\\d+")) {
-                return Integer.parseInt(text);
+            if (!text.isEmpty()) {
+                final RsccNumberField.Parsed parsed = RsccNumberField.parse(text);
+                if (parsed.ok()) {
+                    return parsed.value();
+                }
             }
         }
         return menu.getTargetAmount();
+    }
+
+    /** 把数值写回输入框并立即应用（± 按钮与规范化共用同一条路径）。 */
+    private void setTargetField(final long value) {
+        if (targetBox == null) {
+            return;
+        }
+        targetBox.setValue(RsccNumberField.editable(value, textWindow()));
+        applyTargetIfValid(value);
     }
 
     /** 输入框回车：应用数值。 */
@@ -134,7 +165,8 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
     public boolean keyPressed(final int keyCode, final int scanCode, final int modifiers) {
         if (targetBox != null && targetBox.isFocused()
             && (keyCode == 257 || keyCode == 335)) { // Enter / Numpad Enter
-            applyTargetIfValid();
+            // 回车 = 把当前文本规范化（1000b → 1,000,000），再发一次包
+            setTargetField(currentValue());
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -145,23 +177,19 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         lastLocalEditTick = minecraft != null && minecraft.level != null ? minecraft.level.getGameTime() : 0;
     }
 
-    /** 输入框内容合法时立即发送到服务端应用。 */
-    private void applyTargetIfValid() {
-        if (targetBox == null || !targetBox.getValue().matches("\\d+")) {
-            return;
-        }
-        final int value;
-        try {
-            value = Integer.parseInt(targetBox.getValue());
-        } catch (final NumberFormatException e) {
-            return;
-        }
-        if (value < 0) {
+    /**
+     * 把数值发给服务端（唯一出口）。
+     * <p>只发原始数值：物品是个数、流体/气体是 mB —— 换算只发生在展示层，
+     * 服务端存到方块实体里的仍是这个 long 对应的 int 原值，精度不丢。</p>
+     */
+    private void applyTargetIfValid(final long value) {
+        if (value < 0L) {
             return;
         }
         // 允许发送 0：0 = 「未标记」（服务端同样按 0 = 未标记处理）
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-            new cretae.cookiewyq.rs_create_compat.network.SetQuantityTargetPacket(menu.containerId, value));
+            new cretae.cookiewyq.rs_create_compat.network.SetQuantityTargetPacket(
+                menu.containerId, RsccNumberField.clampToInt(value)));
     }
 
     private void sendButton(final int id) {
@@ -198,28 +226,25 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         // 标题 / 标签统一深色（浅色背景上才看得清）；shadow 一律 false
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, COLOR_TITLE, false);
-        // 目标数量标签：右端对齐到 [-] 按钮左边缘(x=76)，随实际字宽动态左移，避免与标记槽/按钮重叠
-        final net.minecraft.network.chat.Component targetLabel = Component.translatable(
+        // 目标数量标签：右端对齐，画在输入框上方那一行（单位文字本轮不再单独画 —— 加宽输入框后
+        // 这一行已没有「不压 [+] 也不压插件槽列」的空位；单位与桶换算一起放进输入框 tooltip）
+        final Component targetLabel = Component.translatable(
             "gui.rs_create_compat.quantity_keeper.target_label");
-        guiGraphics.drawString(font, targetLabel, Math.max(0, 76 - font.width(targetLabel)), 21, COLOR_TEXT, false);
-        // 目标数量单位：物品 = 个，流体/气体 = mB（跟随标记形态，放在 [+] 右侧、不碰插件栏）
-        guiGraphics.drawString(font,
-            Component.translatable(menu.getMarkerForm() >= 1
-                ? "gui.rs_create_compat.quantity_keeper.unit_mb"
-                : "gui.rs_create_compat.quantity_keeper.unit_item"),
-            162, 22, COLOR_TEXT, false);
+        guiGraphics.drawString(font, targetLabel,
+            Math.max(0, RsccKeeperGeometry.BASIC_LABEL_RIGHT - font.width(targetLabel)),
+            RsccKeeperGeometry.BASIC_BOX_Y - 5, COLOR_TEXT, false);
         // 堵塞提示（内部存在与当前标记不匹配的资源：已停止输出，但内容仍可被取出）
         if (menu.isMarkerBlocked()) {
             guiGraphics.drawString(font,
                 Component.translatable("gui.rs_create_compat.quantity_keeper.blocked"),
                 96, 74, 0xFF5555, false);
         }
-        // 销毁过量开关标签（与勾叉按钮 y39 同排，文字位于按钮右侧）
+        // 销毁过量开关标签（与勾叉按钮同排，文字位于按钮右侧：按钮 y37..49，文字 y40）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.destroy_label"),
-            96, 42, COLOR_TEXT, false);
-        // 自动合成开关标签（与勾叉按钮 y59 同排）
+            96, RsccKeeperGeometry.BASIC_TOGGLE_Y + 3, COLOR_TEXT, false);
+        // 自动合成开关标签（与勾叉按钮同排）
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.quantity_keeper.autocraft_label"),
-            96, 62, COLOR_TEXT, false);
+            96, RsccKeeperGeometry.BASIC_TOGGLE_Y + 23, COLOR_TEXT, false);
     }
 
     /** 输入框内容变化后同步到 Menu（客户端展示），在 render 中处理（tick 为 final 不可覆写）。 */
@@ -230,7 +255,7 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
             if (!targetBox.isFocused()
                 && (minecraft == null || minecraft.level == null
                     || minecraft.level.getGameTime() - lastLocalEditTick >= 10)) {
-                targetBox.setValue(Integer.toString(serverTarget));
+                targetBox.setValue(RsccNumberField.editable(serverTarget, textWindow()));
             }
         }
         if (destroyButton != null) {
@@ -267,6 +292,15 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
                 Component.translatable("gui.rs_create_compat.quantity_keeper.step"), mouseX, mouseY);
             return;
         }
+        // 目标数量输入框：说明本机口径（存的是原始 mB / 个数）+ 当前值的桶换算（1 桶 = 1000 mB）
+        if (targetBox != null && isOverBox(targetBox, mouseX, mouseY)) {
+            cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers.renderAttached(
+                guiGraphics, font,
+                Component.translatable("gui.rs_create_compat.quantity_keeper.target_tooltip",
+                    RsccNumberField.bucketTooltip(currentValue())),
+                mouseX, mouseY);
+            return;
+        }
         // 自动合成开关禁用提示：未装自动合成升级时悬停说明原因（同样以按钮自身命中范围为准）
         if (autoCraftButton != null && !autoCraftButton.active
             && autoCraftButton.isMouseOver(mouseX, mouseY)) {
@@ -299,6 +333,12 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         renderTooltip(guiGraphics, mouseX, mouseY);
     }
 
+    /** 鼠标是否落在输入框上（命中判定与控件几何同源，不用 isMouseOver 以免被焦点态影响）。 */
+    private boolean isOverBox(final EditBox box, final int mouseX, final int mouseY) {
+        return mouseX >= box.getX() && mouseX < box.getX() + box.getWidth()
+            && mouseY >= box.getY() && mouseY < box.getY() + box.getHeight();
+    }
+
     @Override
     public boolean isPauseScreen() {
         return false;
@@ -321,7 +361,8 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
         // 标记槽（index 0，空槽）：直接标记的流体/气体优先显示流体 tooltip；否则说明标记的设置方式
         if (hoveredSlot.index == 0 && hoveredSlot.getItem().isEmpty()) {
             if (menu.getMarkerForm() >= 1 && syncedFluidMarkerId != null) {
-                GhostMarkerRenderer.renderFluidTooltip(guiGraphics, font, syncedFluidMarkerId, 0L,
+                // 流体 tooltip = 流体自身的那一份（与 RS / JEI 同源），不再自绘数量
+                GhostMarkerRenderer.renderFluidTooltip(guiGraphics, font, syncedFluidMarkerId,
                     false, null, mouseX, mouseY);
                 return;
             }

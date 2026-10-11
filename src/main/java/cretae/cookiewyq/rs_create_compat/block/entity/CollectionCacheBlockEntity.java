@@ -217,9 +217,9 @@ public class CollectionCacheBlockEntity
     private int radiusX = Config.collectionCacheScanRadius;
     private int radiusY = Config.collectionCacheScanRadius;
     private int radiusZ = Config.collectionCacheScanRadius;
-    /** 经验目标形态（可配置字段；取值点见 {@link #resolveXpFluidId()}）。默认 = 经验球实体。 */
+    /** 经验存储形态（可配置字段；取值点见 {@link #resolveXpFluidId()}）。默认 = 折算成经验颗粒物品。 */
     private XpForm xpForm = XpForm.ORB;
-    /** 经验目标解析器（默认只认机械动力原版经验颗粒，后续可替换为可选依赖实现）。 */
+    /** 经验目标解析器（默认按注册表探测：附魔工业液态经验流体 → 机械动力原版经验颗粒，可替换实现）。 */
     private XpTargetResolver xpTargetResolver = XpTargetResolver.DEFAULT;
 
     /**
@@ -748,9 +748,9 @@ public class CollectionCacheBlockEntity
     }
 
     /**
-     * 设置经验目标形态（可配置字段，服务端权威）。
-     * <p><b>不可选的形态一律不收</b>：{@code null} 或「当前缺前置」的形态（如没装「机械动力：覆膜工艺」
-     * 时的液态经验）都会退化为 {@link XpForm#ORB} —— 界面已置灰，服务端再拦一道，避免客户端绕过。
+     * 设置经验存储形态（可配置字段，服务端权威）。
+     * <p><b>不可选的形态一律不收</b>：{@code null} 或「当前缺前置」的形态（如没装「机械动力：附魔工业」
+     * 时的液态经验）都会退化为 {@link XpForm#ORB} —— 界面已置灰，服务端再拦一道，避免客户端绕过。</p>
      */
     public void setXpForm(final XpForm form) {
         final XpForm value = form == null || !form.selectable() ? XpForm.ORB : form;
@@ -768,8 +768,9 @@ public class CollectionCacheBlockEntity
 
     /**
      * 经验目标取值点：当前生效的液态经验流体 id（不适用 / 不可用返回 null）。
-     * <p>只有 {@link XpForm#LIQUID} 才走流体路径；{@link XpForm#ORB} 收的是经验球实体
-     * （见 {@code collectExperience}），因此这里返回 null。</p>
+     * <p>只有 {@link XpForm#LIQUID} 才走<b>流体那条路</b>：收来的经验球按 1 点 = 1 mB 折算成
+     * 液态经验存进<b>本仓流体缓存</b>（用户：「液态经验……归流体那一方面管的」）。
+     * {@link XpForm#ORB} 不走流体，折算成经验颗粒物品（3 点 / 个），因此这里返回 null。</p>
      */
     @Nullable
     public ResourceLocation resolveXpFluidId() {
@@ -777,10 +778,9 @@ public class CollectionCacheBlockEntity
     }
 
     /**
-     * 经验球折算成物品形态时使用的「经验颗粒」物品 id（{@code create:experience_nugget}）。
-     * <p><b>它只是折算后的<b>存储</b>表示，不是收集对象</b>：收集对象永远是经验球实体
-     * （用户要求：「我要求你收集的是经验这个实体（经验球）」）。当网络里没有液态经验流体可用时，
-     * 经验点只能以物品形式入网，才用到这个 id（3 经验点 / 个，见 {@code OptionalDeps}）。</p>
+     * 经验球折算成物品形态（{@link XpForm#ORB}）时使用的「经验颗粒」物品 id。
+     * <p><b>它只是折算后的存储表示，不是收集对象</b>：收集对象永远是经验球实体
+     * （用户要求：「我要求你收集的是经验这个实体（经验球）」）。3 经验点 / 个，见 {@code OptionalDeps}。</p>
      */
     @Nullable
     private ResourceLocation xpNuggetItemId() {
@@ -1599,11 +1599,22 @@ public class CollectionCacheBlockEntity
 
     /**
      * 经验来源（服务端权威）。
-     * <h2>收集对象 = 经验球实体（用户要求）</h2>
-     * <p>用户原话：「你好像是收集这个<b>经验颗粒</b>，我要求你收集的是<b>经验这个实体</b>（经验球）」。
-     * 因此 {@link XpForm#ORB} 收的是 {@link net.minecraft.world.entity.ExperienceOrb}
-     * ——<b>实体级</b>吸取，不再去匹配 / 吸走掉在地上的「经验颗粒物品」（那是客户端渲染粒子与物品，
-     * 与「经验本身」无关）。液态形态仍是世界中的经验流体源方块。</p>
+     * <h2>收集对象 = 经验球实体；形态只决定「折算成颗粒还是流体」（用户要求）</h2>
+     * <p>用户原话：「你好像是收集这个<b>经验颗粒</b>，我要求你收集的是<b>经验这个实体</b>（经验球）」，
+     * 以及本轮：「勾上之后呢，它是把这个<b>经验球直接转换成这个流体</b>，直接转换成这一个<b>液态经验</b>，
+     * 然后<b>储存起来</b>」「它本质上它还是这种<b>流体</b>……所以说他是<b>归流体那一方面管的</b>」。</p>
+     * <p>因此两种形态的<b>收集对象完全相同</b>（都是 {@link net.minecraft.world.entity.ExperienceOrb}），
+     * 差别只在折算目标：</p>
+     * <ul>
+     *     <li>{@link XpForm#ORB}：经验点 → 经验颗粒物品（3 点 / 个，机械动力原版倍率）→ 物品缓存 → 网络物品存储；</li>
+     *     <li>{@link XpForm#LIQUID}：经验点 → <b>液态经验流体</b>（1 点 = 1 mB，附魔工业的换算）→
+     *     <b>本仓流体缓存</b>（见 {@link #FLUID_CACHE_CAPACITY}）→ 由
+     *     {@code flushFluidCacheToNetwork} 进网络的流体存储。</li>
+     * </ul>
+     * <p><b>本轮修正的错误语义</b>：此前 {@code LIQUID} 只扫「世界里的液态经验<b>源方块</b>」，
+     * 且只在 {@code LIQUID} 时才收球 —— 于是勾了液态之后经验球一颗都不动（正是用户报告的
+     * 「还是经验颗粒没有动」）。现在液态形态的主力路径就是「球 → 流体 → 流体缓存」，
+     * 世界源方块那条路保留为<b>附带</b>来源（一格 = 1000 mB，与流体开关同一口径），不再是全部。</p>
      *
      * <h2>范围与权限</h2>
      * <ul>
@@ -1611,32 +1622,26 @@ public class CollectionCacheBlockEntity
      *     <b>范围外一律不动</b>；</li>
      *     <li>服务端权威：本方法只由 {@code tickCache}（服务端 tick）调用，客户端不参与；
      *     缓存装不下时留 20 tick 的忽略窗口（{@link #markIgnored}），避免每轮空转刷屏；</li>
-     *     <li>守恒：经验球只按「实际入网的点数」扣减（{@code orb.value}），装不下的部分留在球里
-     *     （点数归零的球才被移除）——绝不无中生有、也绝不销毁经验。</li>
+     *     <li>守恒：经验球只按「实际进了缓存的点数 / 流体量」扣减（{@code orb.value}），装不下的部分
+     *     留在球里（点数归零的球才被移除）——绝不无中生有、也绝不销毁经验。</li>
      * </ul>
-     *
-     * <h2>经验点如何「并入网络存储」</h2>
-     * <ol>
-     *     <li>装了「机械动力：覆膜工艺」→ 优先折算成液态经验流体（1 点 = 1 mB），直接进流体缓存；</li>
-     *     <li>没有该流体 → 折算成经验颗粒物品（3 点 / 个，取整数个）进物品缓存，余数（&lt; 3 点）
-     *     留在经验球里下次再收。</li>
-     * </ol>
      * <p>两种表示都走既有的缓存 → 网络回流管线，因此对玩家来说就是「经验进了网络」。</p>
      */
     private void collectExperience(final Level level) {
         boolean changed = false;
         int fluidCollected = 0;
         int pointsCollected = 0;
-        // 液态经验：只在「显式选了液态」时扫描世界流体方块（流体必须以世界中的源方块形式存在才收得到）
+        // 液态经验目标（流体那一侧的目标 id）：形态 = LIQUID 且注册表里真有该流体时才非 null。
         final ResourceLocation fluidId = resolveXpFluidId();
+        // 世界里的液态经验源方块：LIQUID 形态下的附带来源（一格 = 1000 mB）。
+        // 它不再是液态形态的全部 —— 「球 → 液态经验 → 流体缓存」才是勾上之后的主语义。
         final List<BlockPos> sources = fluidId == null ? List.of() : fluidSourcesInRadius(level);
         if (fluidId != null) {
             fluidCollected = absorbMatchingFluidBlocks(level, sources, id -> id.equals(fluidId), 0L);
             changed |= fluidCollected > 0;
         }
-        // 经验球实体：实体级吸取，把经验点折算并入网络存储
-        final List<net.minecraft.world.entity.ExperienceOrb> orbs = xpForm == XpForm.ORB
-            ? experienceOrbsInRadius(level) : List.of();
+        // 经验球实体：两种形态都收（形态只决定折算成颗粒还是流体，不影响「收不收球」）。
+        final List<net.minecraft.world.entity.ExperienceOrb> orbs = experienceOrbsInRadius(level);
         if (!orbs.isEmpty()) {
             pointsCollected = absorbExperienceOrbs(orbs, fluidId);
             changed |= pointsCollected > 0;
@@ -1645,7 +1650,8 @@ public class CollectionCacheBlockEntity
             if (!experienceCollectLogged) {
                 experienceCollectLogged = true;
                 LOGGER.info("[rs_create_compat] 归流缓存仓经验收集生效：形态={} 液态目标={} "
-                        + "半径({},{},{}) 本轮收走 经验球点数={} / 液态={} 格",
+                        + "半径({},{},{}) 本轮收走 经验球点数={}（液态形态下 1 点 = 1 mB，已折算进流体缓存）"
+                        + " / 液态源方块={} 格",
                     xpForm, fluidId, getScanRadiusX(), getScanRadiusY(), getScanRadiusZ(),
                     pointsCollected, fluidCollected);
             }
@@ -1700,16 +1706,30 @@ public class CollectionCacheBlockEntity
     }
 
     /**
-     * 把经验球尽量折算并入缓存（<b>绝不销毁经验</b>）。
-     * <p>每个球按「实际入网点数」扣减 {@code orb.value}：点数归零 → 移除该球；装不下 → 留 20 tick
-     * 忽略窗口并在球里保留剩余点数（下次再收）。返回本轮入网的经验点数。</p>
+     * 把经验球折算并入缓存（<b>绝不销毁经验</b>）。
+     * <p>每个球按「实际入缓存的经验点数」扣减 {@code orb.value}：点数归零 → 移除该球；装不下 →
+     * 留 20 tick 忽略窗口并在球里保留剩余点数（下次再收）。返回本轮入缓存的经验点数。</p>
+     * <p>两种折算目标（都走本机缓存 → 网络回流管线）：</p>
+     * <ul>
+     *     <li>{@code fluidId != null}（形态 = {@link XpForm#LIQUID}）：
+     *     <b>1 经验点 = 1 mB 液态经验</b>（{@link OptionalDeps#CEI_MB_PER_EXPERIENCE_POINT}，
+     *     出处：附魔工业 {@code ExperienceHelper.java:63-65} 与 {@code CEIDataMaps.java:148}）
+     *     ⇒ 直接 {@code fluidCache.insert(...)}，进流体存储；</li>
+     *     <li>{@code fluidId == null}（形态 = {@link XpForm#ORB}，或液态流体缺失时的降级）：
+     *     <b>3 经验点 / 个</b>经验颗粒（{@link OptionalDeps#CREATE_EXPERIENCE_POINTS_PER_NUGGET}，
+     *     出处：{@code CEIDataMaps.java:154} 与 {@code ExperienceNuggetItem.java:37-38}，取整数个），
+     *     余数照旧按下面的既有纪律处理（不足一个颗粒时删球，避免同一份经验被结算两次）。</li>
+     * </ul>
+     * <p>换算守恒：插入量 = 扣减量（颗粒侧按 {@code acceptedNuggets * pointsPerNugget} 扣、
+     * 流体侧按「缓存真的接收的 mB」折算回点数再扣），任何一侧都不可能凭空产生或吞掉经验。</p>
      *
-     * @param fluidId 可用的液态经验流体 id（null = 没有该流体，退化为经验颗粒物品折算）
+     * @param fluidId 可用的液态经验流体 id（null = 走经验颗粒物品折算）
      */
     private int absorbExperienceOrbs(final List<net.minecraft.world.entity.ExperienceOrb> orbs,
                                      @Nullable final ResourceLocation fluidId) {
-        // 折算目标：优先液态经验（1 点 = 1 mB，与覆膜工艺的换算一致），否则经验颗粒（3 点 / 个）。
+        // 折算目标：液态经验（1 点 = 1 mB，与附魔工业的换算一致），否则经验颗粒（3 点 / 个）。
         final int pointsPerNugget = OptionalDeps.CREATE_EXPERIENCE_POINTS_PER_NUGGET;
+        final int mbPerPoint = OptionalDeps.CEI_MB_PER_EXPERIENCE_POINT;
         final ResourceLocation nuggetId = fluidId != null ? null : xpNuggetItemId();
         final Item nugget = nuggetId == null ? null : BuiltInRegistries.ITEM.get(nuggetId);
         final boolean canStoreItems = nugget != null && nugget != Items.AIR;
@@ -1727,17 +1747,28 @@ public class CollectionCacheBlockEntity
                 continue;
             }
             if (fluidId != null) {
-                // 液态经验：1 点 = 1 mB，insert 返回实际接收的 mB（缓存装不下就只收一部分）。
+                // 液态经验：先按换算率算出「这个球能换多少 mB」，再由缓存决定真的收下多少。
                 // 不计入 collectedTotal —— 与「流体按格计数」的既有口径一致（collectedTotal 只统计物品件数）。
-                final long accepted = fluidCache.insert(fluidId, new CompoundTag(), value);
-                if (accepted <= 0L) {
+                final long mbOffered = (long) value * mbPerPoint;
+                final long acceptedMb = fluidCache.insert(fluidId, new CompoundTag(), mbOffered);
+                if (acceptedMb <= 0L) {
                     markIgnored(orb); // 当前缓存放不下：短暂忽略，避免每轮空转
                     continue;
                 }
-                orb.value -= (int) accepted;
-                pointsIn += (int) accepted;
+                // 只扣「真的进了缓存的点数」：收多少扣多少（换算率非 1 时多收的零头退回缓存，绝不凭空产生流体）。
+                final int pointsAccepted = (int) Math.min(value, acceptedMb / mbPerPoint);
+                if (pointsAccepted <= 0) {
+                    markIgnored(orb);
+                    continue;
+                }
+                final long storedMb = (long) pointsAccepted * mbPerPoint;
+                if (storedMb < acceptedMb) {
+                    fluidCache.extract(fluidId, new CompoundTag(), acceptedMb - storedMb);
+                }
+                orb.value -= pointsAccepted;
+                pointsIn += pointsAccepted;
                 // 账本：液态经验来自世界中（的经验球），记「从世界收集」一侧
-                flowLedger.fromWorld(RsccFlowLedger.fluidKey(BuiltInRegistries.FLUID.get(fluidId)), accepted);
+                flowLedger.fromWorld(RsccFlowLedger.fluidKey(BuiltInRegistries.FLUID.get(fluidId)), storedMb);
             } else {
                 // 无液态经验流体：折算成经验颗粒物品（取整数个），余数留在球里下次再收（不销毁）
                 final int nuggets = value / pointsPerNugget;
@@ -2948,7 +2979,7 @@ public class CollectionCacheBlockEntity
             xpForm = XpForm.ORB;
         }
         if (!xpForm.selectable()) {
-            // 前置缺失（例如没装「机械动力：覆膜工艺」却存了液态）：退化为经验球，
+            // 前置缺失（例如没装「机械动力：附魔工业」却存了液态）：退化为经验颗粒，
             // 绝不把「一个当前不可用的形态」留在存档状态里（避免界面置灰却仍在生效）。
             xpForm = XpForm.ORB;
         }

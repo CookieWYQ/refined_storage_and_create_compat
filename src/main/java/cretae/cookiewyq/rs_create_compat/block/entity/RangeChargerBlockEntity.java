@@ -63,6 +63,18 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
     private boolean validatingUpgrades;
     /** 「落盘取证日志」的节流（每台每 1200 tick 至多一条）。 */
     private long lastEnergySaveLogAt = Long.MIN_VALUE / 2;
+    /**
+     * 饰品槽（Curios）扫描的节流计数（tick）：减到 0 才扫一次。
+     *
+     * <p><b>为什么要有它</b>：玩家的<b>背包 / 快捷栏 / 盔甲 / 副手</b>都在 {@code Inventory} 里
+     * （NeoForge 的 {@code getContainerSize()} = 36 + 4 + 1 = 41 格），每 tick 顺着既有路径扫一遍既便宜
+     * 也早就在做；而<b>饰品槽是另一套容器</b>，读它要走 Curios 的反射链路（每人 4~6 次调用）。
+     * 若每 tick 对「所有玩家 × 所有饰品槽」都走一遍，在无限范围（creative 升级）多人大服上就是纯浪费。</p>
+     *
+     * <p>节流周期 = {@link Config#rangeChargerCuriosScanInterval}（默认 5 tick = 0.25 秒）：
+     * 端到端延迟上限 0.25 秒，肉眼看不出差别，额外开销最大只有既有背包扫描的 1/5。</p>
+     */
+    private int curiosScanCooldown;
 
     public RangeChargerBlockEntity(final BlockPos pos, final BlockState state) {
         super(RS_Create_Compat.RANGE_CHARGER_BLOCK_ENTITY.get(), pos, state, new RangeChargerNetworkNode());
@@ -368,6 +380,8 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         if (energyStorage.getEnergyStored() <= 0) {
             return;
         }
+        // 饰品槽（Curios）这一档按节流周期走一次（背包族仍然每 tick，见 nextCuriosPass 的说明）。
+        final boolean curiosPass = nextCuriosPass();
         if (hasInfiniteRange()) {
             // 无限范围：不再受 rangeX/Y/Z 限制 —— 全维度在线玩家与掉落物，以及玩家所在已加载区块内的方块
             if (Config.rangeChargerChargeBlocks) {
@@ -377,7 +391,7 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
                 lastChargedTargets += scanItemsInfinite(level);
             }
             if (Config.rangeChargerChargePlayerItems) {
-                lastChargedTargets += scanPlayersInfinite(level);
+                lastChargedTargets += scanPlayersInfinite(level, curiosPass);
             }
             return;
         }
@@ -389,18 +403,33 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
             lastChargedTargets += scanItems(level);
         }
         if (Config.rangeChargerChargePlayerItems) {
-            lastChargedTargets += scanPlayers(level);
+            lastChargedTargets += scanPlayers(level, curiosPass);
         }
     }
 
-    /** 无限范围：遍历当前维度<b>所有在线玩家</b>，给其背包/手持物品充电（无距离限制）。 */
-    private int scanPlayersInfinite(final Level level) {
+    /**
+     * 饰品槽扫描的节流闸门：返回「本 tick 要不要扫饰品槽」，并推进计数。
+     *
+     * <p>周期语义 = {@link Config#rangeChargerCuriosScanInterval}（默认 5）—— 连续两次扫描之间正好隔这么多 tick
+     * （间隔为 1 时退化成「每 tick 都扫」，与背包族一致）。</p>
+     */
+    private boolean nextCuriosPass() {
+        if (curiosScanCooldown > 0) {
+            curiosScanCooldown--;
+            return false;
+        }
+        curiosScanCooldown = Math.max(0, Config.rangeChargerCuriosScanInterval - 1);
+        return true;
+    }
+
+    /** 无限范围：遍历当前维度<b>所有在线玩家</b>，给其身上（背包族 + 饰品槽）的可充电物品充电（无距离限制）。 */
+    private int scanPlayersInfinite(final Level level, final boolean curiosPass) {
         int targets = 0;
         for (final net.minecraft.world.entity.player.Player player : level.players()) {
             if (player.isSpectator()) {
                 continue;
             }
-            targets += chargePlayer(player, targets);
+            targets += chargePlayer(player, targets, curiosPass);
         }
         return targets;
     }
@@ -477,8 +506,8 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         return targets;
     }
 
-    /** 扫描范围内玩家，给其手持与背包中的可充电物品供电（如无线终端）。 */
-    private int scanPlayers(final Level level) {
+    /** 扫描范围内玩家，给其身上（背包族 + 饰品槽）的可充电物品供电（如无线终端）。 */
+    private int scanPlayers(final Level level, final boolean curiosPass) {
         final int halfX = rangeX / 2;
         final int halfY = rangeY / 2;
         final int halfZ = rangeZ / 2;
@@ -490,34 +519,100 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
             level.getEntitiesOfClass(net.minecraft.world.entity.player.Player.class, box, p -> !p.isSpectator());
         int targets = 0;
         for (final net.minecraft.world.entity.player.Player player : players) {
-            targets += chargePlayer(player, targets);
+            targets += chargePlayer(player, targets, curiosPass);
         }
         return targets;
     }
 
-    /** 给单个玩家的全部背包槽位充电；返回新增充电目标数。 */
-    private int chargePlayer(final net.minecraft.world.entity.player.Player player, final int currentTargets) {
+    /**
+     * 给单个玩家<b>身上所有能充电的地方</b>充电，返回新增充电目标数。
+     *
+     * <h2>覆盖范围（用户第 6 条：「放在任何地方的任何物品都要给它充电」）</h2>
+     * <ol>
+     *     <li><b>主背包 + 快捷栏 + 盔甲 + 副手</b>：都在 {@link net.minecraft.world.entity.player.Inventory} 里
+     *     （NeoForge 的 {@code getContainerSize()} = 36 + 4 + 1 = 41），下面这一圈 0..40 <b>本来就全覆盖</b>，
+     *     也是「手持」那一路（快捷栏当前选中格就在其中）；</li>
+     *     <li><b>饰品槽（Curios）</b>：饰品槽<b>不是</b> {@code Inventory} 的一部分，是 Curios 自己的容器，
+     *     因此必须另外取（{@link cretae.cookiewyq.rs_create_compat.support.RsccCuriosTerminalSlot#allStacks}）；
+     *     这就是「无限终端放饰品槽里充不到电」的原因。取不到（没装 Curios / 反射失败）时是空表，
+     *     整条链路静默跳过、不报错。</li>
+     * </ol>
+     *
+     * <p><b>刻意不递归「容器内的容器」</b>（精致背包之类）：用户明确说没必要；递进容器还会把
+     * 「一件物品被两个视图同时看到」这种重复充电风险带进来。</p>
+     *
+     * <p><b>去重与守恒</b>：本次扫描用一份「按实例判等」的集合登记已经处理过的存活栈
+     * （{@code ItemStack} 不重写 {@code equals}，这里再用 {@code IdentityHashMap} 上双保险），
+     * 同一个栈哪怕同时出现在两个视图里也只会被充一次；每件物品只在自己没充满时才充，
+     * 且只从本机缓存里扣掉<b>对方实际接受</b>的那部分能量（{@code accepted}），因此既不重复、
+     * 也不可能超容（{@code receiveEnergy} 自己会按容量与自身速率夹住）。</p>
+     *
+     * @param curiosPass 本 tick 是否顺带扫饰品槽（由 {@link #nextCuriosPass()} 节流决定）
+     */
+    private int chargePlayer(final net.minecraft.world.entity.player.Player player, final int currentTargets,
+                             final boolean curiosPass) {
         int targets = currentTargets;
+        // 只在真的要扫饰品槽的那一 tick 才分配去重集合：普通 tick 一个对象都不多建。
+        final java.util.Set<ItemStack> seen = curiosPass
+            ? java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>())
+            : null;
         for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
             if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
                 return targets;
             }
             final ItemStack stack = player.getInventory().getItem(slot);
-            if (stack.isEmpty()) {
+            if (stack.isEmpty() || (seen != null && !seen.add(stack))) {
                 continue;
             }
-            final IEnergyStorage storage = stack.getCapability(Capabilities.EnergyStorage.ITEM);
-            if (storage == null || storage.getEnergyStored() >= storage.getMaxEnergyStored()) {
+            if (chargeItemStack(stack)) {
+                targets++;
+            }
+        }
+        if (seen == null) {
+            return targets;
+        }
+        // 饰品槽：与背包互不重叠，正常情况下这里一件也不会重复；去重集合只用于「同一份存活栈被两个
+        // 视图同时看到」这种极端情况（宁可少充一次，也绝不在一次扫描里对同一件物品充两次）。
+        for (final ItemStack stack : cretae.cookiewyq.rs_create_compat.support.RsccCuriosTerminalSlot
+            .allStacks(player)) {
+            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                return targets;
+            }
+            if (!seen.add(stack)) {
                 continue;
             }
-            final int transfer = Math.min(getChargeRate(), energyStorage.getEnergyStored());
-            final int accepted = storage.receiveEnergy(transfer, false);
-            if (accepted > 0) {
-                energyStorage.extractEnergy(accepted, false);
+            if (chargeItemStack(stack)) {
                 targets++;
             }
         }
         return targets;
+    }
+
+    /**
+     * 给<b>一件物品</b>充电：返回「这次是否真的充进去了能量」。
+     *
+     * <p>三条件缺一不可：物品必须真的带 {@code Capabilities.EnergyStorage.ITEM} 能力、
+     * 必须<b>还没充满</b>（充满即停，既不浪费扫描也不会有任何超容写入）、
+     * 本机缓存里必须还有电。扣能只扣对方<b>实际接受</b>的数量，能量守恒。</p>
+     */
+    private boolean chargeItemStack(final ItemStack stack) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+        final IEnergyStorage storage = stack.getCapability(Capabilities.EnergyStorage.ITEM);
+        if (storage == null || storage.getEnergyStored() >= storage.getMaxEnergyStored()) {
+            return false; // 不是可充电物品 / 已经充满：充满即停
+        }
+        final int transfer = Math.min(getChargeRate(), energyStorage.getEnergyStored());
+        if (transfer <= 0) {
+            return false;
+        }
+        final int accepted = storage.receiveEnergy(transfer, false);
+        if (accepted <= 0) {
+            return false;
+        }
+        energyStorage.extractEnergy(accepted, false);
+        return true;
     }
 
     /**

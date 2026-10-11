@@ -71,6 +71,31 @@ public interface RsccExporterExecutorMode {
     void rscc$setExportCategoryIds(List<String> categoryIds);
 
     /**
+     * <b>整体写入「类别勾选 + 是否显式勾选过」</b>（服务端权威；剪贴板粘贴用，见 {@link RsccBusConfig}）。
+     *
+     * <h2>为什么不能直接用 {@link #rscc$setExportCategoryIds(List)}</h2>
+     * <p>那个方法把「显式勾选过」置为 {@code true}。而「从未勾过」与「勾过但一个都不选」在这条总线上是
+     * <b>两种不同的语义</b>（前者 = 默认全选输入性产物，后者 = 什么都不推）。
+     * 复制配置时必须把这一位一起带走，否则把一条「从未配置过的总线」粘成「一个都不选」，
+     * 表现就是「粘贴之后这条总线彻底不工作了」——正是 {@code RsccBusConfig} 类注释里写的那条坑。</p>
+     */
+    void rscc$applyCategorySelection(List<String> categoryIds, boolean explicit);
+
+    /**
+     * <b>剪贴板：把本条总线的玩家配置写进 {@code tag}</b>（复制档；服务端调用）。
+     * <p>写的是「玩家眼里这条总线的配置」：RS 过滤槽（含模糊模式）+ 类别勾选 + 是否显式勾选 +
+     * 「强制普通总线」开关。字段含义与格式只有一份定义，见 {@link RsccBusConfig}。</p>
+     */
+    void rscc$writeBusConfig(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider provider);
+
+    /**
+     * <b>剪贴板：从 {@code tag} 读回配置并写入本机</b>（粘贴档；服务端权威）。
+     * <p>实现必须先过 {@link RsccBusConfig#acceptsKind}（版本 + 种类）再写任何一个字段：
+     * 校验不过就<b>一个字节都不写</b>，这是「不要误改到不相关的总线」那条硬要求的落点。</p>
+     */
+    void rscc$readBusConfig(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider provider);
+
+    /**
      * 本输出总线应下发给界面的类别快照（有序）：每个类别带「是否已选 / 共享台数」。
      * <p>服务端调用时会顺带把类别的归属<b>归一</b>一次（已无意义的类别自动清掉）；
      * 客户端 / 未绑定时返回空列表。</p>

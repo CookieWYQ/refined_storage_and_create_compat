@@ -13,6 +13,7 @@ import cretae.cookiewyq.rs_create_compat.mixin.accessor.MainNetworkNodeAccessor;
 import cretae.cookiewyq.rs_create_compat.report.RsccBusDisabledBanner;
 import cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusCategory;
+import cretae.cookiewyq.rs_create_compat.support.RsccBusConfig;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusInterference;
 import cretae.cookiewyq.rs_create_compat.support.RsccChamberExportStrategy;
 import cretae.cookiewyq.rs_create_compat.support.RsccExporterExecutorMode;
@@ -50,7 +51,8 @@ import java.util.Set;
  * 输出总线（RS {@code Exporter}）的「延长型输出」模式。
  *
  * <p><b>连接判定（最终规则）</b>：从本输出总线出发，<b>只经过「可穿行集合」、不穿过任何机器 / 容器</b>，
- * 做逐层 BFS（上限 {@link RsccWireLinkSearch#LINK_MAX_STEPS} 步）；途中（含起点六向）碰到<b>处于
+ * 做逐层 BFS（<b>无步数上限</b>，改为「每 tick 预算 + 跨 tick 续扫」，见
+ * {@link RsccWireLinkSearch} 里的 {@code BUS_LINK_TICK_BUDGET}）；途中（含起点六向）碰到<b>处于
  * 「总线输出」模式的序列执行仓</b>（{@link SequenceExecutionChamberBlockEntity#isBusOutput()}）即为绑定。
  * 可穿行集合见 {@link RsccWireBlocks}：RS 线缆 + 其它输出总线 / 输入总线（用户要求「输出总线 / 输入总线
  * 本身也是这条路径的一部分」），<b>不含</b>外部存储总线 / 构造器 / 破坏器 / 序列执行仓等机器。
@@ -248,7 +250,9 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
         // 此时归属不一定唯一 —— 是否真的能搬运由 rscc$linkedExecutor() 决定
         // （归属未确定 → 退回普通总线）。判定见 RsccBusInterference#inspect。
         // <b>「强制普通总线」开关（本轮新增）在这里收口</b>：玩家关掉自动判定后一律回到普通界面。
-        return rscc$isLinkedLayout() && !rscc$forceNormalBus;
+        // <b>「过滤槽里有东西 → 优先按普通总线」（2026-10-10 用户第 9 条）也在同一处收口</b>：
+        // 见 rscc$hasFilterEntries()。
+        return rscc$isLinkedLayout() && !rscc$forceNormalBus && !rscc$hasFilterEntries();
     }
 
     @Override
@@ -307,13 +311,20 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
 
     @Override
     public void rscc$setExportCategoryIds(@Nullable final List<String> categoryIds) {
+        // 界面上的每一次勾选都算「玩家显式选过」——因此这里固定 explicit = true，
+        // 与剪贴板粘贴（要连「是否显式选过」一起还原）共用同一段写入逻辑。
+        rscc$applyCategorySelection(categoryIds, true);
+    }
+
+    @Override
+    public void rscc$applyCategorySelection(@Nullable final List<String> categoryIds, final boolean explicit) {
         final List<String> sanitized = rscc$sanitizeCategoryIds(categoryIds);
-        if (rscc$categorySelectionExplicit && sanitized.equals(rscc$exportCategoryIds)) {
+        if (rscc$categorySelectionExplicit == explicit && sanitized.equals(rscc$exportCategoryIds)) {
             return;
         }
         rscc$exportCategoryIds.clear();
         rscc$exportCategoryIds.addAll(sanitized);
-        rscc$categorySelectionExplicit = true;
+        rscc$categorySelectionExplicit = explicit;
         ((BlockEntity) (Object) this).setChanged();
         if (RsccAssemblyDebug.isEnabled()) {
             RsccAssemblyDebug.event(RsccAssemblyDebug.machine("exporter", ((BlockEntity) (Object) this).getBlockPos())
@@ -327,6 +338,34 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
             executor.normalizeBusOwners();
         }
         rscc$applyExportFilters();
+    }
+
+    /** 剪贴板复制：把「玩家眼里这条总线的配置」写进一段 NBT（格式见 {@link RsccBusConfig}）。 */
+    @Override
+    public void rscc$writeBusConfig(final CompoundTag tag, final HolderLookup.Provider provider) {
+        RsccBusConfig.writeHeader(tag, RsccBusConfig.KIND_EXPORTER);
+        RsccBusConfig.writeFilter(tag, filter, provider);
+        RsccBusConfig.writeCategories(tag, rscc$exportCategoryIds);
+        tag.putBoolean(RsccBusConfig.KEY_EXPLICIT, rscc$categorySelectionExplicit);
+        tag.putBoolean(RsccBusConfig.KEY_FORCE_NORMAL, rscc$forceNormalBus);
+    }
+
+    /**
+     * 剪贴板粘贴：校验通过后才写入。
+     * <p><b>顺序是刻意的</b>：先写过滤槽（它是「本条总线算不算延长型」的判据，见
+     * {@link #rscc$hasFilterEntries()}），再写类别与开关 —— 这样「粘贴后总线处于哪种工作状态」
+     * 与源总线逐一对应，不会出现中间态把类别写进一个马上就要退回普通的总线上。</p>
+     */
+    @Override
+    public void rscc$readBusConfig(final CompoundTag tag, final HolderLookup.Provider provider) {
+        if (!RsccBusConfig.acceptsKind(tag, RsccBusConfig.KIND_EXPORTER)) {
+            return; // 版本不认识 / 种类不符：一个字节都不写
+        }
+        if (!RsccBusConfig.readFilter(tag, filter, provider)) {
+            return;
+        }
+        rscc$applyCategorySelection(RsccBusConfig.readCategories(tag), tag.getBoolean(RsccBusConfig.KEY_EXPLICIT));
+        rscc$setForceNormalBus(tag.getBoolean(RsccBusConfig.KEY_FORCE_NORMAL));
     }
 
     @Override
@@ -480,8 +519,53 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
         if (level == null || level.isClientSide()) {
             return null;
         }
+        if (rscc$hasFilterEntries()) {
+            // 过滤槽里有东西 ⇒ 本条总线按<b>普通输出总线</b>处理（用户第 9 条）：不解析、不认归属。
+            // 放在 rscc$resolveLink() 之前是刻意的：判定要最便宜，且不允许任何「先绑定再说」的中间态。
+            return null;
+        }
         rscc$resolveLink();
         return rscc$chamberAt(level, rscc$linkedPosCache);
+    }
+
+    /**
+     * <b>「过滤槽里有东西」的唯一判据</b>（2026-10-10 用户第 9 条）。
+     *
+     * <h2>用户原话与规则</h2>
+     * <p>「这个输入输出总线他跟这个序列执行力（执行仓）绑定一起之后呢，他原本的（过滤）槽就没有意义了。
+     * 所以说如果说一个输入输出总线本身过滤槽中是有东西，那么就优先认为他是普通的（普通总线）。」</p>
+     *
+     * <h2>判据核实：是 RS 侧那份过滤容器，不是本模组的类别勾选</h2>
+     * <p>本条总线界面上有两套「选择」，必须区分清楚（否则规则会跑偏）：</p>
+     * <ol>
+     *     <li><b>RS 过滤槽</b> —— 方块实体里的 {@code FilterWithFuzzyMode}（字段名 {@code filter}，
+     *     声明在 {@link AbstractExporterBlockEntity} 自身，故 {@code @Shadow} 可正确定位）；
+     *     它持有界面左侧那几格「物品 / 流体过滤器」（{@code ResourceContainer}），落盘在
+     *     配置 NBT 的 {@code rf} 键、模糊开关在 {@code fm} 键
+     *     （见 RS 的 {@code FilterWithFuzzyMode#save/load}）。<b>这一份才是玩家说的「过滤槽」</b>；</li>
+     *     <li>本模组的<b>类别勾选</b>（{@code rscc$exportCategoryIds}）—— 它本身就是延长型的产物
+     *     （「要从执行舱推出去的类别」），只在延长模式下有意义，因此<b>不能</b>当判据：
+     *     用它就会变成「自己判自己」。</li>
+     * </ol>
+     * <p>{@code ResourceContainer#isEmpty()} 是 RS 自己的公开判定（逐格判 null），
+     * 不产生任何分配、不触发形状查询、不取方块实体，因此可以每 tick 调。</p>
+     *
+     * <h2>为什么这条规则不会「打架」</h2>
+     * <ul>
+     *     <li><b>与「强制普通总线」开关</b>：两者互不干扰，任一为真都退回普通总线。
+     *     玩家用开关把总线强制成普通后填了过滤槽，即使之后再关掉开关，过滤槽里的东西仍然让它保持普通
+     *     （这正是用户要的「优先认为他是普通的」）；把过滤槽清空即自动恢复延长型，无需重放方块；</li>
+     *     <li><b>与延长型的类别选择</b>：退回普通总线时 {@link #rscc$applyExportFilters()} 走的是
+     *     {@code linkedExecutor() == null} 那一支 —— 把节点过滤项换回<b>玩家自己的过滤器</b>，
+     *     因此「过滤槽真的生效」而不是只改界面；</li>
+     *     <li><b>即时切换</b>：本判据每次现算（不缓存），而过滤槽每一次改动都会走 RS 自己的
+     *     {@code FilterWithFuzzyMode} 监听 → {@code setFilters(...)}（本类在那里有注入），
+     *     因此「有东西 ↔ 没东西」两个方向的翻转都在同一次改动的调用栈里生效。</li>
+     * </ul>
+     */
+    @Unique
+    private boolean rscc$hasFilterEntries() {
+        return !filter.getFilterContainer().isEmpty();
     }
 
     /**
@@ -557,16 +641,41 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
      * <p>为什么必须做：延长型与普通型的「过滤项来源」不同（执行舱给的类别 vs 玩家自己设的过滤器）。
      * 归属一旦变化（连上 → 用类别；脱绑 / <b>归属未确定</b> → 退回玩家自己的过滤器），
      * 就必须把节点上的过滤项换成新来源，否则会出现「界面看着是普通总线，实际还在按旧类别搬运」。
+     *
+     * <h2>2026-10-10（用户第 9 条）：有效归属再收一道「过滤槽为空」</h2>
+     * <p>{@code rscc$linkedExecutor()} 已经带了这条判据，因此这里的「有效归属」直接用它的结果：
+     * 过滤槽里一有东西，有效归属立刻变成 {@code null}（= 普通总线），于是本方法会走「重建导出清单」那一支
+     * （节点过滤项换回玩家自己的过滤器），与真正的脱绑逐字同一条路径。</p>
+     * <p><b>并且</b>在「从延长型退回普通」的那一刻让执行仓归一一次类别归属表
+     * （与 {@link #rscc$setForceNormalBus(boolean)} 调的是同一句 {@code normalizeBusOwners()}）。</p>
+     *
+     * <h2>已知边界（如实写下来）</h2>
+     * <p>执行仓的归属表（{@code chainBusOwners}）是按「各总线<b>存下来的</b>类别勾选」建的，
+     * 它<b>不</b>读本机的「是否延长型」判定 —— 因此过滤槽被填上之后，这条总线可能仍在表里占一个位置，
+     * 直到下一次归一（本方法这一句、或玩家改勾选 / 拆放方块 / 改配方等既有触发点）。
+     * 影响范围<b>仅限</b>「轮询里白占一个轮次」与界面上「共享台数」多算一台这类的统计偏差：
+     * <b>搬运语义不受影响</b> —— 执行仓给这类总线下发的过滤项，最终都经
+     * {@link #rscc$applyExportFilters()} 收口，而它读的是 {@code rscc$linkedExecutor()}（已含过滤槽判据），
+     * 因此过滤槽非空时节点上挂的永远是<b>玩家自己的过滤器</b>。</p>
      */
     @Unique
     private void rscc$applyFiltersOnChange() {
-        final BlockPos owner = rscc$linkedPosCache;
+        final BlockPos owner = rscc$linkedExecutor() == null ? null : rscc$linkedPosCache;
         if (rscc$appliedOwnerSet && java.util.Objects.equals(rscc$appliedOwnerPos, owner)) {
             return;
         }
+        final BlockPos previous = rscc$appliedOwnerPos;
         rscc$appliedOwnerPos = owner;
         rscc$appliedOwnerSet = true;
         rscc$applyExportFilters();
+        if (owner == null && previous != null) {
+            // 从延长型退回普通（脱绑、归属未确定、或过滤槽刚被填上）：把类别归属让出去
+            final Level level = ((BlockEntity) (Object) this).getLevel();
+            final SequenceExecutionChamberBlockEntity chamber = rscc$chamberAt(level, previous);
+            if (chamber != null) {
+                chamber.normalizeBusOwners();
+            }
+        }
     }
 
     /**

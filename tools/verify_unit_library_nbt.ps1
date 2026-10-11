@@ -1,10 +1,10 @@
-# Offline (no game launch) round-trip verification for GrowingUnitLibrary NBT persistence.
+﻿# Offline (no game launch) round-trip verification for GrowingUnitLibrary NBT persistence.
 # Requires: tools\manual_compile.ps1 already ran (builds build\manual_compile).
 # Usage: & .\tools\verify_unit_library_nbt.ps1
+# 注意：本文件必须保存为 **UTF-8 带 BOM**（PowerShell 5.1 无 BOM 时按 GBK 解码中文注释会解析失败）。
 
 $ErrorActionPreference = "Continue"
 $root = "d:\MODS\refined_storage_and_create_compat"
-$gradleCache = "C:\Users\70432\.gradle\caches"
 $javac = "D:\java21\bin\javac.exe"
 $java = "D:\java21\bin\java.exe"
 $modOut = "$root\build\manual_compile"
@@ -16,23 +16,25 @@ if (!(Test-Path $modOut)) { Write-Output "mod classes not found, run tools\manua
 if (!(Test-Path $testOutDir)) { New-Item -ItemType Directory -Path $testOutDir -Force | Out-Null }
 
 # 1) classpath: mod classes + MC/deps jars (same set as manual_compile)
-# Note: skip cached old fastutil 8.3.1 (missing IntList.of used at runtime) to avoid version clash.
+#    缓存根 / 同族去重统一走 tools\_gradle_cache.ps1（跟随 GRADLE_USER_HOME，按
+#    (group, artifact, classifier) 每族只留一个版本，pin 优先）—— 原先写死
+#    C:\Users\70432\.gradle\caches 且全量 glob，同族多版本同时进 classpath 时谁生效
+#    取决于目录顺序，运行期验证结果因此不可复现。
+. "$PSScriptRoot\_gradle_cache.ps1"
+$artifacts = Get-RsccGradleArtifacts -ProjectRoot $root
 $jars = New-Object System.Collections.Generic.List[string]
 $jars.Add($modOut)
-$mcJar = Get-ChildItem "$gradleCache\neoformruntime\intermediate_results" -Filter "compiledWithNeoForge_*_output.jar" | Select-Object -First 1
-if ($mcJar) { $jars.Add($mcJar.FullName) }
-$allJars = Get-ChildItem "$gradleCache\modules-2\files-2.1" -Recurse -Filter "*.jar"
-foreach ($jar in $allJars) {
-    $name = $jar.Name
-    $full = $jar.FullName
-    if ($name -match "sources|javadoc") { continue }
-    if ($name -match "natives-windows") { continue }
-    if ($full -match "parchment|fabric-loader|yarn|sponge-mixin-transformer") { continue }
-    if ($full -match "fastutil.+8\.3\.1") { continue }
-    $jars.Add($full)
-}
+if ($artifacts.McJar) { $jars.Add($artifacts.McJar) }
+foreach ($mod in $artifacts.ModuleJars) { $jars.Add($mod) }
+# 说明：历史上手写「跳过缓存里旧的 fastutil 8.3.1（运行时缺 IntList.of）」这一步，现在由
+# 同族去重自动完成（8.5.12 版本号更高而胜出，并被打印进 NBT_VERIFY_EXCLUDED）。这里保留
+# 一道显式过滤作为兜底（去重逻辑万一退回时仍然安全）。
+$jars = @($jars | Where-Object { $_ -notmatch 'fastutil.+8\.3\.1' })
 $classpath = ($jars | Select-Object -Unique) -join ";"
-Write-Output "classpath entries: $($jars.Count)"
+Write-Output "NBT_VERIFY_CACHE path=$($artifacts.CachePath) source=$($artifacts.CacheSource)"
+Write-Output "NBT_VERIFY_CLASSPATH jars=$($jars.Count) excludedDupes=$($artifacts.Excluded.Count)"
+Write-Output "NBT_VERIFY_PINVERSIONS rs=$(Get-RsccVersionSummary -Artifacts $artifacts)"
+foreach ($line in $artifacts.Excluded) { Write-Output "NBT_VERIFY_EXCLUDED $line" }
 
 # 2) compile the test
 $src = "$root\tools\nbt_verify\UnitLibraryNbtRoundTrip.java"

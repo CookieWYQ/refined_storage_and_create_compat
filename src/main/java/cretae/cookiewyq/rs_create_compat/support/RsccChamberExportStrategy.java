@@ -1,8 +1,10 @@
 package cretae.cookiewyq.rs_create_compat.support;
 
 import com.refinedmods.refinedstorage.api.network.Network;
+import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetworkComponent;
 import com.refinedmods.refinedstorage.api.network.impl.node.exporter.ExporterTransferStrategyImpl;
 import com.refinedmods.refinedstorage.api.network.node.exporter.ExporterTransferStrategy;
+import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import com.refinedmods.refinedstorage.api.resource.ResourceKey;
 import com.refinedmods.refinedstorage.api.storage.Actor;
 import com.refinedmods.refinedstorage.common.Platform;
@@ -24,6 +26,7 @@ import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +70,12 @@ import java.util.function.ToLongFunction;
  * <p><b>脱绑</b>：执行舱被拆掉 / 切回面输出 / 超出线缆范围后，本策略会退化为委托 RS 原版
  * 「网络 → 目标」策略（{@link ExporterTransferStrategyImpl}，与 RS 工厂同一套参数：模糊扩展器 +
  * 堆叠/调节升级配额），因此输出总线不会变成哑巴，也不会残留对执行舱的引用。</p>
+ *
+ * <p><b>脱绑那一路的配额要过一道「在途任务预留」夹量（本轮新增）</b>：那一趟是<b>从 RS 网络取料</b>，
+ * 而 RS 的 {@code RootStorage#extract} 不扣任何预留（依据见 {@link SequenceMaterialGuard#isInFlight}），
+ * 于是本模组会把别的自动合成任务正等着抽取的那一份也抽走 —— 用户报告的「齿轮 / 大齿轮任务卡住不动」
+ * 正是这个机制。夹量只发生在<b>脱绑委托</b>这一路：绑定执行舱时的取料源是执行舱内部存储
+ * （东西已经离开网络），用网络预留去夹它只会把机器正等的料一起饿死。细节见 {@link #rscc$inflightQuota}。</p>
  *
  * <p><b>诊断</b>：本策略只<b>加</b>结构化日志（前缀 {@code [rscc-assembly]}，见
  * {@link RsccAssemblyDebug}）—— 只在「每次搬运的结果状态翻转」时各打一条（稳态零输出），
@@ -150,6 +159,20 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
     /** 上一次「本目标拒收」的游戏刻（{@code Long.MIN_VALUE/2} = 从未拒收）。 */
     private long rscc$lastRefusalAt = Long.MIN_VALUE / 2;
 
+    // ---------- 「在途自动合成任务的预留」夹量上下文（只在脱绑委托那一路有效） ----------
+    /**
+     * 本次 {@code transfer} 所服务的网络（{@code null} = 没有上下文 ⇒ 配额原样放过）。
+     * <p>只由服务端线程在 {@code transfer} 的调用栈内写入 / 读取（委托策略是<b>同步</b>调用的），
+     * 因此不需要同步；这也是为什么必须在这里（而不是在配额对象里）持有它。</p>
+     */
+    @Nullable
+    private Network rscc$quotaNetwork;
+    /** 本轮的「被在途任务等着抽取」表（见 {@link SequenceMaterialGuard#pendingExtraction}）。 */
+    private java.util.Map<ResourceKey, Long> rscc$quotaClaims = java.util.Map.of();
+    /** 本轮的共享取用预算账本（见 {@link SequenceMaterialGuard#sharedLedger}）。 */
+    @Nullable
+    private SequenceMaterialGuard.TakeLedger rscc$quotaLedger;
+
     public RsccChamberExportStrategy(final RsccExporterExecutorMode owner,
                                      final ServerLevel level,
                                      final BlockPos selfPos,
@@ -167,10 +190,18 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
         this.itemQuota = new ExporterTransferQuotaProvider(1, upgrades, itemDestination::getAmount, true);
         this.fluidQuota = new ExporterTransferQuotaProvider(
             Platform.INSTANCE.getBucketAmount(), upgrades, fluidDestination::getAmount, true);
+        // <b>脱绑回退策略的配额要过一道「在途任务预留」夹量</b>（见 {@link #rscc$inflightQuota}）：
+        // {@code ExporterTransferStrategyImpl} 先取配额、再 {@code rootStorage.extract}（RS 源码
+        // {@code ExporterTransferStrategyImpl.java:39,44,53}），因此<b>配额就是唯一的夹量点</b> ——
+        // 把配额夹到「可用量」就等于「绝不抽走别人在途任务要的量」。
+        // 注意：夹量只用在<b>委托</b>这一路（脱绑时从网络取料）；绑定执行舱时取料源是执行舱内部存储，
+        // 那里的配额（字段 {@code itemQuota}）<b>一字不改</b>，否则会把机器的料也一起饿死。
         this.itemDelegate = new ExporterTransferStrategyImpl(
-            itemDestination, itemQuota, FuzzyRootStorage.expander());
+            itemDestination, resource -> rscc$inflightQuota(resource, itemQuota.applyAsLong(resource)),
+            FuzzyRootStorage.expander());
         this.fluidDelegate = new ExporterTransferStrategyImpl(
-            fluidDestination, fluidQuota, FuzzyRootStorage.expander());
+            fluidDestination, resource -> rscc$inflightQuota(resource, fluidQuota.applyAsLong(resource)),
+            FuzzyRootStorage.expander());
         // 绑定成功（安装本策略 = 确实连上了一台「总线输出」执行舱）：只在状态翻转时打一条
         if (RsccAssemblyDebug.isEnabled()) {
             final BlockPos linked = owner.rscc$linkedExecutorPos();
@@ -193,7 +224,10 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
         }
         final SequenceExecutionChamberBlockEntity chamber = owner.rscc$getLinkedExecutor();
         if (chamber == null) {
-            // 未绑定（拆掉 / 切模式 / 超出线缆范围）：退回原版「网络 → 目标」，不留哑巴总线、不留幽灵引用
+            // 未绑定（拆掉 / 切模式 / 超出线缆范围）：退回原版「网络 → 目标」，不留哑巴总线、不留幽灵引用。
+            // <b>先把本轮上下文装好</b>：这一路是<b>从网络取料</b>，而 RS 的 {@code RootStorage#extract}
+            // 不扣任何预留（见 {@link SequenceMaterialGuard#isInFlight} 的 ①），必须由本策略自己夹。
+            rscc$beginQuotaContext(network);
             if (RsccAssemblyDebug.isEnabled()) {
                 RsccAssemblyDebug.transition("push@" + RsccAssemblyDebug.at(selfPos) + "#unlinked",
                     "delegated",
@@ -209,6 +243,9 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
             }
             return Result.SKIPPED;
         }
+        // 绑定执行舱：本策略这一路<b>不从网络取料</b>（取料源是执行舱内部存储，见类注释的流向图），
+        // 因此把夹量上下文清掉 —— 免得上一 tick 脱绑时的读数影响到别的判定。
+        rscc$endQuotaContext();
         if (!chamber.isAutoCraftingEnabled()) {
             // 门控：网络里没有进行中的自动合成任务 → 一律不导出
             if (RsccAssemblyDebug.isEnabled()) {
@@ -329,6 +366,121 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
         return ASSERT_NOT_CURRENT_STEP_INPUT.equals(detail)
             || ASSERT_MACHINE_HOLDS_OTHER_STEP_INPUT.equals(detail)
             || ASSERT_STEP_EXTRA_NOT_CONSUMER.equals(detail);
+    }
+
+    // ==================== 「在途自动合成任务的预留」夹量（脱绑委托那一路） ====================
+
+    /**
+     * 把本轮上下文装好：{@code 网络 + 在途预留表 + 共享取用预算}。
+     *
+     * <p>只做两件事：①按 RS 的任务状态算出「哪些资源还被在途任务等着抽取」
+     * （{@link SequenceMaterialGuard#pendingExtraction}，依据见
+     * {@link SequenceMaterialGuard#isInFlight}）；②取本轮的共享账本 —— 多个总线 / 多台仓
+     * 在同一 tick 内共用一本，于是<b>合计</b>不会超过可用量（否则每条总线都读同一个「还有多少」，
+     * 合计就是 N 倍）。</p>
+     */
+    private void rscc$beginQuotaContext(@Nullable final Network network) {
+        rscc$quotaNetwork = network;
+        if (network == null) {
+            rscc$quotaClaims = java.util.Map.of();
+            rscc$quotaLedger = null;
+            return;
+        }
+        final AutocraftingNetworkComponent autocrafting =
+            network.getComponent(AutocraftingNetworkComponent.class);
+        rscc$quotaClaims = autocrafting == null
+            ? java.util.Map.of()
+            : SequenceMaterialGuard.pendingExtraction(autocrafting.getStatuses());
+        rscc$quotaLedger = SequenceMaterialGuard.sharedLedger(network,
+            level == null ? 0L : level.getGameTime());
+    }
+
+    /** 清掉夹量上下文（绑定执行舱那一路不需要它，见 {@code transfer} 的说明）。 */
+    private void rscc$endQuotaContext() {
+        rscc$quotaNetwork = null;
+        rscc$quotaClaims = java.util.Map.of();
+        rscc$quotaLedger = null;
+    }
+
+    /**
+     * <b>把脱绑委托那一路的配额夹到「可用量」</b>：可用量 = 网络存量 − 在途任务还等着抽取的量
+     * （{@link SequenceMaterialGuard#availableForTake}），再减去本轮已承诺给别的总线的量。
+     *
+     * <h2>为什么是「夹配额」而不是「拒绝搬运」</h2>
+     * <p>{@code ExporterTransferStrategyImpl#transfer} 的流程是
+     * 取配额 → {@code rootStorage.extract(..., SIMULATE)} → 插入目标 → {@code extract(..., EXECUTE)}
+     * （RS 源码 {@code ExporterTransferStrategyImpl.java:39,44,53}），配额是<b>唯一</b>的上限量，
+     * 且 {@code extract} 本身不会被任何预留拦住（见 {@link SequenceMaterialGuard#isInFlight} 的 ①）。
+     * 因此夹配额就是唯一精确的夹量点：夹到 0 时 RS 自己的策略会返回 {@code SKIPPED}
+     * （{@code :40-42}），总线只是本轮不搬，下一 tick 自动重试 —— <b>不自旋、不卡死</b>。</p>
+     *
+     * <h2>为什么不改绑定执行舱那一路</h2>
+     * <p>绑定时的取料源是<b>执行舱内部存储</b>（东西已经离开网络了），用网络预留去夹它等于
+     * 把机器正等的料也一起饿死。因此只有「委托原版策略从网络取料」这一路夹。</p>
+     *
+     * <h2>边界（写清楚，不假装它更聪明）</h2>
+     * <ul>
+     *     <li>脱绑策略开了<b>模糊扩展</b>（{@code FuzzyRootStorage.expander()}），一次可能匹配同一物品的
+     *     多个数据组件变体，配额对每个变体各用一次；账本按<b>资源</b>记账，因此「按资源」的合计上界成立，
+     *     「按某一个具体变体」的上界在模糊模式下不成立（保守方向：只会少取）。</li>
+     *     <li>没有在途需求（{@code claims} 为空）时<b>原样返回配额</b>，与改造前逐字一致；
+     *     网络本来就没有这种资源时也原样返回，交给 RS 自己报 {@code RESOURCE_MISSING}（不改变既有提示）。</li>
+     * </ul>
+     */
+    private long rscc$inflightQuota(final ResourceKey resource, final long quota) {
+        if (quota <= 0L || resource == null || rscc$quotaNetwork == null) {
+            return quota;
+        }
+        final java.util.Map<ResourceKey, Long> claims = rscc$quotaClaims;
+        if (claims.isEmpty()) {
+            return quota; // 没有任何在途需求 ⇒ 既有行为逐字不变
+        }
+        final long stored = rscc$quotaStored(resource);
+        if (stored <= 0L) {
+            return quota; // 网络本来就没有：交给 RS 自己报 RESOURCE_MISSING（提示语义不变）
+        }
+        final long reserved = claims.getOrDefault(resource, 0L);
+        final long available = SequenceMaterialGuard.availableForTake(stored, reserved);
+        final SequenceMaterialGuard.TakeLedger ledger = rscc$quotaLedger;
+        final long remaining = ledger == null
+            ? available : ledger.remaining(resource, available);
+        if (remaining <= 0L) {
+            rscc$logInflightHold(resource, quota, 0L, stored, reserved);
+            return 0L; // 本轮一点都不取：RS 侧转成 SKIPPED，下一 tick 再试
+        }
+        final long granted = ledger == null
+            ? Math.min(quota, remaining)
+            : ledger.claim(resource, Math.min(quota, remaining), available);
+        if (reserved > 0L && granted < quota) {
+            rscc$logInflightHold(resource, quota, granted, stored, reserved);
+        }
+        return granted;
+    }
+
+    /** 只读：网络里该资源此刻的<b>存量</b>（取不到返回 0）。 */
+    private long rscc$quotaStored(final ResourceKey resource) {
+        final Network network = rscc$quotaNetwork;
+        if (network == null) {
+            return 0L;
+        }
+        final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
+        return storage == null ? 0L : storage.get(resource);
+    }
+
+    /** 夹量生效时的诊断（状态翻转才各打一条，稳态零噪声）。 */
+    private void rscc$logInflightHold(final ResourceKey resource, final long quota,
+                                      final long granted, final long stored, final long reserved) {
+        if (!RsccAssemblyDebug.isEnabled()) {
+            return;
+        }
+        RsccAssemblyDebug.transition(
+            "inflight@" + RsccAssemblyDebug.at(selfPos) + "#" + describeResource(resource),
+            "granted=" + granted,
+            debugTag + " push {" + describeResource(resource) + " x" + granted + "}"
+                + " to=" + RsccAssemblyDebug.at(targetPos)
+                + " result=" + (granted <= 0L ? "SKIPPED" : "CLAMPED")
+                + " reason=" + SequenceMaterialGuard.HOLD_INFLIGHT_TASK_NEED
+                + " quota=" + quota + " stored=" + stored + " reserved=" + reserved);
     }
 
     /** 资源 → {@code item=create:iron_sheet} / {@code fluid=minecraft:water}。 */

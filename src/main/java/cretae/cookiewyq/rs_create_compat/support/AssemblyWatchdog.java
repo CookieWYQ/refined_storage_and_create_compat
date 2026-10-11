@@ -11,8 +11,10 @@ import com.refinedmods.refinedstorage.api.network.node.container.NetworkNodeCont
 import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import com.refinedmods.refinedstorage.api.storage.TrackedResourceAmount;
 import com.refinedmods.refinedstorage.common.api.storage.PlayerActor;
+import com.refinedmods.refinedstorage.common.api.support.resource.PlatformResourceKey;
 import com.refinedmods.refinedstorage.common.api.support.network.InWorldNetworkNodeContainer;
 import com.refinedmods.refinedstorage.common.autocrafting.monitor.AbstractAutocraftingMonitorContainerMenu;
+import com.refinedmods.refinedstorage.common.support.resource.FluidResource;
 import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import com.simibubi.create.AllDataComponents;
 import com.simibubi.create.content.processing.sequenced.SequencedAssemblyRecipe;
@@ -28,6 +30,7 @@ import cretae.cookiewyq.rs_create_compat.network.SyncAssemblyAlertsPacket;
 import cretae.cookiewyq.rs_create_compat.network.SyncChamberListPacket;
 import cretae.cookiewyq.rs_create_compat.report.CompatCompletionSender;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
@@ -45,6 +48,8 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.fluids.FluidUtil;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
@@ -64,14 +69,18 @@ import java.util.UUID;
 /**
  * 「自动合成任务卡住（停滞 / 掉线 / 缺料 / 无进展）」的观察者 + 挂起 / 恢复控制器（服务端权威）。
  *
- * <p><b>职责</b>：只读地盯住<b>网络里所有自动合成任务</b>（本模组的「序列装配」任务与 RS 原版任务
- * 共用同一套语义），把三类卡住原因记进任务记录并按需弹一条<b>纯展示</b>横幅：</p>
+ * <p><b>职责</b>：只读地盯住<b>网络里所有自动合成任务</b>（本模组的「序列装配」任务与 RS 原生任务
+ * 共用同一套分类语义），把三类卡住原因记进任务记录并按需弹一条<b>纯展示</b>横幅：</p>
  * <ol>
  *     <li><b>执行器 / 机器掉线</b>：序列装配看「样板里指派的执行仓坐标是否还在网络里」；
  *     RS 原版任务看 RS 自己给出的 {@code TaskStatus.Item#type}（REJECTED / LOCKED / NONE_FOUND）；</li>
  *     <li><b>缺原料</b>：网络里既没有该资源、也没有别的任务在产出它；</li>
  *     <li><b>无进展</b>：完成度与各项计数连续很久没有任何变化（兜底判据）。</li>
  * </ol>
+ * <p><b>但「分类」不等于「处置」</b>：上面的分类对每条任务都做（只读、无副作用，供诊断与只读快照），
+ * 而<b>自动挂起只对本模组序列装配链真正驱动的任务生效</b>（{@link Record#ourChain}）——
+ * 普通 RS 自动合成任务即便被判成「卡住」，本模组也不会动它一个字。
+ * 这一条是 2026-10-10 第 56 轮按用户实测加上的（详见 {@link Record#ourChain} 的推导）。</p>
  *
  * <p><b>挂起与恢复（服务端权威）</b>：判定成立后任务进入 {@link SuspendState#SUSPENDED} —— 由
  * {@code mixin/TaskContainerMixin} 让 RS 不再 step 这条任务，于是它<b>不再抽取网络原料、不再向
@@ -103,6 +112,26 @@ import java.util.UUID;
  * 原因连续超过该原因对应的阈值（掉线 {@code assemblyOfflinePersistTicks} / 缺料
  * {@code assemblyStallTimeoutTicks} / 无进展 {@code assemblyNoProgressTimeoutTicks}）才挂起。
  * 正常推进的任务 {@code reason} 恒为 {@code NONE}，计数归零，<b>绝不会被挂起</b>。</p>
+ *
+ * <p><b>作用范围（2026-10-10 第 56 轮收窄）</b>：本看门狗<b>只自动挂起本模组序列装配链真正在驱动的任务</b>
+ * （{@link Record#ourChain}：产物命中本模组样板库的总样板，且任务状态里<b>没有</b> RS 原生自动合成器那种
+ * 「带身份的接收端」）。<b>普通 RS 自动合成任务永不被自动挂起、也永不被超限兜底取消</b> ——
+ * 它们仍可被玩家在监视器里手动挂起（那是玩家的显式动作）。判据与理由见 {@link Record#ourChain}。</p>
+ *
+ * <p><b>「任何任务都有「挂起 / 继续」按钮」是结构性保证（2026-10-11 第 63 轮）</b>：用户的硬要求是
+ * 「不管什么任务都要有这个按钮」，而旧实现里按钮的可见性<b>依赖「服务端有没有这条任务的记录」</b> ——
+ * 记录只由 1 秒一拍的扫描产生，于是两类任务会<b>整排按钮一个都不画</b>：</p>
+ * <ol>
+ *     <li><b>非物品（流体）任务</b>：扫描入口只认 {@code ItemResource}（旧实现直接 {@code continue}）
+ *     ⇒ 从来不建记录 ⇒ 客户端拿不到这一行 ⇒ 三个动作位全假。本轮把资源键放宽到
+ *     {@link PlatformResourceKey}（物品 + 流体走同一条记录路径），这一类<b>结构性消失</b>；</li>
+ *     <li><b>记录还没建出来的那一瞬</b>（任务刚下单不到一秒，RS 自己已经把它推给界面了）——
+ *     由两处共同兜住：客户端「没有快照 ⇒ 至少给「挂起」位」（见
+ *     {@code AssemblyAlertsClient#actionView}），服务端收到挂起请求时<b>就地补一次全维度扫描</b>
+ *     把记录建出来再执行（见 {@link #suspend}）。于是<b>界面画了按钮 ⇒ 服务端必定能处理</b>。</li>
+ * </ol>
+ * <p>这两条都<b>不</b>放宽任何既有判据：普通任务永不被自动挂起（{@link Record#ourChain} 三个闸门原样），
+ * RS 正在回收内部暂存的收尾态照旧不给任何动作位（{@code actions()} 的 {@code returning} 分支原样）。</p>
  *
  * <p><b>清理规则</b>（幂等、无泄漏）：任务完成 / 取消 / 任务对象从自动合成组件里消失 → 本次扫描立即移除记录；
  * 其中「玩家按原生取消」这条路径更快也更关键：{@code TaskContainerMixin} 发现任务进入 RS 的回收态
@@ -257,8 +286,17 @@ public final class AssemblyWatchdog {
     public static final class Record {
         private final UUID taskId;
         private final BlockPos executorPos;
-        /** 任务产物（RS 资源键；用于「更换机器」时在样板库里找回对应总样板）。 */
-        private final ItemResource product;
+        /**
+         * 任务产物（RS 资源键；用于「更换机器」时在样板库里找回对应总样板）。
+         *
+         * <p><b>第 63 轮：从 {@code ItemResource} 放宽到 {@link PlatformResourceKey}（双资源）</b> ——
+         * 旧实现只认物品，于是<b>流体任务从来没有记录</b>，监视器里那一行一个按钮都不画
+         * （用户硬要求「不管什么任务都要有这个按钮」）。放宽而不是改成别的类型的原因：
+         * RS 自己的任务状态（{@code TaskStatus.TaskInfo#resource}）与自己的监视器协议
+         * （{@code AutocraftingMonitorStreamCodecs}）用的就是 {@code PlatformResourceKey}，
+         * 因此「记录里的产物」与「RS 眼里的产物」是同一个键、不存在第二次解释。</p>
+         */
+        private final PlatformResourceKey product;
         /** 记录时的世界 tick。 */
         private final long recordedTick;
         /** 最近一次被扫描到（= 任务仍然存在）的世界 tick。 */
@@ -290,6 +328,57 @@ public final class AssemblyWatchdog {
         private StallHit stallDetail;
         /** 是不是「序列装配」任务（false = RS 原版自动合成任务）。只影响原因判定与文案，挂起语义完全相同。 */
         private boolean sequence;
+        /**
+         * <b>「本模组的序列装配链是否真的在驱动这条任务」—— 普通任务的保护位</b>（2026-10-10 第 56 轮新增；
+         * 判据实现见 {@code AssemblyWatchdog#hasForeignSink}）。
+         *
+         * <h2>为什么必须有它（用户实测：一张网上同时跑普通自动合成与序列装配时，普通任务「全都提示（挂起）了」）</h2>
+         * <p>总线归属是<b>线缆几何</b>判定的（{@code RsccWireLinkSearch} 的一趟 BFS：够得到「总线输出」
+         * 模式执行舱、且只够得到一条链，即为归属），而执行舱见到的总线同样按线缆 BFS 收集
+         * （执行舱的 {@code connectedExporterPositions()}）。因此玩家
+         * 「从主线接一条分支到序列装配」之后，主线上<b>所有</b>输入 / 输出总线都会变成这台执行舱的
+         * 延长型总线；那些总线的搬运随即由<b>本仓的门控</b>决定（{@code isAutoCraftingEnabled()} /
+         * {@code isBusFrozen()} / {@code busCategoryOwners}），于是它们原本在伺候的机器停摆，
+         * 那些机器所属的<b>普通 RS 自动合成任务</b>跟着卡住。</p>
+         * <p>而旧实现里本看门狗对<b>网络里每一条</b>任务都做「卡住判定 → 挂起」：普通任务也会
+         * 因为「缺料 / 掉线 / 无进展」被挂起，玩家在监视器上看到一排「已挂起」，
+         * 一不小心点掉（或配置打开了超限兜底回收）就<b>丢掉一份真产物</b>。</p>
+         * <p>用户口径：<b>普通（非序列装配）的自动合成任务永不被本模组的看门狗挂起</b>。因此这里给每条
+         * 记录加一个「这条任务归本模组管吗」的位，只有它为真才允许<b>自动</b>挂起与自动兜底取消
+         * （玩家手动点「挂起」不受它影响 —— 那是玩家的显式动作）。</p>
+         *
+         * <h2>判据（两条，缺一不可；全部只读）</h2>
+         * <ol>
+         *     <li>{@link #sequence}：产物命中本模组样板库的总样板，或这条任务<b>曾经</b>被解析到过
+         *     本模组的总样板（与既有分类同一份判据，见 {@code scanNetwork} 的 {@code sequenceTask}）；</li>
+         *     <li><b>任务状态里没有任何「带身份的接收端」</b>：{@code TaskStatus.Item#sinkKey()} 全为
+         *     {@code null}（见 {@code AssemblyWatchdog#hasForeignSink}）。</li>
+         * </ol>
+         *
+         * <h2>为什么第 2 条能把「产物名恰好躺在本模组样板库里」的普通任务分出来（RS 2.0.0 源码依据）</h2>
+         * <p>{@code sinkKey} 由 {@code ExternalTaskPattern#appendStatus} 写进任务状态（它把
+         * {@code lastSinkResultKey} 连同 processing 计数一起交给状态构造器），而
+         * {@code PatternProviderNetworkNode#getKey()}（= {@code sinkKeyProvider.getKey()}）在 RS 2.0.0 里
+         * <b>只有一个</b>安装点：RS 的自动合成器方块（返回 {@code InWorldExternalPatternSinkKey}）。
+         * 本模组的总样板库网络节点（{@code SequenceAssemblyExecutorNetworkNode}）<b>从不</b>安装
+         * sinkKeyProvider ⇒ 本模组驱动的序列装配任务这一项恒为 {@code null}。</p>
+         * <p>于是「状态里出现了带身份的接收端」= 这条任务此刻正被<b>RS 原生的自动合成器</b>接手
+         * （= 玩家所说的普通自动合成任务），与「产物名恰好也在本模组样板库里」完全是两件事 ——
+         * 这正是旧口径分不出来的那一类。同时真实堵住的序列装配任务（接收端 = 本模组样板库）
+         * 依旧为 {@code null}，<b>照旧秒级挂起</b>（既有判定一个字都没有放宽）。</p>
+         *
+         * <h2>保守方向（明确写出）</h2>
+         * <p>玩家若把本模组的总样板塞进 RS 自动合成器（那种布局里接收端是自动合成器），这条任务的
+         * {@code sinkKey} 非空 ⇒ 本模组<b>不会</b>自动挂起它，只会等玩家自己处置。宁可少挂一条，
+         * 也绝不误挂一条普通任务 —— 这与「普通任务永不被挂起」是同一条优先级。</p>
+         *
+         * <h2>仍然存在的边界（如实写出，留给下一轮）</h2>
+         * <p>「产物名恰好与本模组样板库某张总样板相同」<b>且</b>这条任务<b>还没有让任何带身份的接收端
+         * 碰过它</b>（RS 的公开任务状态里 {@code sinkKey} 还没被写过）时，本类仍然只能按「序列装配」
+         * 处理它 —— 要再收窄就必须知道<b>这条任务的计划用的是哪张样板</b>（本模组的还是自动合成器的），
+         * 而 RS 2.0.0 的公开状态接口里没有这一项（只有 {@code ExternalPatternSinkKey} 这条间接线索）。</p>
+         */
+        private boolean ourChain;
         /**
          * 最近一次<b>成功解析到</b>的总样板装配数据（用户第 ⑥ 条的第三条路径）。
          * <p>样板库自己掉线后，扫描再也解析不到它的样板（{@code patterns} 里没有条目）⇒ 若不缓存，
@@ -425,7 +514,7 @@ public final class AssemblyWatchdog {
         private double lastPercentage = -1.0;
         private long lastItemTotal = -1L;
 
-        private Record(final UUID taskId, final BlockPos executorPos, final ItemResource product,
+        private Record(final UUID taskId, final BlockPos executorPos, final PlatformResourceKey product,
                        final long recordedTick) {
             this.taskId = taskId;
             this.executorPos = executorPos.immutable();
@@ -459,6 +548,15 @@ public final class AssemblyWatchdog {
         }
 
         /**
+         * 只读：这条任务是否<b>真的由本模组的序列装配链驱动</b>（= 允许本看门狗自动挂起它）。
+         * <p>判据与理由见字段 javadoc；它同时是「普通 RS 自动合成任务永不被自动挂起」的唯一闸门，
+         * 也是「超限兜底回收（自动取消）」的准入条件 —— 两处共用同一个值，不可能出现两套口径。</p>
+         */
+        public boolean ourChain() {
+            return ourChain;
+        }
+
+        /**
          * 只读快照（不可变；给网络包 / 管理器用）。
          *
          * <p><b>未挂起时：原因一律写 {@code REASON_NONE}、展示用的原料 / 步骤列表一律留空。</b>
@@ -469,18 +567,23 @@ public final class AssemblyWatchdog {
          *     <li>健康任务每扫描都在动（原料被消耗、缺料集合每秒都在变），把这些字段带上会让
          *     {@code broadcast} 的「内容指纹」每秒翻新 ⇒ 白白刷包（挂起后这些字段是冻结的，反而稳定）。</li>
          * </ol>
+         *
+         * <p><b>产物资源键（{@code product}）两条分支都必须带</b>：它是快照里唯一能区分
+         * 「这条任务要的是物品还是流体」的字段（{@code productIcon} 为流体时只是装桶图标，
+         * 无桶的气体甚至连图标都没有）。客户端据此才能把同一行任务的信息说对，
+         * 也让「物品 / 流体」在协议上对称 —— 见 {@link SyncAssemblyAlertsPacket.Alert#product()}。</p>
          */
         public SyncAssemblyAlertsPacket.Alert snapshot() {
             if (!suspended) {
                 return new SyncAssemblyAlertsPacket.Alert(taskId, SyncAssemblyAlertsPacket.REASON_NONE,
-                    actions(), productName, productIcon, amount, List.of(), List.of());
+                    actions(), productName, productIcon, amount, List.of(), List.of(), product);
             }
             final List<SyncAssemblyAlertsPacket.Material> materials = new ArrayList<>(materialIcons.size());
             for (int i = 0; i < materialIcons.size() && i < materialNames.size(); i++) {
                 materials.add(new SyncAssemblyAlertsPacket.Material(materialIcons.get(i), materialNames.get(i)));
             }
             return new SyncAssemblyAlertsPacket.Alert(taskId, reason.ordinal(), actions(), productName,
-                productIcon, amount, materials, offlineSteps);
+                productIcon, amount, materials, offlineSteps, product);
         }
 
         /**
@@ -526,8 +629,14 @@ public final class AssemblyWatchdog {
     private static final Map<ResourceKey<Level>, Map<UUID, Record>> RECORDS = new HashMap<>();
     /** 维度 → 已加载区块坐标（打包 long），由区块加载 / 卸载事件维护（扫描的坐标来源）。 */
     private static final Map<ResourceKey<Level>, Set<Long>> LOADED_CHUNKS = new HashMap<>();
-    /** 维度 → 最近一次广播出去的告警快照指纹（只有变化时才广播，避免刷包）。 */
-    private static final Map<ResourceKey<Level>, String> LAST_BROADCAST = new HashMap<>();
+    /**
+     * 最近一次广播出去的<b>全局</b>告警快照指纹（只有变化时才广播，避免刷包）。
+     *
+     * <p>第 63 轮起快照是<b>全维度合并</b>的（理由见 {@link #allAlerts()}：无线监视器可以跨维度），
+     * 因此指纹也只有一份 —— 否则三个维度各扫一次就会把同一份内容重复发三遍。
+     * 用 {@code ""}（而不是 {@code null}）作初值：真实的空表指纹是 {@code "[]"}，两者不会混淆。</p>
+     */
+    private static String LAST_BROADCAST_ALL = "";
     /**
      * 挂起 / 继续 / 任务终止的<b>全局版本号</b>（只增不减、服务端权威，本轮新增）。
      *
@@ -593,7 +702,9 @@ public final class AssemblyWatchdog {
         }
         RECORDS.remove(level.dimension());
         LOADED_CHUNKS.remove(level.dimension());
-        LAST_BROADCAST.remove(level.dimension());
+        // 快照是全维度合并的 ⇒ 少一个维度的记录必然改变内容；把指纹清空，保证下一次扫描一定重播
+        //（否则该维度被卸载后，界面会一直停在「还看得见那些已消失任务」的旧快照上）。
+        LAST_BROADCAST_ALL = "";
         LEVELS.remove(level.dimension());
     }
 
@@ -693,7 +804,12 @@ public final class AssemblyWatchdog {
             //      老路会在 2 秒后把同样的横幅再弹一遍，正是用户反感的「多发」。
             // 其余原因（缺料 / 无进展 / 步骤掉线 / RS 原版任务）与未缓存执行仓坐标的记录照旧走这里。
             final boolean noticeOwned = record.pushNoticeHot && pushStallReason(record);
-            if (!shortWaiting && record.reason != Reason.NONE && !noticeOwned
+            // <b>第 56 轮（用户实测：普通任务「全都提示（挂起）了」）</b>：只有确认「本模组的序列装配链
+            // 真的在驱动这条任务」（{@link Record#ourChain}）才允许自动挂起 —— 普通 RS 自动合成任务
+            // （正被带身份的接收端接手，或产物本就不在本模组样板库里）<b>永不</b>被本模组挂起。
+            // 注意这里<b>没有</b>放宽任何既有判据：reason 的分类与各原因的阈值一字未改，
+            // 真堵的序列装配任务照旧在阈值后「发现即挂起 + 弹一次横幅」。
+            if (!shortWaiting && record.reason != Reason.NONE && record.ourChain && !noticeOwned
                 && record.stallTicks > thresholdFor(record.reason)) {
                 suspendRecord(record, record.reason, now);
                 sendBanner(level, record);
@@ -767,15 +883,23 @@ public final class AssemblyWatchdog {
     /**
      * 挂起超限的最终处置。
      * <p>默认 {@code HOLD}：继续挂起（永不自动取消），只打一条结构化日志（不刷屏）。</p>
+     * <p><b>第 56 轮新增的第二道保险</b>：普通 RS 自动合成任务（{@link Record#ourChain} 为假）
+     * 一律<b>不</b>走兜底回收，即便配置把 {@code assemblySuspendOverflowReclaim} 打开、
+     * 即便它是玩家自己手动挂起的。理由：兜底回收调的是 RS 的取消路径，会把这条订单<b>结束掉</b>
+     * （内部暂存会原样还回网络，但「这份产物」本身没了）—— 而这条任务根本不归本模组驱动，
+     * 本模组没有任何理由替玩家做这个不可逆的决定。普通任务挂多久都只是「挂着」，玩家随时可以自己处置。</p>
      */
     private static void overflowHandle(final ServerLevel level, final Record record,
                                        final List<UUID> reclaimed) {
-        if (!Config.assemblySuspendOverflowReclaim) {
+        if (!Config.assemblySuspendOverflowReclaim || !record.ourChain) {
             RsccAssemblyDebug.warn("suspendhold@" + record.taskId,
                 "suspend-hold task=" + record.taskId + " reason=" + record.reason
                     + " suspendedTicks=" + (record.currentTick - record.suspendedSinceTick)
                     + " sequence=" + record.sequence
-                    + " —— 仍保持挂起（assemblySuspendOverflowReclaim=false）");
+                    + " ourChain=" + record.ourChain
+                    + (record.ourChain
+                        ? " —— 仍保持挂起（assemblySuspendOverflowReclaim=false）"
+                        : " —— 普通 RS 自动合成任务：绝不兜底取消，保持挂起等玩家处置"));
             return;
         }
         final boolean ok = reclaim(level, record);
@@ -944,13 +1068,24 @@ public final class AssemblyWatchdog {
             }
         }
         // 该网络的「有什么料 / 谁在跑」快照（每个网络算一次，供所有任务共用）
-        final Set<ItemResource> present = presentItems(network);
+        // <b>第 63 轮：从「只有物品」改成「物品 + 流体」（presentResources）</b> ——
+        // 否则流体任务的「缺料」判定永远从「网络里没有这种料」出发（假缺料 ⇒ 误报 + 可能误挂起）。
+        final Set<PlatformResourceKey> present = presentResources(network);
         final boolean intermediateBack = hasIntermediate(present);
         final Map<BlockPos, SequenceExecutionChamberBlockEntity> chambers = chambersOf(network);
         final boolean chamberInFlight = anyChamberInFlight(chambers);
 
         for (final TaskStatus status : statuses) {
-            if (!(status.info().resource() instanceof final ItemResource resource)) {
+            // <b>第 63 轮：双资源（物品 + 流体），并且这是「任何任务都有按钮」的第一半。</b>
+            // 旧实现在这里写的是 `instanceof final ItemResource`，非物品任务直接 continue ⇒
+            // 流体任务<b>永远没有记录</b> ⇒ 它不在 alerts() 里 ⇒ actions() 根本不会被调用 ⇒
+            // 客户端 alertOf 返回 null ⇒ 三个动作位全假 ⇒ 整排按钮一个都不画（用户硬要求：
+            // 「不管什么任务都要有这个按钮，没有例外」）。
+            // 放宽到 {@link PlatformResourceKey}（物品 / 流体 / 其它已注册平台资源都实现它）之后，
+            // 记录的产生与「资源是不是物品」彻底解耦。选它而不是更宽的 ResourceKey 的理由：
+            // RS 自己的监视器协议（AutocraftingMonitorStreamCodecs）同样只承认 PlatformResourceKey，
+            // 不是它的键连 RS 自己都传不出去，因此这里跳过它不会漏掉任何界面能显示的任务。
+            if (!(status.info().resource() instanceof final PlatformResourceKey resource)) {
                 continue;
             }
             live.add(status.info().id().id());
@@ -974,14 +1109,22 @@ public final class AssemblyWatchdog {
             }
             final boolean sequenceTask = pattern != null || record.lastAssembly != null;
             record.sequence = sequenceTask;
+            // <b>第 56 轮：普通 RS 自动合成任务的保护位</b>（判据与理由见 {@link Record#ourChain}）。
+            // 与 sequence / returning 同级、每次扫描刷新：它只描述「这条任务此刻归谁驱动」这个事实，
+            // 既不搬运任何资源，也不影响任何任务的推进 —— 唯一的作用是决定本模组<b>允不允许</b>
+            // 自动挂起它（见 advanceSuspendState / advancePushNotice）与自动兜底取消（见 overflowHandle）。
+            record.ourChain = sequenceTask && !hasForeignSink(status);
             record.lastSeenTick = now;
             // RS 是否正在把内部暂存还回网络（任务已被取消 / 正在收尾）：这种状态不给「手动挂起」按钮
             // （把它跳过会把 RS 自己的回收一起冻住）。每次扫描刷新，供 actions() 判定。
             record.returning = status.state() == TaskState.RETURNING_INTERNAL_STORAGE;
-            record.productIcon = pattern != null ? pattern.product() : itemIcon(resource);
+            record.productIcon = pattern != null ? pattern.product() : iconOf(resource);
+            // 名字与图标分开取（第 63 轮）：流体里没有桶的气体（例如某些模组气体）图标必然为空，
+            // 但它的名字必须照常显示 —— 旧实现从 productIcon.getHoverName() 倒推名字，
+            // 图标一旦为空，横幅上的产物就变成空名字。
             record.productName = pattern != null
                 ? pattern.product().getHoverName().getString()
-                : record.productIcon.getHoverName().getString();
+                : resourceName(resource);
             record.amount = status.info().amount();
             if (isNewTask && pattern != null && !record.returning) {
                 // 一次性「步骤 → 负责机器」绑定快照（每次任务开始时一条，不每秒刷）：
@@ -1048,7 +1191,7 @@ public final class AssemblyWatchdog {
     private static void classifySequence(final Record record, final ServerLevel level,
                                          final Map<BlockPos, SequenceExecutionChamberBlockEntity> chambers,
                                          final PatternRef pattern, final TaskStatus status,
-                                         final Set<ItemResource> present, final List<TaskStatus> statuses,
+                                         final Set<PlatformResourceKey> present, final List<TaskStatus> statuses,
                                          final boolean progress, final boolean chamberInFlight,
                                          final boolean intermediateBack,
                                          final AutocraftingNetworkComponent autocrafting) {
@@ -1366,9 +1509,32 @@ public final class AssemblyWatchdog {
      * 这条记录是否由每 tick 的热探针负责「推不动」两族（序列装配 + 已缓存本任务用到的执行仓坐标）。
      * <p>判不出来（旧样板 / 缓存缺失 / RS 原版任务）时返回 {@code false}，那条记录照旧走
      * 「扫描 + {@code stallTicks} 阈值」的老路 —— 绝不因为新链路判不出来就丢掉提示。</p>
+     * <p><b>第 56 轮加固</b>：再加一道 {@link Record#ourChain}。理由：热探针只看<b>本模组样板库那条
+     * 样板</b>的执行仓，而「产物名恰好与样板库某张总样板相同」的普通任务也会命中同一张样板 ——
+     * 不拦的话，那种普通任务会被本仓的拒收判断牵连着秒级挂起（正是用户实测的「普通任务全被挂起」）。
+     * 判据与挂起闸门共用同一个值，因此不可能出现「热探针挂起、扫描不挂起」两套口径。</p>
      */
     private static boolean pushNoticeHandled(final Record record) {
-        return record.sequence && record.lastAssembly != null && !record.taskChambers.isEmpty();
+        return record.ourChain && record.sequence && record.lastAssembly != null
+            && !record.taskChambers.isEmpty();
+    }
+
+    /**
+     * <b>只读</b>：这条任务此刻是不是正被「<b>带身份的接收端</b>」接手（= RS 2.0.0 的原生自动合成器）
+     * —— 也就是「这条任务不归本模组驱动」的证据（见 {@link Record#ourChain} 的完整推导）。
+     *
+     * <p>RS 2.0.0 里 {@code PatternProviderNetworkNode#getKey()} 只有一个安装点
+     * （RS 的自动合成器方块，见其源码里那一句给主网络节点装 sinkKeyProvider 的调用），
+     * 本模组的总样板库从不安装 ⇒ {@code sinkKey != null} 只可能来自 RS 原生自动合成器。
+     * 判据只读 RS 自己给出的 {@link TaskStatus}，不取方块实体、不做任何网络遍历。</p>
+     */
+    private static boolean hasForeignSink(final TaskStatus status) {
+        for (final TaskStatus.Item item : status.items()) {
+            if (item.sinkKey() != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1666,7 +1832,7 @@ public final class AssemblyWatchdog {
      * 「正常运行时绝不挂起」的保证。</p>
      */
     private static void classifyGeneric(final Record record, final TaskStatus status,
-                                        final Set<ItemResource> present, final List<TaskStatus> statuses,
+                                        final Set<PlatformResourceKey> present, final List<TaskStatus> statuses,
                                         final boolean progress,
                                         final AutocraftingNetworkComponent autocrafting) {
         record.offlineSteps = List.of();
@@ -1681,7 +1847,7 @@ public final class AssemblyWatchdog {
             return;
         }
         boolean sinkBad = false;
-        final List<ItemResource> missing = new ArrayList<>();
+        final List<PlatformResourceKey> missing = new ArrayList<>();
         for (final TaskStatus.Item item : status.items()) {
             switch (item.type()) {
                 case REJECTED, LOCKED, NONE_FOUND -> sinkBad = true;
@@ -1694,11 +1860,20 @@ public final class AssemblyWatchdog {
                 // 用户第 3 条（本轮）：可被自动合成的资源不算「缺料」⇒ 不报缺、不挂起，静默等待它做出来。
                 missing.add(resource);
             }
+            // <b>第 63 轮：流体的缺料判定与物品逐字同构</b>（原来这里根本没有流体分支 ⇒
+            // 流体任务只会被兜底判成「无进展」，原因文案与真实情况不符）。
+            // 上面那一段物品判据是<b>既有字面量</b>（被 selfcheck_assembly_watchdog 以文本锚定），
+            // 因此新增分支而不是改写它 —— 两条分支的四个条件一一对应。
+            if (item.extracting() > 0 && item.resource() instanceof final FluidResource fluid
+                && !present.contains(fluid) && !craftedByOthers(statuses, status, fluid)
+                && !isAutoCraftable(autocrafting, fluid)) {
+                missing.add(fluid);
+            }
         }
         record.materialIcons = missing.stream().limit(MAX_LISTED)
-            .map(resource -> itemIcon(resource)).toList();
-        record.materialNames = record.materialIcons.stream()
-            .map(stack -> stack.getHoverName().getString()).toList();
+            .map(resource -> iconOf(resource)).toList();
+        record.materialNames = missing.stream().limit(MAX_LISTED)
+            .map(resource -> resourceName(resource)).toList();
         record.materialTotal = missing.size();
         if (sinkBad) {
             record.reason = Reason.EXECUTOR_OFFLINE;
@@ -1711,7 +1886,7 @@ public final class AssemblyWatchdog {
 
     /** 网络里是否有别的任务正在产出该资源（有的话「缺料」只是暂时的，不该算卡住）。 */
     private static boolean craftedByOthers(final List<TaskStatus> statuses, final TaskStatus self,
-                                           final ItemResource resource) {
+                                           final PlatformResourceKey resource) {
         for (final TaskStatus other : statuses) {
             if (!other.info().id().equals(self.info().id()) && other.info().resource().equals(resource)) {
                 return true;
@@ -1725,9 +1900,14 @@ public final class AssemblyWatchdog {
      *
      * <p>用户第 3 条：<b>可被自动合成的资源不算「缺料」</b> —— 一直静默等它做出来即可（不报缺、不挂起）。
      * 读不到自动合成组件时返回 {@code false}（= 判不出来 ⇒ 照旧按缺料判定，绝不漏掉真实缺料）。只读。</p>
+     *
+     * <p><b>第 63 轮：形参从 {@code ItemResource} 放宽到 {@link PlatformResourceKey}</b> ——
+     * RS 的公开 API 本来就是 {@code getPatternsByOutput(ResourceKey)}，流体同样有「以它为输出的样板」，
+     * 因此流体任务也能享受同一条「可自动合成 ⇒ 不算缺料、静默等待」的既有语义（语义未放宽，
+     * 只是把它应用到流体上）。</p>
      */
     private static boolean isAutoCraftable(final AutocraftingNetworkComponent autocrafting,
-                                           final ItemResource resource) {
+                                           final PlatformResourceKey resource) {
         return autocrafting != null && resource != null
             && !autocrafting.getPatternsByOutput(resource).isEmpty();
     }
@@ -1746,6 +1926,60 @@ public final class AssemblyWatchdog {
         } catch (final RuntimeException ignored) {
             return ItemStack.EMPTY;
         }
+    }
+
+    /**
+     * <b>资源 → 展示用图标（第 63 轮：物品 + 流体）</b>。
+     *
+     * <p>物品走既有的 {@link #itemIcon(ItemResource)}（原样一条路，没有第二套）。</p>
+     *
+     * <p><b>流体用「装桶」图标：复用本工程既有的那条路径</b> ——
+     * {@code BlockContentReleaser.fluidsAsBuckets} 早就用 {@link FluidUtil#getFilledBucket(FluidStack)}
+     * 把流体变成可展示 / 可交付的物品（流体回网失败时按桶掉落的保底归宿）。
+     * 这里刻意<b>不</b>新造第二套流体渲染：横幅（Toast）那一层只认 {@code ItemStack} 图标段，
+     * 而 RS 的 GUI 流体渲染（{@code FluidResourceRendering}）是客户端专属、拿不进服务端构造的包里。</p>
+     *
+     * <p><b>如实写出边界</b>：没有对应桶的流体（部分模组气体 / 自定义流体）拿不到图标 ⇒ 返回空栈。
+     * 这不会让任何东西消失 —— 横幅那一行本来就把图标当<b>可选装饰</b>（取不到就发纯文本行，见
+     * {@code sendBanner}），名字另有 {@link #resourceName(PlatformResourceKey)} 独立取值。</p>
+     */
+    private static ItemStack iconOf(final PlatformResourceKey resource) {
+        if (resource instanceof final ItemResource item) {
+            return itemIcon(item);
+        }
+        if (resource instanceof final FluidResource fluid) {
+            return fluidIcon(fluid);
+        }
+        return ItemStack.EMPTY;
+    }
+
+    /** 流体 → 装好该流体的桶（取不到返回空栈；异常一律吞掉，绝不让展示层影响判定）。 */
+    private static ItemStack fluidIcon(final FluidResource resource) {
+        try {
+            return FluidUtil.getFilledBucket(new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(resource.fluid()), 1));
+        } catch (final RuntimeException ignored) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    /**
+     * 资源 → 展示用名字（第 63 轮：物品 + 流体）。
+     * <p>流体名字用工程既有的那条口径（{@code SequenceAssemblyPatternItem#fluidName}：
+     * {@code new FluidStack(fluid, 1).getHoverName()}），保证同一流体在样板 tooltip 与监视器横幅上
+     * 叫同一个名字。<b>刻意不从图标倒推名字</b>：没有桶的流体图标为空，倒推会得到空名字。</p>
+     */
+    private static String resourceName(final PlatformResourceKey resource) {
+        if (resource instanceof final ItemResource item) {
+            return itemIcon(item).getHoverName().getString();
+        }
+        if (resource instanceof final FluidResource fluid) {
+            try {
+                return new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid.fluid()), 1).getHoverName().getString();
+            } catch (final RuntimeException ignored) {
+                return "";
+            }
+        }
+        return "";
     }
 
     // ==================== 判定辅助（全部只读） ====================
@@ -2151,9 +2385,16 @@ public final class AssemblyWatchdog {
         return result;
     }
 
-    /** 网络里「此刻存在的物品资源」（只读快照）。 */
-    private static Set<ItemResource> presentItems(final Network network) {
-        final Set<ItemResource> result = new HashSet<>();
+    /**
+     * 网络里「此刻存在的资源」（只读快照；<b>第 63 轮起含流体</b>）。
+     *
+     * <p>旧实现的 {@code presentItems} 只收 {@code ItemResource}，于是流体任务的缺料判定
+     * 永远认为「网络里没有这种料」—— 那会把一条正常推进的流体任务误判成缺料（甚至按阈值挂起）。
+     * 现在按 {@link PlatformResourceKey} 收（物品 / 流体 / 其它平台资源同一口径），
+     * 与扫描入口的判据同源：<b>能被记录的任务，其缺料判定也一定能看到对应的料</b>。</p>
+     */
+    private static Set<PlatformResourceKey> presentResources(final Network network) {
+        final Set<PlatformResourceKey> result = new HashSet<>();
         final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
         if (storage == null) {
             return result;
@@ -2162,17 +2403,18 @@ public final class AssemblyWatchdog {
             if (tracked.resourceAmount().amount() <= 0) {
                 continue;
             }
-            if (tracked.resourceAmount().resource() instanceof final ItemResource item) {
-                result.add(item);
+            if (tracked.resourceAmount().resource() instanceof final PlatformResourceKey key) {
+                result.add(key);
             }
         }
         return result;
     }
 
-    /** 网络里是否有「中间产物回流」：带 Create 序列装配进度组件的过渡件。 */
-    private static boolean hasIntermediate(final Set<ItemResource> present) {
-        for (final ItemResource resource : present) {
-            if (resource.toItemStack(1).get(AllDataComponents.SEQUENCED_ASSEMBLY) != null) {
+    /** 网络里是否有「中间产物回流」：带 Create 序列装配进度组件的过渡件（流体不参与，故只认物品）。 */
+    private static boolean hasIntermediate(final Set<PlatformResourceKey> present) {
+        for (final PlatformResourceKey resource : present) {
+            if (resource instanceof final ItemResource item
+                && item.toItemStack(1).get(AllDataComponents.SEQUENCED_ASSEMBLY) != null) {
                 return true;
             }
         }
@@ -2269,7 +2511,7 @@ public final class AssemblyWatchdog {
      * <p>只写诊断：不影响缺料判定、不影响挂起、不影响任何搬运。</p>
      */
     private static java.util.Map<String, Long> materialDeficit(final List<ItemStack> needed,
-                                                               final Set<ItemResource> present,
+                                                               final Set<PlatformResourceKey> present,
                                                                final long remainingUnits) {
         final java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
         if (needed == null || needed.isEmpty()) {
@@ -2297,17 +2539,18 @@ public final class AssemblyWatchdog {
     }
 
     /** 只读：给定物品 id 在当前「有」的集合里有多少件（按物品匹配，取不到数量时按 1 计）。 */
-    private static long presentAmount(final Set<ItemResource> present, final String itemId) {
+    private static long presentAmount(final Set<PlatformResourceKey> present, final String itemId) {
         long total = 0L;
-        for (final ItemResource key : present) {
-            if (itemId.equals(RsccAssemblyDebug.itemId(key.item()))) {
+        for (final PlatformResourceKey key : present) {
+            // 集合第 63 轮起含流体：只有物品才有「物品 id」，流体跳过（这条诊断本来就是物品口径）。
+            if (key instanceof final ItemResource item && itemId.equals(RsccAssemblyDebug.itemId(item.item()))) {
                 total += 1L; // present 是「有没有」的集合（每种一份），保守按 1 计
             }
         }
         return total;
     }
 
-    private static List<ItemStack> missing(final List<ItemStack> needed, final Set<ItemResource> present,
+    private static List<ItemStack> missing(final List<ItemStack> needed, final Set<PlatformResourceKey> present,
                                            final Map<BlockPos, SequenceExecutionChamberBlockEntity> chambers,
                                            final SequencePatternData.AssemblyData assembly,
                                            final long remainingUnits) {
@@ -2857,39 +3100,59 @@ public final class AssemblyWatchdog {
     // ==================== 同步 / 处置 API（服务端权威） ====================
 
     /**
-     * 当前维度里所有<b>此刻有动作可做</b>的任务的只读快照。
+     * <b>全部维度</b>里「此刻有动作可做」的任务快照（第 63 轮；按任务 id 排序保证指纹稳定）。
      *
-     * <p>「有动作可做」= 已挂起（可「继续」）或仍可被推进（可「挂起」）——
-     * 后者同样要发给客户端，否则监视器上就看不到「挂起」按钮（本轮新增的手动挂起）。</p>
+     * <p>「有动作可做」= 已挂起（可「继续」）或仍可被推进（可「挂起」）—— 后者同样要发给客户端，
+     * 否则监视器上就看不到「挂起」按钮。没有动作位的记录（例如 RS 正在回收内部暂存的收尾态）
+     * <b>不进快照</b>：那种状态下界面不该给任何动作（见 {@code Record#actions()}）。</p>
+     *
+     * <h2>为什么必须是全维度，而不是「玩家所在的那一个维度」（第 63 轮把旧的按维度版本合并到这里）</h2>
+     * <p>无线监视器（{@code WirelessAutocraftingMonitorItem}）可以<b>跨维度</b>看另一个维度的网络
+     * （它按 {@code GlobalPos} 解析网络，与玩家所在维度无关）。旧实现按维度分发告警：主网络在
+     * 主世界、玩家在地狱时，那份快照只发给「主世界里开着监视器的玩家」⇒ 这位玩家<b>永远收不到</b>
+     * 任何一条告警 ⇒ 客户端手里没有这一行 ⇒ 三个动作位全假 ⇒ 整排按钮一个都不画。
+     * 这正是「不管什么任务都要有这个按钮」漏掉的第二个口子（第一个是流体任务，
+     * 见 {@code scanNetwork} 的扫描判据）。</p>
+     *
+     * <p>任务 id（{@code TaskId}）本身是全局唯一的随机 UUID，客户端只按它查表，
+     * 因此多发几条「别的维度的任务」是无害的（查不到的行不会渲染任何东西）。
+     * 客户端的兜底（没有快照至少给「挂起」位）仍然保留 —— 那是结构性保证，不依赖这条广播能否送达。</p>
      */
-    public static List<SyncAssemblyAlertsPacket.Alert> alerts(final ServerLevel level) {
-        final Map<UUID, Record> records = RECORDS.get(level.dimension());
-        if (records == null || records.isEmpty()) {
-            return List.of();
-        }
+    private static List<SyncAssemblyAlertsPacket.Alert> allAlerts() {
         final List<SyncAssemblyAlertsPacket.Alert> result = new ArrayList<>();
-        for (final Record record : records.values()) {
-            if (record.actions() != SyncAssemblyAlertsPacket.ACTION_BIT_NONE) {
-                result.add(record.snapshot());
+        for (final Map<UUID, Record> records : RECORDS.values()) {
+            for (final Record record : records.values()) {
+                if (record.actions() != SyncAssemblyAlertsPacket.ACTION_BIT_NONE) {
+                    result.add(record.snapshot());
+                }
             }
         }
+        // 指纹（内容比较）必须与迭代顺序无关：Map 的插入顺序会随扫描次序变化，
+        // 不排序的话「内容没变」也会被算成变化 ⇒ 白白刷包。
+        result.sort((a, b) -> a.taskId().compareTo(b.taskId()));
         return result;
     }
 
-    /** 把快照广播给该维度里「正开着自动合成管理器」的玩家（只有内容变化时才发，避免刷包）。 */
+    /**
+     * 把快照广播给<b>所有</b>「正开着自动合成管理器」的玩家（只有内容变化时才发，避免刷包）。
+     *
+     * <p>发给谁与触发广播的是哪个维度无关（理由见 {@link #allAlerts()}）：只要能收到快照，
+     * 玩家无论站在哪个维度、用的是方块监视器还是无线监视器，界面都能拿到每一条任务的权威状态。
+     * 指纹也是全局唯一一份 —— 否则三个维度各扫一次就会把同一份内容重复发三遍。</p>
+     */
     private static void broadcast(final ServerLevel level) {
-        final List<SyncAssemblyAlertsPacket.Alert> alerts = alerts(level);
+        final List<SyncAssemblyAlertsPacket.Alert> alerts = allAlerts();
         final String fingerprint = alerts.toString();
-        if (fingerprint.equals(LAST_BROADCAST.get(level.dimension()))) {
+        if (fingerprint.equals(LAST_BROADCAST_ALL)) {
             return;
         }
-        LAST_BROADCAST.put(level.dimension(), fingerprint);
-        if (alerts.isEmpty()) {
-            // 仍然要把「空表」发给开着的玩家，让他们把按钮置灰
-            LAST_BROADCAST.put(level.dimension(), fingerprint);
-        }
+        LAST_BROADCAST_ALL = fingerprint;
         final SyncAssemblyAlertsPacket packet = new SyncAssemblyAlertsPacket(alerts);
-        for (final ServerPlayer player : level.players()) {
+        final MinecraftServer server = level.getServer();
+        if (server == null) {
+            return;
+        }
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
             if (player.containerMenu instanceof AbstractAutocraftingMonitorContainerMenu) {
                 PacketDistributor.sendToPlayer(player, packet);
             }
@@ -2902,14 +3165,72 @@ public final class AssemblyWatchdog {
      * 手里永远没有快照，监视器里的处置按钮就永远不会渲染）。
      */
     public static void sendAlerts(final ServerPlayer player) {
-        PacketDistributor.sendToPlayer(player,
-            new SyncAssemblyAlertsPacket(alerts(player.serverLevel())));
+        PacketDistributor.sendToPlayer(player, new SyncAssemblyAlertsPacket(allAlerts()));
     }
 
+    /**
+     * 按任务 id 找记录（<b>第 63 轮起跨维度</b>）。
+     *
+     * <p>先查玩家所在维度（绝大多数情况一次命中），再查其它维度 —— 无线监视器可以跨维度操作
+     * 另一个维度里的任务，而记录是<b>按任务所在维度</b>存的（扫描按维度跑）。旧实现只查玩家维度，
+     * 于是「在地狱里对主世界的任务点挂起」会安全失败（按钮画得出来、服务端却处理不了）——
+     * 这正是「界面画了按钮 ⇒ 服务端必须能处理」要堵的口子。</p>
+     */
     @Nullable
     private static Record findRecord(final ServerPlayer player, final UUID taskId) {
-        final Map<UUID, Record> records = RECORDS.get(player.serverLevel().dimension());
-        return records == null ? null : records.get(taskId);
+        final Map<UUID, Record> own = RECORDS.get(player.serverLevel().dimension());
+        if (own != null && own.containsKey(taskId)) {
+            return own.get(taskId);
+        }
+        for (final Map<UUID, Record> records : RECORDS.values()) {
+            final Record record = records.get(taskId);
+            if (record != null) {
+                return record;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 该记录<b>所在</b>的维度（跨维度查找的配套；找不到时返回玩家所在维度）。
+     *
+     * <p>为什么必须拿到「记录自己的那个维度」：{@code networkOf} / {@code unitOf} /
+     * {@code level.getBlockEntity(record.executorPos)} 全都是「维度 + 坐标」查询 ——
+     * 用玩家的维度去查另一个维度的坐标，只会得到 null（于是「更换机器」静默失效）。</p>
+     */
+    private static ServerLevel levelOf(final ServerPlayer player, final UUID taskId) {
+        for (final Map.Entry<ResourceKey<Level>, Map<UUID, Record>> entry : RECORDS.entrySet()) {
+            if (entry.getValue().containsKey(taskId)) {
+                final ServerLevel level = LEVELS.get(entry.getKey());
+                if (level != null) {
+                    return level;
+                }
+            }
+        }
+        return player.serverLevel();
+    }
+
+    /**
+     * <b>就地补一次全维度扫描</b>（第 63 轮；只由 {@link #suspend} 在「查不到记录」时调用）。
+     *
+     * <p><b>它补的是哪个洞</b>：记录只由 1 秒一拍的扫描产生，而 RS 自己会把新任务<b>即时</b>推给
+     * 监视器界面 —— 于是存在一个 ≤1 秒的窗口：玩家已经看到那一行、点了「挂起」，
+     * 我方却还没有这条记录。旧实现直接安全失败（玩家观感「按了没反应」，而按钮明明在）。
+     * 现在把这一拍提前到点击当刻：扫描仍是那份纯只读的扫描（判据一字未改），
+     * 因此「补出来」的记录与下一拍本来就会建出来的记录<b>完全同一份</b>。</p>
+     *
+     * <p><b>开销可控</b>：一次点击 = 一个包（客户端 2 秒在途闸门保证不会连点），
+     * 因此最多「每 2 秒一次全量扫描」，远低于既有 1 秒一拍的稳态开销。</p>
+     */
+    private static void rescanNow(final ServerPlayer player) {
+        final MinecraftServer server = player.getServer();
+        if (server == null) {
+            return;
+        }
+        final long now = player.serverLevel().getGameTime();
+        for (final ServerLevel level : server.getAllLevels()) {
+            scanLevel(level, now);
+        }
     }
 
     /**
@@ -2971,6 +3292,10 @@ public final class AssemblyWatchdog {
      * 「继续 / 恢复」：{@link SuspendState} 归位到 {@code RUNNING}，并让检测器<b>重新开始计时</b>
      * （不是立刻再弹一次）。这是<b>唯一</b>的恢复入口（挂起后一律不自动恢复，见类注释）。
      *
+     * <p><b>第 63 轮：跨维度找记录 + 成功后当刻重播快照</b>（与 {@link #suspend} 同一套口径）——
+     * 无线监视器可以跨维度操作，而「继续」后按钮必须当刻从「继续」翻回「挂起」，
+     * 否则那一秒里玩家会看到一颗按不动的按钮。</p>
+     *
      * @return 该任务确实存在且被清除了挂起状态。
      */
     public static boolean resume(final ServerPlayer player, final UUID taskId) {
@@ -2978,6 +3303,7 @@ public final class AssemblyWatchdog {
         if (record == null) {
             return false; // 任务已消失 → 安全失败
         }
+        final ServerLevel level = levelOf(player, taskId);
         resumeRecord(record, player.serverLevel().getGameTime());
         record.lastSeenTick = player.serverLevel().getGameTime();
         // 日志取证（用户要求「挂起 / 继续要有日志证据」）：一条便够 —— 它标出玩家动作的<b>确切时刻</b>，
@@ -2987,6 +3313,7 @@ public final class AssemblyWatchdog {
             + " x" + record.amount + " sequence=" + record.sequence
             + " at=" + RsccAssemblyDebug.at(record.executorPos)
             + " tick=" + player.serverLevel().getGameTime());
+        broadcast(level);
         return true;
     }
 
@@ -3001,14 +3328,26 @@ public final class AssemblyWatchdog {
      *
      * <p><b>挂起后一律不自动恢复</b>（与自动挂起同一规则）：只有玩家再点「继续」才回到 {@code RUNNING}。</p>
      *
-     * <p><b>服务端权威校验</b>（缺一不可）：任务确实还在服务端记录里、当前维度找得到（即玩家有权限触达它）、
-     * 且此刻处于 {@link SuspendState#RUNNING}，并且不是 RS 正在回收内部暂存（{@link Record#returning}）——
-     * 否则安全失败返回 false，绝不误挂别的任务、也绝不冻住 RS 自己的回收。</p>
+     * <p><b>服务端权威校验</b>（缺一不可）：任务确实还在服务端记录里（<b>跨维度</b>找，见
+     * {@link #findRecord}）、且此刻处于 {@link SuspendState#RUNNING}，并且不是 RS 正在回收内部暂存
+     * （{@link Record#returning}）—— 否则安全失败返回 false，绝不误挂别的任务、
+     * 也绝不冻住 RS 自己的回收。</p>
+     *
+     * <p><b>第 63 轮：查不到记录时<b>就地补一次全维度扫描</b>再判</b>（{@link #rescanNow}）。
+     * 这一条是「界面画了按钮 ⇒ 服务端必须能处理」的服务端那一半：客户端在没有快照时也会画
+     * 「挂起」（见 {@code AssemblyAlertsClient#actionView}），而记录只由 1 秒一拍的扫描产生，
+     * 于是「刚下单不到一秒就被点」的窗口里旧实现会静默失败。补扫描用的是同一条只读扫描路径，
+     * 因此补出来的记录与下一拍本来就会建出来的记录完全一致 —— <b>没有放宽任何判据</b>：
+     * 补出来之后照旧要过「RUNNING 且未在回收」这道闸门，普通任务的保护位也照旧由扫描写入。</p>
      *
      * @return 校验通过且已把该任务挂起。
      */
     public static boolean suspend(final ServerPlayer player, final UUID taskId) {
-        final Record record = findRecord(player, taskId);
+        Record record = findRecord(player, taskId);
+        if (record == null) {
+            rescanNow(player); // 记录可能只是「还没被这一拍扫出来」→ 当刻补一拍再判
+            record = findRecord(player, taskId);
+        }
         if (record == null || record.suspendState != SuspendState.RUNNING || record.returning) {
             return false; // 任务已消失 / 已挂起 / RS 正在回收内部暂存 → 安全失败
         }
@@ -3021,6 +3360,10 @@ public final class AssemblyWatchdog {
             + " x" + record.amount + " sequence=" + record.sequence
             + " at=" + RsccAssemblyDebug.at(record.executorPos) + " tick=" + now
             + " reason=manual");
+        // 挂起是「动作位」从 SUSPEND 翻到 RESUME 的边沿：当刻把新快照推给开着监视器的玩家，
+        // 否则玩家的那颗按钮最多要等 1 秒（下一次扫描）才变成「继续」—— 那段窗口里再点一下
+        // 会被服务端判成「已挂起」而失败，观感就是「我按了挂起，它说挂起失败」。
+        broadcast(levelOf(player, taskId));
         return true;
     }
 
@@ -3034,7 +3377,8 @@ public final class AssemblyWatchdog {
         if (record == null) {
             return List.of();
         }
-        final ServerLevel level = player.serverLevel();
+        // 「更换机器」要读样板库方块实体 / 网络图 ⇒ 必须用<b>记录自己所在</b>的维度（跨维度无线监视器）。
+        final ServerLevel level = levelOf(player, taskId);
         final Network network = networkOf(level, record);
         if (network == null) {
             return List.of();
@@ -3067,7 +3411,8 @@ public final class AssemblyWatchdog {
         if (record == null) {
             return false;
         }
-        final ServerLevel level = player.serverLevel();
+        // 写回样板库同样要落到<b>记录自己所在</b>的维度（跨维度无线监视器）。
+        final ServerLevel level = levelOf(player, taskId);
         final BlockEntity blockEntity = level.getBlockEntity(record.executorPos);
         if (!(blockEntity instanceof SequenceAssemblyExecutorBlockEntity executor)) {
             return false; // 样板库已消失 → 安全失败
@@ -3113,8 +3458,14 @@ public final class AssemblyWatchdog {
         return false;
     }
 
-    /** 该总样板的产物里是否包含这条任务的产物资源。 */
-    private static boolean produces(final SequencePatternData.AssemblyData assembly, final ItemResource product) {
+    /**
+     * 该总样板的产物里是否包含这条任务的产物资源。
+     * <p>形参取 {@link PlatformResourceKey}（第 63 轮）：记录里的产物已放宽到双资源，
+     * 而序列装配样板的总样板产物恒为物品 —— 流体产物在这里自然匹配不到任何样板
+     * （= 不会被误判成序列装配任务，走通用分类，与既有行为一致）。</p>
+     */
+    private static boolean produces(final SequencePatternData.AssemblyData assembly,
+                                    final PlatformResourceKey product) {
         for (final SequencePatternData.PatternOutput output : assembly.results()) {
             if (!output.stack().isEmpty() && ItemResource.ofItemStack(output.stack()).equals(product)) {
                 return true;
@@ -3157,23 +3508,23 @@ public final class AssemblyWatchdog {
         return blockEntity == null ? null : nodeNetwork(blockEntity);
     }
 
-    /** 该维度里某个步骤的当前指派机器名（供管理器展示；找不到返回空串）。 */
+    /** 该步骤的当前指派机器名（供管理器展示；找不到返回空串）。<b>查找跨维度</b>（第 63 轮）。 */
     public static String currentMachineName(final ServerPlayer player, final UUID taskId, final int stepIndex) {
         final Record record = findRecord(player, taskId);
         if (record == null) {
             return "";
         }
-        final SequencePatternData.UnitEntry unit = unitOf(player.serverLevel(), record, stepIndex);
+        final SequencePatternData.UnitEntry unit = unitOf(levelOf(player, taskId), record, stepIndex);
         return unit == null || unit.machineName() == null ? "" : unit.machineName();
     }
 
-    /** 该维度里某个步骤的配方类型（供管理器请求候选时回传）。 */
+    /** 该步骤的配方类型（供管理器请求候选时回传）。<b>查找跨维度</b>（第 63 轮）。 */
     public static String stepRecipeType(final ServerPlayer player, final UUID taskId, final int stepIndex) {
         final Record record = findRecord(player, taskId);
         if (record == null) {
             return "";
         }
-        final SequencePatternData.UnitEntry unit = unitOf(player.serverLevel(), record, stepIndex);
+        final SequencePatternData.UnitEntry unit = unitOf(levelOf(player, taskId), record, stepIndex);
         return unit == null || unit.recipeType() == null ? "" : unit.recipeType();
     }
 
@@ -3217,6 +3568,9 @@ public final class AssemblyWatchdog {
             row.put("suspendState", record.suspendState.name());
             row.put("stallTicks", record.stallTicks);
             row.put("sequence", record.sequence);
+            // 第 56 轮：这条任务是否归本模组驱动（= 允不允许自动挂起）。取证时先看它：
+            // ourChain=false 的记录即便 reason 非 NONE 也<b>绝不会</b>被挂起（普通 RS 自动合成任务）。
+            row.put("ourChain", record.ourChain);
             row.put("returning", record.returning);
             row.put("missingMaterials", record.materialTotal);
             // 整单口径缺口（用户要的「还差多少个」）

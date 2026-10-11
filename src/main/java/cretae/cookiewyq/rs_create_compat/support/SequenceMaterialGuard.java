@@ -328,6 +328,242 @@ public final class SequenceMaterialGuard {
             : StepVerdict.NOT_MINE;        // 该机器做完了（s >= m）或还没轮到它（s < m）
     }
 
+    // ==================== 在途自动合成任务对「网络存量」的占用（预留） ====================
+
+    /**
+     * <b>「留在网络里、但已被在途自动合成任务等着抽取」而暂停取用的原因标识</b>
+     * （等待 / 上报缺料用；<b>绝不是</b>「硬抽」的许可）。
+     * <p>与既有原因串（{@code already_enough} / {@code storage_full} / {@code extract_zero}）同一套命名，
+     * 只进模组自己的诊断日志，<b>不是</b>给玩家看的语言键。</p>
+     */
+    public static final String HOLD_INFLIGHT_TASK_NEED = "inflight_task_need";
+
+    /**
+     * <b>RS 2.0 的「预留」到底存在哪里（这一节的全部依据，逐条给出类:行号）</b>
+     *
+     * <h2>① 网络根存储<b>只有插入</b>有拦截钩子，抽取<b>一个钩子都没有</b></h2>
+     * <p>{@code RootStorageListener}（RS 源码 {@code api/storage/root/RootStorageListener.java:18,30}）
+     * 只声明 {@code beforeInsert} 与 {@code afterInsert}；{@code RootStorageImpl#insert}
+     * （{@code RootStorageImpl.java:90-126}）逐个回调它们，而 {@code RootStorageImpl#extract}
+     * （{@code :85-87}）是<b>直接转发</b>给 {@code CompositeStorageImpl#extract} 的裸委托。</p>
+     *
+     * <h2>② 任务「还没拿到」的量只体现在任务自己的账上，不在网络存储里</h2>
+     * <p>{@code TaskImpl#extractInitialResourcesAndTryStartRunningTask}
+     * （{@code autocrafting/task/TaskImpl.java:199-222}）每步尝试
+     * {@code rootStorage.extract(initialRequirement, needed, EXECUTE, Actor.EMPTY)}，抽到多少就
+     * {@code initialRequirements.remove(...)}；而 {@code TaskImpl#getStatus}（{@code :146-166}）把
+     * <b>剩下的 {@code initialRequirements} 原样报成 {@code TaskStatus.Item#extracting}</b>
+     * （{@code autocrafting/status} 包里那个状态构造器的 {@code extracting(...)}，
+     * 2.0.0 源码 {@code status} 包 :30-33）。</p>
+     *
+     * <p>于是 RS 里真正被「为某条在途任务留着」的量只有三种载体，<b>没有一种在网络存储里</b>：
+     * ①{@code TaskImpl.internalStorage}（{@code :36}，已经从网络抽走的实体）；
+     * ②{@code ExternalTaskPattern.expectedOutputs}（{@code ExternalTaskPattern.java:24}，还没做出来的产出）；
+     * ③机器 / 外部接收端手里的在制件。网络里那一份<b>既没有被扣减、也没有任何标记</b> ——
+     * 谁先 {@code extract} 谁拿走。这就是「外部存储 / 缓存节点在 {@code extract} 时 RS 不会先扣预留量」
+     * 的确切答案：<b>RS 根本没有这个量</b>，因此本模组必须自己算。</p>
+     *
+     * <h2>③ 为什么只认 {@code extracting}，不认 {@code scheduled} / {@code processing}</h2>
+     * <ul>
+     *     <li>{@code scheduled}（{@code ExternalTaskPattern.java:144-150}）与
+     *     {@code processing}（{@code :151-161}）描述的是<b>外部样板每轮迭代的投入物</b>；
+     *     本模组的执行器 {@code SequenceAssemblyExecutorBlockEntity#accept} <b>把这些投入物原样插回网络</b>
+     *     （{@code accept} 里 {@code storage.insert(resource, count, action, Actor.EMPTY)}），
+     *     正是为了让各台执行仓能按步骤把它们领走。把它们也算成「别人的预留」会把本模组自己的
+     *     供料链锁死（投料口就在网络上、却被判成不许取），既漏又死锁。</li>
+     *     <li>{@code extracting} 相反：它<b>不在网络里</b>（任务还没抽到），所以「从网络里少取这么多」
+     *     恰好等于「把网络里那 N 件留给那条任务去抽」，语义精确、不重复计算。</li>
+     * </ul>
+     *
+     * <h2>④ 为什么这样最不容易漏、也不会永久死锁</h2>
+     * <p>{@code initialRequirements} 只会因为它自己被抽走而<b>单调减少</b>
+     * （{@code TaskImpl.java:214} 的 {@code remove}；没有任何一处把它加回去），因此「等」必然收敛。
+     * 唯一的永久占用风险来自<b>不再推进的任务</b>（玩家取消后停在
+     * {@code RETURNING_INTERNAL_STORAGE}、网络塞满导致收尾永远完不成）：那种任务再也不会
+     * {@code extract} 了，若还算它的预留就是死锁。因此 {@link #isInFlight} 把这种状态<b>排除</b>，
+     * 它的读数当 tick 作废。</p>
+     *
+     * @param state 任务状态（{@code null} 视为不在途）
+     * @return {@code true} = 这条任务<b>还会</b>从网络抽料（它的 {@code extracting} 必须被尊重）
+     */
+    public static boolean isInFlight(@Nullable final com.refinedmods.refinedstorage.api.autocrafting.task.TaskState state) {
+        if (state == null) {
+            return false;
+        }
+        return switch (state) {
+            case READY, EXTRACTING_INITIAL_RESOURCES, RUNNING -> true;
+            // 取消 / 自然收尾：任务只会把 internalStorage 还回网络，绝不会再抽料。
+            // 它的 initialRequirements 可能非空（取消时没人清），那是<b>过期读数</b>：
+            // 继续算成预留会永久占住资源（本模组一件都取不到），因此必须当场作废。
+            case RETURNING_INTERNAL_STORAGE, COMPLETED -> false;
+        };
+    }
+
+    /** {@link #pendingExtraction(java.util.List, java.util.Set)} 的简写：不排除任何任务。 */
+    public static java.util.Map<com.refinedmods.refinedstorage.api.resource.ResourceKey, Long> pendingExtraction(
+        @Nullable final java.util.List<com.refinedmods.refinedstorage.api.autocrafting.status.TaskStatus> statuses) {
+        return pendingExtraction(statuses, java.util.Set.of());
+    }
+
+    /**
+     * 汇总「每个资源此刻还被在途任务等着抽取多少」= 按资源求和的 {@code TaskStatus.Item#extracting}
+     * （{@code TaskStatus.java:18-28} 的字段，来源见 {@link #isInFlight} 的 ②）。
+     *
+     * <p><b>只读纯函数</b>：不搬运、不修改任何资源与任务状态；调用方拿到的是一份新表。</p>
+     *
+     * @param statuses   RS 的 {@code AutocraftingNetworkComponent#getStatuses()} 结果
+     * @param ownTaskIds <b>本产线自己的任务 id</b>（{@code TaskId#id()} 的字符串形式）：
+     *                   它们对网络存量的需求<b>不算</b>「别人的预留」，原因见方法名注释与
+     *                   {@link #HOLD_INFLIGHT_TASK_NEED} 的用法说明 —— 本模组的执行器会把每轮投入物
+     *                   原样插回网络，如果连自己那条任务的需求也算成「不许取」，
+     *                   供料链会自己把自己锁死。
+     * @return 资源 → 「别人还等着从网络抽取的量」（只含 &gt; 0 的项）
+     */
+    public static java.util.Map<com.refinedmods.refinedstorage.api.resource.ResourceKey, Long> pendingExtraction(
+        @Nullable final java.util.List<com.refinedmods.refinedstorage.api.autocrafting.status.TaskStatus> statuses,
+        final java.util.Set<String> ownTaskIds) {
+        final java.util.Map<com.refinedmods.refinedstorage.api.resource.ResourceKey, Long> claims =
+            new java.util.LinkedHashMap<>();
+        if (statuses == null || statuses.isEmpty()) {
+            return claims;
+        }
+        for (final com.refinedmods.refinedstorage.api.autocrafting.status.TaskStatus status : statuses) {
+            if (status == null || !isInFlight(status.state())) {
+                continue;
+            }
+            if (status.info() != null && status.info().id() != null && ownTaskIds != null
+                && ownTaskIds.contains(status.info().id().id().toString())) {
+                continue;
+            }
+            if (status.items() == null) {
+                continue;
+            }
+            for (final com.refinedmods.refinedstorage.api.autocrafting.status.TaskStatus.Item item : status.items()) {
+                if (item == null || item.resource() == null || item.extracting() <= 0L) {
+                    continue;
+                }
+                claims.merge(item.resource(), item.extracting(), Long::sum);
+            }
+        }
+        return claims;
+    }
+
+    /**
+     * <b>「可用量」的唯一算法</b>：从网络<b>存量</b>里扣掉「已被在途任务预留的量」。
+     * <p>本模组此前各处一律用网络存量当可用量，于是会把别人在途任务等着的那一份也抽走
+     * （RS 的 {@code extract} 不扣预留，见 {@link #isInFlight} 的 ①）。</p>
+     *
+     * @param storedAmount   网络存量（{@code RootStorage#get} / 资源清单里的量 = <b>存量</b>）
+     * @param reservedAmount 该资源被在途任务预留的量（{@link #pendingExtraction} 的结果）
+     * @return 本模组此刻最多可以取走的量（永不为负）
+     */
+    public static long availableForTake(final long storedAmount, final long reservedAmount) {
+        if (storedAmount <= 0L) {
+            return 0L;
+        }
+        if (reservedAmount <= 0L) {
+            return storedAmount;
+        }
+        return Math.max(0L, storedAmount - reservedAmount);
+    }
+
+    /**
+     * <b>多台仓 / 多条总线在同一 tick 内的共享取用预算</b>（必须共享，否则每台仓都以为「还有全部」）。
+     *
+     * <p>判据本身（{@link #availableForTake}）是「这一刻网络里还有多少不被预留」的<b>静态</b>读数：
+     * 三台仓各自去读都会得到同一个数，于是三台合计能取走 3 倍。预算账本把「本轮已经承诺出去的量」
+     * 记在<b>同一 tick 的同一个网络</b>上，因此合计恒 ≤ 可用量。</p>
+     *
+     * <p>账本只记「承诺量」：{@code claim} 返回多少就代表调用方<b>获准</b>取多少，调用方必须按返回值
+     * 夹自己的实际取用量（取不到就按既有规则等待 / 上报缺料，绝不因为「账本说可以」就硬抽）。</p>
+     */
+    public static final class TakeLedger {
+        /** 本轮已承诺出去的资源量（按资源汇总）。 */
+        private final java.util.Map<com.refinedmods.refinedstorage.api.resource.ResourceKey, Long> granted =
+            new java.util.LinkedHashMap<>();
+        /** 本账本所属的作用域（网络对象身份；换网络即作废）。 */
+        private Object scope;
+        /** 本账本所属的游戏刻（换 tick 即作废）。 */
+        private long tick = Long.MIN_VALUE;
+
+        /** 本轮该资源已承诺出去多少。 */
+        public long granted(final com.refinedmods.refinedstorage.api.resource.ResourceKey resource) {
+            return granted.getOrDefault(resource, 0L);
+        }
+
+        /**
+         * 换网络 / 换 tick 就作废并重开一轮（<b>同 tick 同网络内不清空</b>，这正是「合计不超可用量」的
+         * 依据）。
+         *
+         * @param scopeKey  作用域标识（用<b>对象身份</b>比较，刻意不用 {@code equals}：
+         *                  两个内容相同的网络也是两个网络）
+         * @param gameTime  游戏刻
+         */
+        public void beginTick(final Object scopeKey, final long gameTime) {
+            if (scopeKey != scope || gameTime != tick) {
+                scope = scopeKey;
+                tick = gameTime;
+                granted.clear();
+            }
+        }
+
+        /** 该资源在「可用量」里还剩多少没被本轮承诺出去。 */
+        public long remaining(final com.refinedmods.refinedstorage.api.resource.ResourceKey resource,
+                              final long availableTotal) {
+            return Math.max(0L, availableTotal - granted(resource));
+        }
+
+        /**
+         * 申请本轮取用 {@code want}（调用方自己已经按需要量夹过）。
+         *
+         * @param want           想取多少
+         * @param availableTotal 该资源本轮的可用量（{@link #availableForTake} 的结果）
+         * @return 获准取用的量（{@code 0} = 本轮别人已经把它占满了 ⇒ 调用方等待 / 上报缺料）
+         */
+        public long claim(final com.refinedmods.refinedstorage.api.resource.ResourceKey resource,
+                          final long want, final long availableTotal) {
+            if (resource == null || want <= 0L) {
+                return 0L;
+            }
+            final long give = Math.min(want, remaining(resource, availableTotal));
+            if (give > 0L) {
+                granted.merge(resource, give, Long::sum);
+            }
+            return give;
+        }
+
+        /** 本轮已经承诺出去的资源种数（诊断用）。 */
+        public int size() {
+            return granted.size();
+        }
+
+        /** 立刻作废（拆网络 / 换维度等；正常路径不需要调用）。 */
+        public void clear() {
+            granted.clear();
+            scope = null;
+            tick = Long.MIN_VALUE;
+        }
+    }
+
+    /**
+     * 进程内<b>唯一一个</b>共享预算槽位：同一（网络 + 游戏刻）内所有取用者共用一本账。
+     * <p>为什么单一槽位：网络对象随加载 / 卸载持续产生，用 {@code Map} 缓存会随存档无界增长；
+     * 而「同一刻只有一张网络在被服务」在服务端恒成立，换网络就重开一轮即可（重置只会让本轮的
+     * 约束更紧，绝不会让谁多取）。</p>
+     */
+    private static final TakeLedger SHARED_LEDGER = new TakeLedger();
+
+    /**
+     * 取「本轮共享预算账本」（见 {@link #SHARED_LEDGER}）。
+     *
+     * @param scopeKey  作用域标识（<b>用网络对象本身</b>；按对象身份比较）
+     * @param gameTime  游戏刻
+     */
+    public static TakeLedger sharedLedger(final Object scopeKey, final long gameTime) {
+        SHARED_LEDGER.beginTick(scopeKey, gameTime);
+        return SHARED_LEDGER;
+    }
+
     /** 取物品 {@code CustomData} 的底层 tag（空 / 无数据返回 null；只读，故用非弃用的 {@code copyTag}）。 */
     @Nullable
     private static CompoundTag customDataOf(final ItemStack stack) {

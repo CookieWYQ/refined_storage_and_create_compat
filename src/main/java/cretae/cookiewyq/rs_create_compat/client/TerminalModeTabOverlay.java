@@ -197,6 +197,30 @@ public final class TerminalModeTabOverlay {
             };
         }
 
+        /**
+         * 图标物品的<b>会话级缓存</b>（下标 = 模式号）。
+         * <p><b>为什么必须缓存</b>：{@link #renderWidget} 每帧对每个 Tab 都要一次图标，而
+         * {@link #iconFor} 每次都会新建 {@link ItemStack} 并对模式 2/3/4/5 走一遍
+         * {@code Blocks.INSTANCE.getX().getDefault()}（方块状态查询）。一排 6 个 Tab × 60 fps
+         * 就是每秒几百次纯垃圾分配 —— 与「打开慢」无关，但属于同一类「每次都用就重建」的写法。
+         * 图标只是常量展示品，不参与任何判定，缓存它没有语义代价。</p>
+         */
+        private static final ItemStack[] ICONS = new ItemStack[6];
+
+        /** 取该模式要画的图标（首次使用时建好，之后直接复用同一份常量栈）。 */
+        private static ItemStack iconCached(final int mode) {
+            if (mode < 0 || mode >= ICONS.length) {
+                return ItemStack.EMPTY;
+            }
+            final ItemStack cached = ICONS[mode];
+            if (cached != null) {
+                return cached;
+            }
+            final ItemStack created = iconFor(mode);
+            ICONS[mode] = created;
+            return created;
+        }
+
         @Override
         protected void renderWidget(final GuiGraphics graphics, final int mouseX, final int mouseY, final float partialTick) {
             final int x = getX();
@@ -213,8 +237,8 @@ public final class TerminalModeTabOverlay {
                 graphics.fill(x, y, x + 1, y + TAB_H, 0xFFFFFFFF);
                 graphics.fill(x + TAB_W - 1, y, x + TAB_W, y + TAB_H, 0xFFFFFFFF);
             }
-            // 方块图标（居中 16x16）
-            final ItemStack icon = iconFor(mode);
+            // 方块图标（居中 16x16）：走会话级缓存，不再每帧新建 ItemStack
+            final ItemStack icon = iconCached(mode);
             if (!icon.isEmpty()) {
                 graphics.renderItem(icon, x + (TAB_W - 16) / 2, y + (TAB_H - 16) / 2);
             }

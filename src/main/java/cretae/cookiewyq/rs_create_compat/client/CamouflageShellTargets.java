@@ -55,13 +55,20 @@ public final class CamouflageShellTargets {
      *
      * <p>与 {@link SeparationFrameGuard#isSheatheableFamily} 同源（同一个类层次口径），
      * 但这里按 <b>Block 类</b>判定（那里按 BlockState 判定）—— 两者覆盖的族必须一致：
-     * 线缆族（{@code CableBlock} / 输入总线 / 输出总线）、流体管道族
+     * 线缆族（{@code CableBlock} / 输入总线 / 输出总线 / <b>外部存储总线</b>）、流体管道族
      * （普通 / 装壳 / 玻璃直管 / 智能）、传动杆族（{@code ShaftBlock}）。</p>
+     *
+     * <p><b>2026-10-10（用户第 3 条）</b>：外部存储总线并进「可套壳族」后，这里必须同步并进来，
+     * 否则就会出现最难受的一种表现 —— 伪装能裹上去，但那一格<b>不显示外壳</b>
+     * （模型没被换成 {@code CamouflageShellModel}），也就是「裹了个寂寞」。
+     * 两处是同一份口径的两面：{@code isSheatheableFamily} 管「能不能裹」，
+     * 本方法管「给谁画外壳」，任一漏一处都会漂移。</p>
      */
     public static boolean isShellTarget(final Block block) {
         return block instanceof CableBlock
             || block instanceof com.refinedmods.refinedstorage.common.importer.ImporterBlock
             || block instanceof com.refinedmods.refinedstorage.common.exporter.ExporterBlock
+            || block instanceof com.refinedmods.refinedstorage.common.storage.externalstorage.ExternalStorageBlock
             || block instanceof FluidPipeBlock
             || block instanceof EncasedPipeBlock
             || block instanceof AxisPipeBlock

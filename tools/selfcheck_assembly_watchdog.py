@@ -1032,10 +1032,14 @@ check("sendToServer" not in render_body and "setPosition" not in render_body
       and "Button.builder" not in render_body,
       "④ 每帧 render 只刷新状态 + 画文字 / tooltip：不发包、不移动控件、不重建控件",
       "④ 每帧 render 里有发包 / 位移 / 重建控件")
-check(mixin.count("PacketDistributor.sendToServer(") == 5,
-      "④ 界面里只有五条发包路径：打开时各拉一次只读快照（告警 / 缺料策略）+ 「挂起」/「继续」/「缺料处置」点击各一条（实为 %d 条）"
+# 第 61 轮：界面里现在有**六**条发包路径 —— 上面前五条之外，新增
+# 「选中了一条本地还没有快照的任务时补拉一次告警快照」（rscc$requestAlertIfMissing，
+# 只读包、按任务去重；见 tools/selfcheck_round61_task_action_buttons.py ②）。
+check(mixin.count("PacketDistributor.sendToServer(") == 6,
+      "④ 界面里只有六条发包路径：打开时各拉一次只读快照（告警 / 缺料策略）+ 「挂起」/「继续」/「缺料处置」"
+      "点击各一条 + 「选中任务但本地无快照」时按任务补拉一次只读快照（实为 %d 条）"
       % mixin.count("PacketDistributor.sendToServer("),
-      "④ 界面里的发包路径不是 5 条")
+      "④ 界面里的发包路径不是 6 条")
 check("AssemblyWatchdog.sendAlerts(player);" in request and "sendToServer" not in request
       and "public static void sendAlerts(final ServerPlayer player)" in wd
       and "PacketDistributor.sendToPlayer(player," in wd,

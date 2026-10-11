@@ -2,9 +2,11 @@ package cretae.cookiewyq.rs_create_compat.support;
 
 import com.refinedmods.refinedstorage.api.core.Action;
 import com.refinedmods.refinedstorage.api.network.Network;
+import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetworkComponent;
 import com.refinedmods.refinedstorage.api.network.node.importer.ImporterTransferStrategy;
 import com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent;
 import com.refinedmods.refinedstorage.api.resource.ResourceAmount;
+import com.refinedmods.refinedstorage.api.resource.ResourceKey;
 import com.refinedmods.refinedstorage.api.resource.filter.Filter;
 import com.refinedmods.refinedstorage.api.storage.Actor;
 import com.refinedmods.refinedstorage.api.storage.root.RootStorage;
@@ -295,9 +297,54 @@ public final class RsccChamberImportStrategy implements ImporterTransferStrategy
             // 机器侧那份「本步不要它就收回」是**对的**（它压在机械手手里会把产线卡死，是原修法的目标）；
             // 但仓内存储里那份只是「还没轮到喂」的备料 —— 用同一判据抄回网络，就等于把备料侧刚买回来的料
             // 立刻退回（实测日志：chamber pull{x5} → 同一秒 importer took{x5}，每秒来回、机器一个件都推不出去）。
-            // 因此仓内输入类平时一律受保护，只有「任务刚结束」那一次边沿才收（residualEdge）。
+            // 因此仓内输入类平时一律受保护，只有「任务刚结束」那一次边沿才收（residualEdge）；
+            // 本轮又补上第二条例外「在途自动合成任务正等着它」，见下。
+            // ==================== 在途自动合成任务的「预留」释放（本轮新增） ====================
+            //
+            // <b>用户报告</b>：「针对精密构件，他们在制作的时候，有可能被你提前消耗……我看着有几个齿轮和大齿轮的
+            // 合成任务位置卡在那里不动」，且与精密构件制作者相关。
+            //
+            // <b>机制（RS 源码交叉验证，全文见 {@link SequenceMaterialGuard#isInFlight}）</b>：
+            // RS 2.0 <b>没有任何「网络存量已被预留」的表示</b> —— {@code RootStorageListener} 只有
+            // {@code beforeInsert} / {@code afterInsert}（{@code RootStorageListener.java:18,30}），
+            // {@code RootStorageImpl#extract}（{@code RootStorageImpl.java:85-87}）是裸委托。
+            // 一条任务「还没拿到」的量只存在于它自己的 {@code initialRequirements} 账上
+            // （{@code TaskImpl.java:199-222} 逐步抽取、{@code :214} 抽到就减），并被 RS 报成
+            // {@code TaskStatus.Item#extracting}（{@code autocrafting/status} 包里那个状态构造器的
+            // {@code extracting(...)}，2.0.0 源码 {@code status} 包 :30-33）。
+            // 因此只要本模组把网络里那几件抽进自己怀里，那条任务就<b>永远等不到</b> ——
+            // 它每一 tick 都只再试一次 {@code extract}，没有任何超时、没有第二次机会，
+            // 于是在监视器上<b>永久停在原地</b>（正是用户看到的现象）。
+            //
+            // <b>为什么这里（仓内 → 网络）是修得动的那一侧</b>：本侧只会把东西<b>还回网络</b>，
+            // 从不扣减别人，因此天然不可能制造新的饿死；而「仓内压着一件没有工位要它、
+            // 却正是别人在等的东西」是本模组唯一能主动解开那种卡死的动作。
+            // 判据与既有「废料例外」严格同源（见 {@link #autoAcceptsChamberItem}）：
+            // <b>没有任何工位此刻要它</b>（{@code inputMaterialWantedNow(item)} 为假）才放行，
+            // 因此绝不会把机器正等着的那一件抄走；而且备料侧的闸门是
+            // {@code stepExtraStockTarget(item) <= 0 ⇒ 本 tick 一条判断都不做}
+            // （见 {@code SequenceExecutionChamberBlockEntity#fillInternalForBus}），
+            // 即「没有工位要它 ⇒ 备料侧不会再买回来」—— 于是这条释放<b>不会</b>变成
+            // 「买进来 → 退回去」的每秒往返。
+            //
+            // <b>只读</b>：这里只算一张表（谁在等什么），真正的搬运仍走原来那条插入路径。
+            final Map<ResourceKey, Long> inflightClaims = inflightClaimsOf(network);
+            // 无单时（{@code noOrderFlag}）不释放：那会把「本仓没单」时的输入类也放回网络，
+            // 越过了「无玩家下单 ⇒ 零取料 / 零投料」这条硬约束（收回方向的既有例外只覆盖成品 / 废料）。
+            final boolean releaseInflight = !noOrderFlag && !inflightClaims.isEmpty();
+            // 「这一件是不是别人正在等的」：与入网资源口径一致 —— 原料标记会在入网前被剥掉，
+            // 因此带标记与不带标记两种形态都查一次（查不到即「没人等它」，与既有行为逐字一致）。
+            final Predicate<ItemStack> claimedByInflight = stack -> {
+                if (stack.isEmpty()) {
+                    return false;
+                }
+                return inflightClaims.containsKey(ItemResource.ofItemStack(stack))
+                    || inflightClaims.containsKey(new ItemResource(stack.getItem(), DataComponentPatch.EMPTY));
+            };
             final Predicate<ItemStack> acceptChamberItem = stack ->
-                autoAcceptsChamberItem(stack, inputItems, residualEdge, chamber);
+                autoAcceptsChamberItem(stack, inputItems, residualEdge, chamber)
+                    || (releaseInflight
+                        && releasesChamberItemForInflight(stack, inputItems, chamber, claimedByInflight));
             // <b>机器侧必须带上「哪一台机器」</b>（本轮修正）：收回侧的「本步不要它就收回」与推料侧的
             // 「本步要的才推」必须是同一个判据的两面，而推料侧是按<b>本机</b>判的（机械手要看它朝向 2 格外的
             // 那一格才知道自己在第几步）。若这里仍用「全仓并集」的旧口径，会出现新的死锁：
@@ -735,6 +782,10 @@ public final class RsccChamberImportStrategy implements ImporterTransferStrategy
      * <p>因此仓内存储里的「输入类」（配方原料 / 流体输入 / 步骤专用投入物）<b>平时一律受保护</b>，
      * 只有任务刚结束的那一次边沿（{@code residualEdge}）才收一遍；非输入类（成品 / 废料）与
      * 过渡件的判据与机器侧完全一致（{@link #autoAcceptsItem}）。判据只读，绝不搬运 / 销毁资源。</p>
+     *
+     * <p>本轮新增的「在途任务预留释放」是<b>并列的第二条例外</b>
+     * （{@link #releasesChamberItemForInflight}），本方法一个字都没有改 —— 两条判据在调用处以
+     * {@code ||} 合成，于是既有行为可逐字核对。</p>
      */
     private static boolean autoAcceptsChamberItem(final ItemStack stack, final Set<Item> inputItems,
                                                   final boolean residualEdge,
@@ -772,6 +823,85 @@ public final class RsccChamberImportStrategy implements ImporterTransferStrategy
             return residualEdge;
         }
         return true; // 成品 / 废料：照旧收回
+    }
+
+    /**
+     * <b>本轮新增：仓内「某条在途自动合成任务正等着抽取」的那一份照常还回网络。</b>
+     *
+     * <h2>用户报告与机制</h2>
+     * <p>用户原话：「针对精密构件，他们在制作的时候，有可能被你提前消耗」；「我看着有几个齿轮和大齿轮的
+     * 合成任务位置卡在那里不动」，且确认与精密构件制作相关。</p>
+     * <p>机制（RS 源码交叉验证，全文见 {@link SequenceMaterialGuard#isInFlight}）：RS 2.0
+     * <b>没有任何「网络存量已被预留」的表示</b> —— 根存储只有<b>插入</b>侧的拦截钩子
+     * （{@code RootStorageListener.java:18,30}），抽取侧是裸委托
+     * （{@code RootStorageImpl.java:85-87}）。一条任务「还没拿到」的量只活在它自己的
+     * {@code initialRequirements} 账上（{@code TaskImpl.java:199-222}，抽到就在 {@code :214} 减掉），
+     * 并被 RS 报成 {@code TaskStatus.Item#extracting}（{@code autocrafting/status} 包里那个
+     * 状态构造器唯一写它的地方）。因此只要本模组把网络里那几件抽进自己怀里，那条任务就
+     * <b>永远等不到</b>：它每一步只再试一次 {@code extract}，没有超时、没有第二次机会，
+     * 于是在自动合成监视器上<b>永久停在原地</b> —— 正是用户看到的现象。</p>
+     *
+     * <h2>为什么这一侧（仓内 → 网络）是修得动的那一侧</h2>
+     * <p>本侧只把东西<b>还回网络</b>，从不扣减别人，因此不可能制造新的饿死；而「仓内压着一件
+     * 没有任何工位要它、却正是别人在等的东西」是本模组唯一能主动解开那种卡死的动作。</p>
+     *
+     * <h2>为什么不会抢走机器正等的料、也不会变成每秒往返</h2>
+     * <ul>
+     *     <li>与既有的「废料例外」共用一个前置条件：{@code inputMaterialWantedNow(item)} 为假
+     *     （<b>整条链上没有任何工位此刻要它</b>）—— 机器正等的那一件永远不满足它；</li>
+     *     <li>起步原料一律不适用（它只可能是「要开新件的那一份」）；</li>
+     *     <li>未完成件（带 {@code create:sequenced_assembly} 组件）一律不适用 ——
+     *     「下一步归本机」的保护（{@code isTransitionReclaimAllowed}）仍由既有判据独占；</li>
+     *     <li>备料侧的闸门是「没有工位要它 ⇒ 本 tick 一条判断都不做」
+     *     （{@code SequenceExecutionChamberBlockEntity#fillInternalForBus} 里的
+     *     {@code stepExtraStockTarget(item) <= 0 ⇒ continue}），也就是<b>不会再买回来</b>，
+     *     因此不存在「买进来 → 退回去」的每秒往返。</li>
+     * </ul>
+     *
+     * <p><b>只读</b>：本方法只回答「这一件该不该还回网络」，不搬运任何资源。</p>
+     *
+     * @param claimedByInflight 「这一件是不是某条在途任务等着抽取的资源」（{@code null} = 本轮不启用）
+     */
+    private static boolean releasesChamberItemForInflight(final ItemStack stack, final Set<Item> inputItems,
+                                                          final SequenceExecutionChamberBlockEntity chamber,
+                                                          @org.jetbrains.annotations.Nullable
+                                                          final Predicate<ItemStack> claimedByInflight) {
+        if (claimedByInflight == null || stack.isEmpty() || !inputItems.contains(stack.getItem())) {
+            return false;
+        }
+        if (stack.get(AllDataComponents.SEQUENCED_ASSEMBLY) != null) {
+            return false; // 未完成件：「下一步归本机」的保护由既有判据独占，绝不由本例外放开
+        }
+        if (chamber.isStartIngredient(stack.getItem())) {
+            return false; // 起步原料：只可能是「要开新件的那一份」，绝不收回
+        }
+        if (chamber.inputMaterialWantedNow(stack.getItem())) {
+            return false; // 有任何工位此刻要它 ⇒ 绝不抢走
+        }
+        return claimedByInflight.test(stack);
+    }
+
+    /**
+     * <b>只读</b>：把网络上「已被在途自动合成任务等着抽取的资源」汇总成一张表
+     * （资源 → 还没抽到的量）。
+     *
+     * <p>{@code AutocraftingNetworkComponent#getStatuses()} 会为每条任务重建一次
+     * {@code TaskStatus}（RS 侧 {@code AutocraftingNetworkComponentImpl.java:244-247}），因此
+     * <b>每次搬运只算一次</b>、不放进逐格循环里。取不到自动合成组件时返回空表 ——
+     * 于是「没有自动合成能力」的网络行为与改造前逐字一致。</p>
+     *
+     * <p>本方法<b>不排除</b>本产线自己的任务：这里的用途是「把仓里没人要的那一份还回网络」，
+     * 是纯释放方向、绝不扣减别人，因此多算（把自己的任务也算进来）只会让释放更容易成立，
+     * 不会饿死任何一方。需要「别人的预留」语义（从网络取料前夹住预算）的调用方必须用
+     * {@code SequenceMaterialGuard#pendingExtraction(List, Set)} 并传入自己的任务 id。</p>
+     */
+    private static Map<ResourceKey, Long> inflightClaimsOf(final Network network) {
+        final AutocraftingNetworkComponent autocrafting =
+            network == null ? null : network.getComponent(AutocraftingNetworkComponent.class);
+        if (autocrafting == null) {
+            return java.util.Map.of();
+        }
+        return SequenceMaterialGuard.pendingExtraction(autocrafting.getStatuses());
     }
 
     // ==================== 执行舱内部存储 → RS 网络 ====================

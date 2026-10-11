@@ -129,9 +129,20 @@ public final class SeparationFrameGuard {
      * {@code Bootstrap} 无限递归（详见 {@code CamouflageShapeMixin} 的类注释）。</p>
      * <p>而「任意完整方块也能套壳」（用户第 5 条）这件事<strong>只有在形状路径之外</strong>才判得安全
      * ——它必须读方块状态自带的那份碰撞形状。因此本方法被单独抽出来，作为形状路径可用的唯一判据。</p>
+     *
+     * <h2>2026-10-10 追加：外部存储总线（用户第 3 条）</h2>
+     * <p>用户原话：「使得这一个伪装可以套上这个输入输出总线以及这个<b>外部存储总线</b>」。
+     * 输入 / 输出总线本来就在这一句里（它们是 {@link RsccWireBlocks#isWire} 的成员），
+     * 外部存储总线则<b>只</b>并进这一句（{@link RsccWireBlocks#isExternalStorageBus}）——
+     * 搜链 / 网络连边读的仍然是 {@link RsccWireBlocks#isWire}，因此「总线隔着外部存储总线够到执行舱」
+     * 这件事不会因为本次改动而改变（理由见 {@code RsccWireBlocks} 类注释）。</p>
+     * <p>与传动杆完全同一条理由：本方法只回答「能不能套壳」，套壳写的是坐标记录 + 外观层
+     * （见 {@link RsccCamouflage}），被裹方块的方块状态、方块实体、能力、网络节点一个字节都没动，
+     * 因此外部存储总线把它自己面对的那个容器暴露给网络这件事分毫未变。</p>
      */
     public static boolean isSheatheableFamily(@Nullable final BlockState state) {
-        return RsccWireBlocks.isWire(state) || isFluidPipe(state) || isShaft(state);
+        return RsccWireBlocks.isWire(state) || isFluidPipe(state) || isShaft(state)
+            || RsccWireBlocks.isExternalStorageBus(state);
     }
 
     /**

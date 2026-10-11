@@ -78,9 +78,13 @@ print()
 print("=" * 78)
 print("② 输入/输出总线被强制当成序列装配总线（本轮交付：条上「普通」按钮 + 持久化标志）")
 print("=" * 78)
-report("锚点: 两侧「界面归属判定」都被「强制普通总线」开关收口（为真 ⇒ 一律回到普通总线界面）",
-       "return rscc$isLinkedLayout() && !rscc$forceNormalBus;" in exp_mixin
-       and "return rscc$isLinkedLayout() && !rscc$forceNormalBus;" in imp_mixin)
+report("锚点: 两侧「界面归属判定」都被「强制普通总线」开关与「过滤槽有东西」收口"
+       "（任一为真 ⇒ 一律回到普通总线界面）",
+       # 2026-10-10（用户第 9 条）：收口条件多了一条 —— 过滤槽里有东西时也优先按普通总线处理
+       # （判据与理由见 support/RsccBusConfig 与两个 mixin 的 rscc$hasFilterEntries）。
+       # 本锚点因此升级为「两个收口条件都在」，而不是放宽成任意写法。
+       "return rscc$isLinkedLayout() && !rscc$forceNormalBus && !rscc$hasFilterEntries();" in exp_mixin
+       and "return rscc$isLinkedLayout() && !rscc$forceNormalBus && !rscc$hasFilterEntries();" in imp_mixin)
 report("锚点: 「强制普通」是<b>每总线持久化</b>标志（落盘 + 读档保留，旧存档缺键 → false）",
        'RSCC_TAG_FORCE_NORMAL = "rscc_force_normal_bus"' in exp_mixin
        and 'RSCC_TAG_FORCE_NORMAL = "rscc_force_normal_bus"' in imp_mixin

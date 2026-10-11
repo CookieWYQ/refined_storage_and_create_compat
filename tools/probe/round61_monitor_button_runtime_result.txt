@@ -1,0 +1,19 @@
+﻿=== (1) server Record#actions(): the ONLY source of button visibility ===
+PASS ordinary task (ourChain=false), RUNNING, not returning => bits=4 [ourChain=false]
+PASS sequence task (ourChain=true), RUNNING, not returning => bits=4 [ourChain=true]
+PASS ordinary task, SUSPENDED => bits=1 [ourChain=false]
+PASS ordinary task, SUSPENDED + executor offline (no offline step) => bits=1 [ourChain=false]
+PASS ordinary task, RS returning internal storage => bits=0 [ourChain=false]
+PASS sequence task, SUSPENDED => bits=1 [ourChain=true]
+
+=== (2) client actionView(): visible == offered(bit) ===
+PASS no alert (alert==null) => NOT visible
+PASS ActionView(visible=true, enabled=true).visible() == true（= 服务端动作位；enabled 不参与可见性）
+PASS ActionView(visible=true, enabled=false).visible() == true（= 服务端动作位；enabled 不参与可见性）
+PASS ActionView(visible=false, enabled=false).visible() == false（= 服务端动作位；enabled 不参与可见性）
+PASS actionView 的返回值类型就是 ActionView（客户端可见性唯一来源；在途只进 enabled）
+
+=== (3) alerts() 的准入 = 动作位 != NONE（普通任务同样入列） ===
+PASS ordinary (ourChain=false) RUNNING task: actions()=4 != ACTION_BIT_NONE(0) => alerts() 会把它收进快照（普通任务也有「挂起」按钮）
+
+MONITOR_BUTTON_PROBE OK (12 checks)

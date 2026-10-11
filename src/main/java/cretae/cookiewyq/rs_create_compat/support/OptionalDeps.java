@@ -13,11 +13,22 @@ import net.neoforged.neoforge.fluids.FluidStack;
 /**
  * 可选依赖探测 + 「经验」资源解析。
  * <p>
- * <b>为什么全部走「模组加载判断 + 注册表按 id 查找」</b>：附魔工业 / Mekanism 都是可选依赖，
- * 直接引用它们的类会在未安装时触发 {@code NoClassDefFoundError} 崩溃，因此本类只用
- * {@link ModList} 判断加载状态，再用 {@link BuiltInRegistries} 按资源 id 取物品 / 流体。
+ * <b>为什么全部走「注册表按 id 查找 + 模组加载判断兜底」</b>：附魔工业 / Mekanism 都是可选依赖，
+ * 直接引用它们的类会在未安装时触发 {@code NoClassDefFoundError} 崩溃，因此本类只按
+ * {@link BuiltInRegistries} 的资源 id 取物品 / 流体，并用 {@link ModList} 判断加载状态
+ * （{@code ModList} 只用于「这个模组到底在不在」这类诊断，绝不用于引用它的任何类型）。
  * 未安装（或注册表里查不到）时统一返回 {@link ItemStack#EMPTY} / {@link FluidStack#EMPTY}，
  * 由调用方静默走别的分支，不会产生任何“未安装 XX”的提示。
+ * <p>
+ * <b>本轮修复（用户：「安装了附魔工业但还是点不了这个按钮」）</b>：此前
+ * {@link #enchantmentIndustryExperienceFluid(int)} 把 {@code ModList.get().isLoaded(modid)}
+ * 当成<b>硬前置</b>——只要这一句返回 false，即使注册表里明明白白躺着
+ * {@code create_enchantment_industry:experience}，探测也报「液态经验不可用」，
+ * 界面于是把「液态经验」置灰。这既与 {@link XpTargetResolver} 的契约
+ * （「注册表里是否真的存在」才是唯一判定标准）自相矛盾，也让探测对
+ * 「modid 之外的任何原因」（装载顺序、同名 fork、id 变动）全部误判为不可用。
+ * 现在<b>注册表为准</b>：拿到流体 / 物品就算可用；{@link ModList} 退居安全判据与诊断，
+ * 只在「模组在、但这两个 id 一个都查不到」时打一条一次性 WARN，把缺失原因说清楚。
  * <p>
  * <b>经验换算出处</b>（均取自本仓库 local_src 下的上游源码）：
  * <ul>
@@ -26,6 +37,8 @@ import net.neoforged.neoforge.fluids.FluidStack;
  *     （{@code fluid.is(CEIFluids.EXPERIENCE)} 时直接返回 {@code fluid.getAmount()}）
  *     与 :81-83（{@code getExperienceFluidUnit(EXPERIENCE)} 返回 1）；
  *     另见 {@code common/registry/CEIDataMaps.java:148}（经验桶 ExperienceFuel.normal(1000)）。</li>
+ *     <li>附魔工业的液态经验流体 id = {@code create_enchantment_industry:experience}
+ *     —— {@code CEIFluids.java:42-45}（{@code REGISTRATE.asResource("experience")}）。</li>
  *     <li>附魔工业「超越经验颗粒」（{@code create_enchantment_industry:super_experience_nugget}）：
  *     3 经验点 / 个 —— {@code CEIDataMaps.java:152}（{@code ExperienceFuel.special(3)}）。</li>
  *     <li>机械动力原版「经验颗粒」（{@code create:experience_nugget}）：3 经验点 / 个
@@ -35,7 +48,14 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * </ul>
  */
 public final class OptionalDeps {
-    /** 附魔工业 mod id。 */
+    /**
+     * 附魔工业 mod id。
+     * <p><b>证据</b>：附魔工业自己的 {@code gradle.properties} 里 {@code mod_id = create_enchantment_industry}
+     * （本仓库 {@code local_src/external/CreateEnchantmentIndustry/gradle.properties}），
+     * 其资源命名空间同名（{@code cei_files.txt} 里成片的 {@code assets/create_enchantment_industry/…}），
+     * 语言文件里也自称「机械动力：附魔工业」。此前代码用的就是这个字面量（不是错的 modid）；
+     * 真正让界面「点了没反应」的是 {@link XpForm#byOrdinal(int)} 的序号映射，见那里的注释。</p>
+     */
     public static final String MOD_CREATE_ENCHANTMENT_INDUSTRY = "create_enchantment_industry";
     /** Mekanism mod id。 */
     public static final String MOD_MEKANISM = "mekanism";
@@ -56,6 +76,10 @@ public final class OptionalDeps {
     private static final ResourceLocation CREATE_EXPERIENCE_NUGGET =
         ResourceLocation.fromNamespaceAndPath(MOD_CREATE, "experience_nugget");
 
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+    /** 「模组在、id 查不到」的一次性诊断去重（进程内，按 id）。 */
+    private static final java.util.Set<String> MISSING_LOGGED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** 附魔工业：每 1 mB 液态经验 = 1 经验点（ExperienceHelper.java:63-65、81-83）。 */
     public static final int CEI_EXPERIENCE_POINTS_PER_MB = 1;
     /** 附魔工业：每 1 经验点 = 1 mB 液态经验（同上，CEI 的换算比例为 1:1）。 */
@@ -68,7 +92,11 @@ public final class OptionalDeps {
     private OptionalDeps() {
     }
 
-    /** 附魔工业是否已加载。 */
+    /**
+     * 附魔工业是否已加载（<b>安全判据与诊断用</b>，不是资源可用性的判据）。
+     * <p>只问加载器「这个 modid 在不在」，绝不因此去 {@code Class.forName} 或引用它的类；
+     * {@code ModList.get()} 在极早期可能为 null，这里判空后返回 false（优雅降级，不抛异常）。</p>
+     */
     public static boolean isEnchantmentIndustryLoaded() {
         return ModList.get() != null && ModList.get().isLoaded(MOD_CREATE_ENCHANTMENT_INDUSTRY);
     }
@@ -100,19 +128,31 @@ public final class OptionalDeps {
     /**
      * 附魔工业的液态经验（流体）。
      *
+     * <p><b>判定口径（本轮修复）</b>：注册表里存在 {@code create_enchantment_industry:experience}
+     * 就是可用 —— 不再要求 {@code ModList.isLoaded(modid)} 同时为真。原因见类注释：
+     * 拿 modid 当硬前置会把「注册表里明明有」的流体误判成不可用，界面于是把「液态经验」置灰，
+     * 玩家看到的就是「装了附魔工业却还是点不了这个按钮」。</p>
+     *
      * @param amountMb 数量（mB，1 mB = 1 经验点）
-     * @return 未加载 / 注册表无此流体 / 数量非正 → {@link FluidStack#EMPTY}
+     * @return 注册表无此流体 / 数量非正 → {@link FluidStack#EMPTY}
      */
     public static FluidStack enchantmentIndustryExperienceFluid(final int amountMb) {
-        if (amountMb <= 0 || !isEnchantmentIndustryLoaded()) {
+        if (amountMb <= 0) {
             return FluidStack.EMPTY;
         }
-        return fluidStack(CEI_EXPERIENCE_FLUID, amountMb);
+        final FluidStack stack = fluidStack(CEI_EXPERIENCE_FLUID, amountMb);
+        if (stack.isEmpty()) {
+            // 缺失侧诊断（一次性）：模组在、id 却查不到 —— 把「到底缺什么」写进日志，
+            // 否则玩家只能看到按钮置灰，无法自查。绝不因此抛异常或改变任何行为。
+            warnMissingOnce("流体 " + CEI_EXPERIENCE_FLUID);
+        }
+        return stack;
     }
 
     /**
-     * 附魔工业的液态经验流体是否可用（装了附魔工业且注册表里确实存在该流体）。
-     * <p>用于「装了附魔工业 → 让玩家选择流体/颗粒」的分支判断。
+     * 附魔工业的液态经验流体是否可用（注册表里确实存在该流体）。
+     * <p>用于「装了附魔工业 → 让玩家选择流体 / 颗粒」的分支判断；缺失时静默返回 false，
+     * 调用方（{@link XpForm#selectable()}）据此置灰并给出「缺哪个前置」的 tooltip。</p>
      */
     public static boolean hasEnchantmentIndustryExperienceFluid() {
         return !enchantmentIndustryExperienceFluid(1).isEmpty();
@@ -120,15 +160,34 @@ public final class OptionalDeps {
 
     /**
      * 附魔工业的经验颗粒（物品 {@code super_experience_nugget}）。
+     * <p>与流体侧同一口径：注册表为准，modid 只作诊断。</p>
      *
      * @param count 个数
-     * @return 未加载 / 注册表无此物品 / 个数非正 → {@link ItemStack#EMPTY}
+     * @return 注册表无此物品 / 个数非正 → {@link ItemStack#EMPTY}
      */
     public static ItemStack enchantmentIndustryExperienceNugget(final int count) {
-        if (count <= 0 || !isEnchantmentIndustryLoaded()) {
+        if (count <= 0) {
             return ItemStack.EMPTY;
         }
-        return itemStack(CEI_EXPERIENCE_NUGGET, count);
+        final ItemStack stack = itemStack(CEI_EXPERIENCE_NUGGET, count);
+        if (stack.isEmpty()) {
+            warnMissingOnce("物品 " + CEI_EXPERIENCE_NUGGET);
+        }
+        return stack;
+    }
+
+    /**
+     * 缺失侧一次性诊断：只在「附魔工业确实已加载」却查不到对应 id 时打一条 WARN，
+     * 每个 id 只打一次（进程内），避免每 tick 在探测路径上刷屏。
+     * <p>模组压根没装时不打任何日志 —— 那是正常的可选依赖缺失，行为就是静默降级。</p>
+     */
+    private static void warnMissingOnce(final String what) {
+        if (!isEnchantmentIndustryLoaded() || !MISSING_LOGGED.add(what)) {
+            return;
+        }
+        LOGGER.warn("[rs_create_compat] 检测到「机械动力：附魔工业」({}) 已加载，但注册表里查不到 {} —— "
+                + "液态经验相关的功能会退化为经验颗粒。若该模组版本改过资源 id，请反馈该 id。",
+            MOD_CREATE_ENCHANTMENT_INDUSTRY, what);
     }
 
     /**

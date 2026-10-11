@@ -28,6 +28,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * 客户端只做「有这一位 → 渲染这个按钮」的映射。界面不再按 {@code reason / offlineSteps} 自己推断，
  * 于是「点击后按钮集合只随服务端状态变化」，也不会因为服务端重新分类而单独抹掉某个按钮。</p>
  *
+ * <p><b>第 63 轮补的那一半：没有快照 ⇒ 默认给「挂起」</b>（见 {@link #actionView}）。
+ * 「只信服务端」与「任何任务都必须有按钮」曾经互相冲突：服务端手里没有这条任务的记录时
+ * （流体任务、记录还没建出来的那一瞬、跨维度），快照里就没有这一行，三个动作位全假 ⇒
+ * 整排按钮一个都不画。现在把「没有快照」这一种情况单独定义成<b>默认位</b>而不是「没有位」，
+ * 并由服务端就地补扫描把记录建出来 —— 两条合起来才是完整的不变量：
+ * <b>界面显示了这条任务 ⇒ 一定画得出一颗按钮；画出来的按钮 ⇒ 服务端一定处理得了</b>。</p>
+ *
  * <p><b>在途动作（pending）</b>：一次点击 = 一次发包。点击当刻把该 (任务, 动作) 记为在途，
  * 按钮<b>立刻</b>变成不可点（即时反馈，不必等服务端一个扫描周期），这段时间内的重复点击不再发包；
  * 新的服务端快照到达（或 2 秒超时）后自动解锁。在途状态<b>只影响可用性、绝不影响可见性</b> ——
@@ -61,7 +68,7 @@ public final class AssemblyAlertsClient {
         return alerts;
     }
 
-    /** 某条任务的告警（不是挂起任务则为 null）。 */
+    /** 某条任务的告警（快照里没有这条任务则为 null）。 */
     @Nullable
     public static SyncAssemblyAlertsPacket.Alert alertOf(@Nullable final UUID taskId) {
         if (taskId == null) {
@@ -75,6 +82,44 @@ public final class AssemblyAlertsClient {
         return null;
     }
 
+    /**
+     * <b>按钮判定专用的告警视图</b>（第 63 轮新增）：快照里有这条任务就给真快照；
+     * <b>没有就给一份「只带挂起位」的默认告警</b>（{@code alertOf} 仍然诚实返回 null）。
+     *
+     * <h2>为什么这份默认值必须存在（用户硬要求）</h2>
+     * <p>「不管什么任务都要有这个按钮，没有例外」。而按钮的可见性完全由「这一行告警给不给某个动作位」
+     * 决定（{@link #actionView}）—— 服务端<b>还没有为这条任务建记录</b>时它不在快照里
+     * （记录只由 1 秒一拍的扫描产生；流体任务的记录在第 63 轮之前更是永远建不出来），
+     * 于是三个动作位全假、<b>整排按钮一个都不画</b>。现在把「没有记录」定义成一种<b>状态</b>：
+     * 界面既然显示了这条任务（{@code taskId != null}），就默认给「挂起」位。</p>
+     *
+     * <h2>为什么只兜「挂起」这一位</h2>
+     * <ul>
+     *     <li>「继续」的前提是「它已经被我们挂起」—— 没有记录就不可能被挂起，兜它等于给一颗必然失败的按钮；</li>
+     *     <li>「更换机器」的前提是「知道是哪一步的执行仓掉线」（那是记录里的只读快照），同理。</li>
+     * </ul>
+     *
+     * <h2>服务端那一半</h2>
+     * <p>客户端画得出 ⇒ 服务端必须处理得了：{@code AssemblyWatchdog#suspend} 在查不到记录时会
+     * <b>就地补一拍全维度扫描</b>把记录建出来再执行（{@code #rescanNow}），
+     * 因此这一位不是「画着好看」的假按钮。反过来，{@code alertOf} 仍然只回答「服务端给没给」——
+     * 界面据此决定要不要补拉一次快照（{@code rscc$requestAlertIfMissing}），
+     * 于是真快照一到，这一行立刻换成服务端权威的动作位（例如「继续」）。</p>
+     *
+     * <p>零副作用、零状态：默认告警只在本方法里现造，不进缓存、不改任何服务端可见状态
+     * （{@code reason} 取 {@code REASON_NONE} ⇒ 界面也不会因此画出「已挂起」标记）。</p>
+     */
+    @Nullable
+    public static SyncAssemblyAlertsPacket.Alert alertOrDefault(@Nullable final UUID taskId) {
+        final SyncAssemblyAlertsPacket.Alert received = alertOf(taskId);
+        if (received != null || taskId == null) {
+            return received;
+        }
+        return new SyncAssemblyAlertsPacket.Alert(taskId, SyncAssemblyAlertsPacket.REASON_NONE,
+            SyncAssemblyAlertsPacket.ACTION_BIT_SUSPEND, "", net.minecraft.world.item.ItemStack.EMPTY,
+            0L, List.of(), List.of(), null);
+    }
+
     /** 读取某条任务告警上的第 1 个掉线步骤下标（没有则 -1）。 */
     public static int firstOfflineStep(@Nullable final SyncAssemblyAlertsPacket.Alert alert) {
         if (alert == null || alert.offlineSteps().isEmpty()) {
@@ -86,7 +131,13 @@ public final class AssemblyAlertsClient {
     /**
      * 按钮要用的三态视图（<b>可见性 + 可用性</b>），由「服务端快照 + 本地在途动作」唯一决定。
      *
-     * @param alert     当前选中任务的告警（null = 该任务没挂起）
+     * <p><b>它本身不做任何推断</b>：{@code visible} 就是「这一行告警给不给这个动作位」。
+     * 第 63 轮新增的「任何任务都有按钮」不是在这里补的 —— 而是在 {@link #alertOrDefault} 里，
+     * 把「服务端还没有这条任务的记录」这一种情况折成一份<b>只带挂起位的默认告警</b>。
+     * 这样「按钮可见性 = 动作位」这条单一状态源<b>一个字都没改</b>，
+     * 变化只发生在「没有记录时那一位是什么」这个唯一的新定义上。</p>
+     *
+     * @param alert     当前选中任务的告警视图（{@link #alertOrDefault}；null = 没有选中任务）
      * @param taskId    当前选中任务 id
      * @param actionBit 该按钮对应的动作位（{@link SyncAssemblyAlertsPacket#ACTION_BIT_RESUME} 等）
      */

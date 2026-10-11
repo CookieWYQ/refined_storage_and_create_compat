@@ -31,6 +31,11 @@ except Exception:
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 缓存根统一跟随 GRADLE_USER_HOME（本机 = D:\gradle\caches，Gradle 真正在用的那个）。
+# 以前这里写死 ~/.gradle/caches：两个根内容不一致时，本脚本会去另一个缓存里取证。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gradle_cache as gc  # noqa: E402  （必须在 sys.path 调整之后再导入）
+
 MODID = "rs_create_compat"
 RECIPE_DIR = os.path.join(ROOT, "src", "main", "resources", "data", MODID, "recipe")
 MOD_JAVA = os.path.join(ROOT, "src", "main", "java", "cretae", "cookiewyq", "rs_create_compat",
@@ -122,12 +127,15 @@ def mod_registry_ids():
 
 
 def vanilla_ids_from_client_jar():
-    """从 Gradle 缓存的原版 client jar 里读 en_us.json（最权威的原版 id 来源）。"""
-    candidates = globmod.glob(os.path.join(os.path.expanduser("~"), ".gradle", "caches",
-                                           "neoformruntime", "artifacts", "minecraft_*_client.jar"))
-    if not candidates:
+    """从 Gradle 缓存的原版 client jar 里读 en_us.json（最权威的原版 id 来源）。
+
+    缓存根由 tools/_gradle_cache.py 统一决定（跟随 GRADLE_USER_HOME），不再写死 ~/.gradle。
+    """
+    jar, notes = gc.find_vanilla_client_jar()
+    for line in notes:
+        info(line.strip())
+    if jar is None:
         return set(), None
-    jar = sorted(candidates)[-1]
     try:
         with zipfile.ZipFile(jar) as archive:
             with archive.open("assets/minecraft/lang/en_us.json") as handle:

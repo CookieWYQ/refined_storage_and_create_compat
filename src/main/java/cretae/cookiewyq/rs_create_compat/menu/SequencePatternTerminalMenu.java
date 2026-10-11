@@ -760,10 +760,55 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
 
     // ========== 步骤机器指派的 S2C 同步 ==========
 
-    /** 服务端：把「每一步的机器名 + recipeType + 是否已指派」全量快照发给该玩家（客户端只缓存）。 */
+    /**
+     * 服务端：把「每一步的机器名 + recipeType + 是否已指派」快照发给该玩家（客户端只缓存）。
+     * <p><b>第 49 轮：这里只发「轻快照」，全量扫描延后</b>。发送本身只做「逐步骤读一次样板 NBT
+     * + 读两个既有缓存」，不遍历网络、不查配方，因此拿快捷键开界面那一拍不会再被
+     * 「网络里有多少执行舱 / 多少张单元样板 / 多少条序列装配配方」拖住（单人游戏里那会直接卡住
+     * 客户端主线程，正是玩家说的「打开太慢、有时候很卡」）。两个昂贵事实（判重 / 已就位）改由
+     * {@link #scheduleHeavySync()} 排到 {@value #HEAVY_SYNC_DELAY_TICKS} 拍之后扫一次，
+     * 它们只用于显示，权威判定在生成侧（{@code generateAssemblyPattern} 自己重扫）。</p>
+     */
     public void sendStepMachines(final Player player) {
         if (terminal == null || !(player instanceof ServerPlayer serverPlayer)) {
             return;
+        }
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer,
+            cretae.cookiewyq.rs_create_compat.network.SyncStepMachinesPacket.fromCheap(terminal));
+        scheduleHeavySync();
+    }
+
+    // ========== 第 49 轮：轻快照 + 延后的权威快照 ==========
+
+    /** 权威快照的延后拍数：先让界面用轻快照开出来，再在几拍之后补上两个昂贵事实。 */
+    private static final int HEAVY_SYNC_DELAY_TICKS = 3;
+
+    /** 权威快照是否已排队（连续改动只排一次，避免把全量扫描排成一串）。 */
+    private boolean heavySyncPending;
+    /** 距权威快照还有几拍（仅 {@link #heavySyncPending} 为真时有意义）。 */
+    private int heavySyncCountdown;
+
+    /** 把一次「权威快照」（含全量网络扫描）排到 {@value #HEAVY_SYNC_DELAY_TICKS} 拍之后。 */
+    private void scheduleHeavySync() {
+        if (!heavySyncPending) {
+            heavySyncPending = true;
+            heavySyncCountdown = HEAVY_SYNC_DELAY_TICKS;
+        }
+    }
+
+    /**
+     * 发一次权威快照（含判重缓存重扫 + 已就位判定 + 节流过的老样板自愈）。
+     * <p>缓存还新鲜（距上次权威扫描不足 {@code SyncStepMachinesPacket.DISPLAY_CACHE_TICKS} 拍）
+     * 时直接跳过：连续开关终端只付第一次的代价，这是「打开速度稳定」的关键 ——
+     * 旧实现每次开界面都从零全量扫一遍，耗时随存档规模剧烈波动。</p>
+     */
+    private void sendAuthoritativeSnapshot(final ServerPlayer serverPlayer) {
+        if (terminal == null || terminal.getLevel() == null || terminal.getLevel().isClientSide()) {
+            return;
+        }
+        if (cretae.cookiewyq.rs_create_compat.network.SyncStepMachinesPacket.displayCacheFresh(
+            terminal, terminal.getLevel().getGameTime())) {
+            return; // 显示缓存还新鲜：一拍都不扫，界面沿用上一次的权威值
         }
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer,
             cretae.cookiewyq.rs_create_compat.network.SyncStepMachinesPacket.from(terminal));
@@ -866,6 +911,14 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
      * 取走之前「生成」一直是禁用态（必须先把现有的全部拿走）。</p>
      */
     private void generateAndHandOver(final Player player) {
+        // 生成前先按网络实况重扫一次判重缓存，再算「要消耗几张」。
+        // 为什么必须在这里补这一句：界面上「需要 N 张」读的是同一份缓存，而第 49 轮起打开界面
+        // 那一拍只发轻快照（全量扫描延后到几拍之后，见 sendStepMachines）。若不在这里重扫，
+        // 玩家在延后窗口内点「生成」就可能按<b>偏旧</b>的缓存算出 N，
+        // 而随后 generateAssemblyPattern() 内部按<b>最新</b>实况少产出几张单元样板 ⇒ 多扣了
+        // 玩家的 refinedstorage:pattern（扣了却没产出对应张数）。补这一句让「算出来的张数」
+        // 与紧接着那次生成看到的是同一份实况，比改动前的口径更严。
+        terminal.refreshStepDuplicateCache();
         final int need = terminal.generationPatternCost();
         if (need < 0) {
             // 不可生成：界面已用 tooltip 说明（已有总样板未取走 / 流程或产物无效），这里静默。
@@ -934,7 +987,8 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
     }
 
     /**
-     * 每 tick 的槽位同步：交父类做逐格 diff；首次同步时补发一次「步骤机器快照」。
+     * 每 tick 的槽位同步：交父类做逐格 diff；首次同步时补发一次「步骤机器快照」，
+     * 并按需在几拍之后补发一次「权威快照」（第 49 轮：把重活移出打开界面那一拍）。
      * <p><b>为什么不用 {@code setSynchronizer}</b>：synchronizer 是 {@code ServerPlayer.initMenu} 内部创建的
      * {@code ContainerSynchronizer} 匿名实现，<b>不是</b> ServerPlayer，故
      * {@code synchronizer instanceof ServerPlayer} 恒为 false、同步永远不会发生。这里改为在
@@ -949,7 +1003,13 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
         }
         if (!initialStepSyncSent) {
             initialStepSyncSent = true;
+            // 打开界面那一拍：只发轻快照（见 sendStepMachines），全量扫描排到几拍之后
             sendStepMachines(serverPlayer);
+            return;
+        }
+        if (heavySyncPending && --heavySyncCountdown <= 0) {
+            heavySyncPending = false;
+            sendAuthoritativeSnapshot(serverPlayer);
         }
     }
 

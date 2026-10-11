@@ -173,6 +173,22 @@ public abstract class AutocraftingMonitorScreenMixin {
     @Unique
     @Nullable
     private UUID rscc$taskId;
+    /**
+     * 已经为哪一条任务补拉过告警快照（<b>每次界面初始化清空</b>）。
+     *
+     * <p><b>它能修什么、不能修什么（本轮把边界写清楚，免得下次又照着错的前提改）</b>：
+     * 本字段只服务于 {@link #rscc$requestAlertIfMissing} 的去重。那次补拉能覆盖的窗口很窄 ——
+     * 玩家打开界面那一刻，服务端<b>还没建出</b>这条任务的记录（扫描 1 秒一拍），
+     * 于是 {@code init} 发出的那一份快照里没有它；下一拍记录建好，而 {@code LAST_BROADCAST}
+     * 的指纹判重又恰好不再广播。此时补拉一次就能拿到位。</p>
+     *
+     * <p><b>它修不了的是</b>「服务端根本没有这条任务的记录」（见
+     * {@link #rscc$requestAlertIfMissing} 的推导）—— 那种情况下服务端回的仍然是同一份不含该任务的
+     * 快照，按钮依旧一个都不画。</p>
+     */
+    @Unique
+    @Nullable
+    private UUID rscc$alertsRequested;
 
     /**
      * 界面初始化末尾：挂上两个处置按钮（此时 leftPos / topPos 与原生按钮都已就位），
@@ -222,6 +238,7 @@ public abstract class AutocraftingMonitorScreenMixin {
         // 告警是「内容变化才广播」的：玩家若不在告警产生那一刻开着监视器，本地快照就是空的。
         // 这里主动拉一次，服务端按自身权威数据回一份（只读，不改任何服务端状态）。
         PacketDistributor.sendToServer(new RequestAssemblyAlertsPacket());
+        rscc$alertsRequested = null; // 本次 init 之后，每条选中但本地无快照的任务还要各补拉一次
         // 缺料处置策略同理：它只在「被改动」时回发，界面一打开也要主动拉一次权威值。
         PacketDistributor.sendToServer(new RequestShortageModePacket());
         rscc$refreshButtons();
@@ -262,16 +279,33 @@ public abstract class AutocraftingMonitorScreenMixin {
      * 把处置按钮排到原生「取消 / 全部取消」的<b>右侧、并排</b>，并保证：
      * <ol>
      *     <li><b>绝不与原生按钮重叠</b>：起点 = 原生那一排的右缘 + {@link #RSCC_BUTTON_GAP}；</li>
-     *     <li><b>绝不越出面板 / 屏幕</b>：右界 = {@code leftPos + imageWidth - 7}（面板内侧右留白），
+     *     <li><b>绝不越出面板</b>：右界 = {@code guiLeft + getXSize() - 7}（面板内侧右留白）；
      *     放不下的按钮从后往前<b>收起</b>（{@code visible} 恒为 false，不绘制、不占位）；</li>
-     *     <li><b>纵向永远在屏幕内</b>：与原生按钮同 y、同高，行底 = {@code topPos + 224}。
-     *     由 {@code topPos = (height - 231) / 2} 可得「行底 ≤ height ⟺ 缩放后高度 ≥ 217」，
-     *     而 Minecraft 保证缩放后高度 ≥ 240 ⇒ 该行在任何合法缩放 / 窗口尺寸下都可见。</li>
+     *     <li><b>纵向永远在屏幕内</b>：与原生按钮同 y、同高（{@code rowY / rowH} 直接取原生
+     *     {@code cancelButton}）。原生按钮行由 RS 自己按 {@code topPos + 204} 摆放，
+     *     而 {@code topPos} 由原版 {@code AbstractContainerScreen#init} 夹到屏幕内 ——
+     *     我们与它同源，因此不可能单独跑出屏幕。</li>
      * </ol>
+     *
+     * <p><b>所有几何都在运行期现算，没有一个写死的 RS 版本常量</b>：面板宽取
+     * {@code getXSize()}（由 {@code AbstractContainerMenu} 给出），原生按钮行的 x / y /
+     * 宽 / 高直接读 {@code @Shadow} 的两个原生 {@link Button}。因此 RS 换版本、换语言（原生
+     * 「取消 / 全部取消」宽度随语言变化）、玩家换 GUI 缩放，本方法都跟着变。</p>
      *
      * <p><b>「挂起」与「继续」共用同一槽位</b>：服务端保证两者互斥（RUNNING 时给「挂起」位、SUSPENDED 时
      * 给「继续」位），因此槽位宽度取两者<b>较宽</b>的那一个即可 —— 横向占用不随任务状态变化，
      * 也就不会因为多了一个按钮而挤压「更换机器」或越出面板。</p>
+     *
+     * <p><b>放不下就整排收起，而不是换一个地方画</b>：主槽位放不下时 {@code rscc$primaryFits}
+     * 恒为 false，挂起 / 继续<b>一起</b>收起（两者共槽，不会出现「点不了却画着」的半截状态）；
+     * 「更换机器」再用同一个起点 {@code x} 单独尝试落位。刻意<b>不</b>另造一个兜底槽位：
+     * 面板里除了原生那一排没有第二处空闲横带（左边距 {@code leftPos + 7} 正是原生「取消」按钮
+     * 自己的位置，退到那里就是压在原生取消按钮上 —— 点击会命中我们，等于凭空多出第二个取消入口）。
+     *
+     * <p>另外，这条几何<b>不是</b>「按钮一个都看不到」的原因：本轮用 {@code javap} 逐字节比对过
+     * RS 2.0.0（编译目标）与 2.0.9（用户实跑）的 {@code AutocraftingMonitorScreen}，
+     * 反汇编输出完全一致；而中文 / 英文下原生那排的右缘 + 主槽位宽度离面板右内缘还有 50px 以上余量
+     * （见 {@code tools/selfcheck_round61_task_action_buttons.py} ⑤ 的四个宽度用例）。</p>
      *
      * <p><b>位置只在 init 里算一次</b>：之后无论按钮显示 / 隐藏，{@code setPosition} 都不再被调用 ——
      * 位置固定 = 命中框与绘制框天然同源，也不会有「按钮集合变化把另一个按钮挤走」的位移抖动。</p>
@@ -531,13 +565,22 @@ public abstract class AutocraftingMonitorScreenMixin {
      * {@code visible / active}。
      *
      * <ul>
-     *     <li>{@code visible} <b>只</b>看服务端给的动作位（{@link AssemblyAlertsClient#actionView}）
+     *     <li>{@code visible} <b>只</b>看服务端给的动作位（{@link AssemblyAlertsClient#actionView}；
+     *     其中「服务端还没有这条任务的记录」被 {@link AssemblyAlertsClient#alertOrDefault} 折成
+     *     一份只带「挂起」位的默认告警 —— 这是「任何任务都必须有按钮」的客户端那一半）
      *     与「横向放得下」这一条<b>静态</b>几何条件；</li>
      *     <li>{@code active} = {@code visible && 该动作不在途} —— 在途只影响可用性，绝不影响可见性。</li>
      * </ul>
      *
-     * <p>因此「点击某个按钮」这件事<b>不可能</b>让任何按钮消失：按钮集合只随服务端快照变化。
-     * 「挂起」与「继续」互斥（服务端 RUNNING 给 SUSPEND、SUSPENDED 给 RESUME），同一时刻只会渲染其中一个。
+     * <p><b>为什么这里要取两次</b>：{@code raw} 是「服务端到底给没给这一行」的<b>诚实</b>答案
+     * （{@link AssemblyAlertsClient#alertOf}，没有就是 null），只用来决定要不要补拉一次快照；
+     * {@code alert} 是给它加了默认位的<b>按钮视图</b>（{@link AssemblyAlertsClient#alertOrDefault}）。
+     * 两者分开是刻意的：默认位只影响「画不画得出按钮」，绝不能顺手把「要不要补拉」也一起骗过去
+     * （否则客户端永远不再请求快照，服务端真挂起后按钮会一直停在「挂起」上）。</p>
+     *
+     * <p>因此「点击某个按钮」这件事<b>不可能</b>让任何按钮消失：按钮集合只随服务端快照变化
+     * （外加「完全没有快照」时的那一份默认位）。「挂起」与「继续」互斥（服务端 RUNNING 给 SUSPEND、
+     * SUSPENDED 给 RESUME），同一时刻只会渲染其中一个。
      * 「更换机器」单独消失（而「继续」还在）也只可能是服务端收回了这一位 —— 例如执行仓回到了网络里，
      * 那一步不再掉线，这个动作确实已经不适用。</p>
      */
@@ -545,14 +588,61 @@ public abstract class AutocraftingMonitorScreenMixin {
     private void rscc$refreshButtons() {
         final UUID taskId = rscc$currentTaskId();
         rscc$taskId = taskId;
-        final SyncAssemblyAlertsPacket.Alert alert = AssemblyAlertsClient.alertOf(taskId);
+        // 诚实的一份：只用于「要不要补拉一次快照」（见本方法的 javadoc）。
+        final SyncAssemblyAlertsPacket.Alert received = AssemblyAlertsClient.alertOf(taskId);
+        // 按钮视图：没有快照时带一份「只给挂起位」的默认位（绝不整排消失）。
+        final SyncAssemblyAlertsPacket.Alert alert = AssemblyAlertsClient.alertOrDefault(taskId);
         rscc$alert = alert;
+        rscc$requestAlertIfMissing(taskId, received);
         rscc$apply(rscc$resumeButton, rscc$primaryFits,
             AssemblyAlertsClient.actionView(alert, taskId, SyncAssemblyAlertsPacket.ACTION_BIT_RESUME));
         rscc$apply(rscc$suspendButton, rscc$primaryFits,
             AssemblyAlertsClient.actionView(alert, taskId, SyncAssemblyAlertsPacket.ACTION_BIT_SUSPEND));
         rscc$apply(rscc$machineButton, rscc$machineFits,
             AssemblyAlertsClient.actionView(alert, taskId, SyncAssemblyAlertsPacket.ACTION_BIT_CHANGE_MACHINE));
+    }
+
+    /**
+     * 选中了一条任务、但本地<b>没有</b>它的快照时，补发一次 {@link RequestAssemblyAlertsPacket}
+     * （只读；服务端按自身记录回一份整维度快照）。
+     *
+     * <p><b>它补的是哪一个洞</b>：{@code init} 里那次请求与它<b>发的是同一个无参包</b>，
+     * 服务端回的也是同一份「整维度快照」。因此它只可能在「{@code init} 那一刻服务端还没建出记录、
+     * 下一拍才建出来、而指纹判重又吞掉了那次广播」这个窄窗口里起作用（扫描 1 秒一拍）。
+     * 去重见 {@link #rscc$alertsRequested}（{@code init} 里清空），所以每帧调用也不会刷包。</p>
+     *
+     * <p><b>它不可能补的洞（要分清，别把结论记错）</b>：服务端 {@code AssemblyWatchdog.allAlerts()}
+     * 只收 {@code Record#actions() != 0} 的记录，而 {@code Record} 只由「1 秒一拍、从<b>已加载区块</b>
+     * 里的网络节点方块实体走到该网络」的扫描产生（{@code scanLevel} / {@code scanNetwork}，
+     * 且任务请求的资源必须是 {@code PlatformResourceKey}）。<b>没有记录的普通任务不是「拿不到动作位」，
+     * 而是根本不在快照里</b> —— {@code actions()} 压根不会被调用，{@code alertOf} 返回 null。
+     * 此时再补拉多少次，服务端回的仍是同一份不含该任务的快照。</p>
+     *
+     * <p><b>所以第 63 轮把「没有快照」本身定义成一种状态，而不是一种失败</b>：
+     * {@link AssemblyAlertsClient#alertOrDefault} 在快照里查不到这条任务时给出一份
+     * <b>只带「挂起」位</b>的默认告警（而 {@link AssemblyAlertsClient#alertOf} 仍然诚实返回 null，
+     * 本方法用的就是它）—— 于是上面那个「补不动的洞」不再表现为「整排按钮一个都不画」，
+     * 而是一颗真按钮；服务端收到它时若还没有记录，会就地补一拍扫描把记录建出来再执行
+     * （{@code AssemblyWatchdog#suspend} → {@code #rescanNow}）。本方法因此只是「把权威状态尽早拉回来」，
+     * <b>不再是按钮能否出现的必要条件</b>。</p>
+     *
+     * <p><b>零语义改动</b>：本方法只发一个只读请求包，不写任何状态、不放宽任何判定 ——
+     * 尤其不碰「普通任务永不被自动挂起」的 {@code ourChain} 三个闸门。</p>
+     */
+    @Unique
+    private void rscc$requestAlertIfMissing(@Nullable final UUID taskId,
+                                            @Nullable final SyncAssemblyAlertsPacket.Alert alert) {
+        if (taskId == null || alert != null || taskId.equals(rscc$alertsRequested)) {
+            return; // 没有选中任务 / 已经有快照 / 这条任务本次会话已经补拉过
+        }
+        rscc$alertsRequested = taskId;
+        // 开发日志总开关（默认关闭；发布版默认安静）——用来区分「服务端没给这一位」与
+        // 「客户端根本没收到快照」这两种完全不同的根因，取证时一句话就够。
+        cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug.event(
+            "monitor-alerts-miss task=" + taskId
+                + " cached=" + AssemblyAlertsClient.alerts().size()
+                + " -> request resend");
+        PacketDistributor.sendToServer(new RequestAssemblyAlertsPacket());
     }
 
     /** 写回单个按钮的状态（不可见即完全不参与渲染与鼠标命中，不占位）。 */

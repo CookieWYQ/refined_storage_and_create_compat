@@ -382,6 +382,37 @@ public class SequencePatternTerminalBlockEntity
     };
 
     /**
+     * <b>对外（RS 输出总线 / Jade）暴露的样板槽视图</b>：0..{@link #PATTERN_SLOT_SIZE}-1 段是
+     * {@link #patternSlots}（总样板槽，只收本模组的序列装配总样板），紧随其后
+     * {@link #RS_PATTERN_SLOT_SIZE} 格是 {@link #rsPatternSlots}（只收 {@code refinedstorage:pattern}）。
+     *
+     * <h2>为什么要有它（用户报告的缺口）</h2>
+     * <p>用户原话：「精致存储原版的样板终端可以直接使用输出总线往里面输入那个样板，但是现在并不行，
+     * 因为我用 Jade 并不能查看到里面的样板槽。」—— RS 原版样板机（样板网格）对网络暴露的是它那个
+     * <b>只收 {@code PatternItem} 的输入容器</b>（见 {@code PatternGridBlockEntity#getPatternInput()}，
+     * 判据 {@code isValidPattern}），因此输出总线能把样板送进去、Jade 也能列出来。此前本终端只把
+     * {@link #patternSlots} 交出去：输出总线拿 {@code refinedstorage:pattern} 来喂时被
+     * {@link #acceptsPattern} 拒收（这是<b>正确</b>的准入判据，不能改），于是「样板塞不进去」；
+     * 而 Jade 也只看到那一段（且它常常是空的，Jade 对空容器不渲染提示框）⇒ 用户看到的就是
+     * 「样板槽没被暴露」。</p>
+     * <p>现在把两段拼成一次能力查询里的同一个 handler（一个方块实体类型只能有一个同能力 provider，
+     * 拼接是唯一办法，RS 自己也是「唯一 provider + 包一个容器」）：RS 输出总线按它的过滤项
+     * （总样板 / RS 样板）自然落到对应那一段，Jade 则在同一次查询里看到两段的内容。</p>
+     *
+     * <h2>为什么内部 9 格照旧全部暴露、界面却只显示 1 格</h2>
+     * <p>老存档第 2~9 格的总样板必须仍能被物流搬走（否则「界面看不到 + 物流拿不出」= 丢物品，
+     * 见 {@link #PATTERN_VISIBLE} 的说明）。这里刻意<b>不</b>缩容。</p>
+     *
+     * <h2>边界</h2>
+     * <p>只暴露这<b>两段样板槽</b>：单元样板库（{@link #unitLibrary}）、流程编排（{@link #arrangement} /
+     * {@link #displayArrangement}）、生成中转槽（{@link #assemblyPatternSlot}）与三个幽灵标记容器
+     * （{@link #ingredientSlot} / {@link #resultSlots} / {@link #scrapSlots}）都<b>不</b>在此视图里 ——
+     * 前者是终端自己的库（由界面 / 判重逻辑管理），后三者根本不是真实资源（暴露出去等于凭空造物）。</p>
+     */
+    public final net.neoforged.neoforge.items.IItemHandler exposedPatternSlots =
+        cretae.cookiewyq.rs_create_compat.support.PatternSlotExposure.of(patternSlots, rsPatternSlots);
+
+    /**
      * 是否为精致存储样板（{@code refinedstorage:pattern}）。
      * <p>按注册名解析（不硬编码物品引用）：精致存储若是可选前置，编译期引用会崩，因此走注册表。
      */
@@ -2482,14 +2513,28 @@ public class SequencePatternTerminalBlockEntity
             RS_Create_Compat.SEQUENCE_PATTERN_TERMINAL_BLOCK_ENTITY.get(),
             (blockEntity, direction) -> blockEntity.getContainerProvider()
         );
-        // 样板槽支持物流输入 / 输出（与原版 RS 样板终端一致）。
-        // 暴露的是内部全部 9 格（界面只显示第 1 格，但物流侧不缩容：老存档第 2~9 格的样板必须仍能被搬走，
-        // 否则就是「界面看不到 + 物流拿不出」= 丢物品）。其 isItemValid 已限定为「本模组的序列装配总样板」，
-        // 因此漏斗 / 管道只能搬运总样板，塞不进单元样板或 RS 原版样板。
+        // 样板槽对网络 / Jade 暴露（<b>与 RS 原版样板终端同源</b>：同一个
+        // Capabilities.ItemHandler.BLOCK；RS 那边是
+        // ModInitializer#registerCapabilities → getPatternGrid ⇒ new InvWrapper(be.getPatternInput())）。
+        //
+        // 【为什么必须暴露，而不是只让界面能放】RS 输出总线取目标容器走的是它自己的
+        // CapabilityCacheImpl（BlockCapabilityCache.create(Capabilities.ItemHandler.BLOCK, level, 目标格,
+        // 朝向)），Jade 取的是 CommonProxy#findItemHandler（Level#getCapability(同一个能力, ..., side=null)，
+        // 见 Jade 的 UniversalPlugin 把 ItemStorageProvider 注册给 Block.class）—— 两个消费者是<b>同一个
+        // 能力</b>，所以一次注册同时满足「输出总线能塞进来」与「Jade 能列出来」。
+        //
+        // 【暴露哪些槽】只暴露两段样板槽，且逐段沿用既有准入判据（本视图不重写任何判据）：
+        //   ① 对外 0..8 → patternSlots（总样板槽；isItemValid = acceptsPattern，只收本模组总样板，
+        //      9 格全部暴露是因为老存档第 2~9 格的样板必须仍能被物流搬走，否则等于丢物品）；
+        //   ② 对外 9..11 → rsPatternSlots（终端自有的精致存储样板输入槽；isItemValid = isRefinedStoragePattern，
+        //      只收 refinedstorage:pattern —— 这正是 RS 原版样板机那个 patternInput 的对应物，
+        //      也是用户「用输出总线往终端里喂样板」所指的那一格）。
+        // 单元样板库 / 流程编排 / 生成中转槽 / 三个幽灵标记容器一律不暴露：前者由终端自己管理，
+        // 后三者的内容从来不是真实资源（暴露出去就是凭空造物）。
         event.registerBlockEntity(
             net.neoforged.neoforge.capabilities.Capabilities.ItemHandler.BLOCK,
             RS_Create_Compat.SEQUENCE_PATTERN_TERMINAL_BLOCK_ENTITY.get(),
-            (blockEntity, direction) -> blockEntity.patternSlots
+            (blockEntity, direction) -> blockEntity.exposedPatternSlots
         );
     }
 
