@@ -33,7 +33,8 @@ public class QuantityKeeperMenu extends AbstractContainerMenu
                               @Nullable final QuantityKeeperBlockEntity keeper) {
         super(RS_Create_Compat.QUANTITY_KEEPER_MENU.get(), id);
         this.keeper = keeper;
-        this.data = keeper != null ? keeper.getContainerData() : new SimpleContainerData(9);
+        this.data = keeper != null ? keeper.getContainerData()
+            : new SimpleContainerData(QuantityKeeperBlockEntity.DATA_COUNT);
         addDataSlots(data);
 
         if (keeper != null) {
@@ -99,8 +100,16 @@ public class QuantityKeeperMenu extends AbstractContainerMenu
         return com.refinedmods.refinedstorage.common.support.RedstoneModeSettings.getRedstoneMode(data.get(8));
     }
 
+    /**
+     * 目标数量（第 118 轮：由低 / 高两个 16 位拼回完整 int）。
+     * <p>为什么不能直接 {@code data.get(0)}：ContainerData 走 {@code ClientboundContainerSetDataPacket}
+     * 是 <b>short</b>，> 32767 会被截断 ⇒ 客户端读到 0 / 负值 ⇒ 界面回填 0，点 ± 时把服务端目标改小。
+     * 两个半段都按无符号 16 位掩码拼回，与服务端 {@code DATA_TARGET_HIGH} 口径一致。</p>
+     */
     public int getTargetAmount() {
-        return data.get(0);
+        final int low = data.get(QuantityKeeperBlockEntity.DATA_TARGET_LOW) & 0xFFFF;
+        final int high = data.get(QuantityKeeperBlockEntity.DATA_TARGET_HIGH) & 0xFFFF;
+        return (high << 16) | low;
     }
 
     /** 供客户端发送数值设置包。 */

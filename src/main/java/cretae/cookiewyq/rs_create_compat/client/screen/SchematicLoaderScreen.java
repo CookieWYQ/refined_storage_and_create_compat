@@ -2,8 +2,8 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 
 import com.refinedmods.refinedstorage.common.support.widget.ScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -181,31 +181,17 @@ public class SchematicLoaderScreen extends AbstractContainerScreen<SchematicLoad
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, COLOR_TITLE, false);
-        // 开关标签（2 列布局，亮白提升可读性）；可用宽度 = 到同行勾叉按钮左侧再留 2px，
-        // 英文串较长时截断，保证文字不压按钮
+        // 开关标签（2 列布局，亮白提升可读性）；可用宽度 = 到同行勾叉按钮左侧再留 2px。
+        // 第 104 轮：放不下时**整体缩字号**（下限 0.6 倍）而不是截成「自动回收蓝…」；
+        // 英文已按同一可用宽度收到 "Recycle" / "Gunpowder"（完整含义在开关的 tooltip 里）。
         for (int i = 0; i < BTN_LABEL_KEYS.length; i++) {
             final int row = i / 2;
             final int col = i % 2;
             final int maxWidth = TOGGLE_BTN_X[col] - TOGGLE_LABEL_X[col] - 2;
-            final String label = Component.translatable(BTN_LABEL_KEYS[i]).getString();
-            guiGraphics.drawString(font, Component.literal(trimToWidth(font, label, maxWidth)),
-                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, 0xFFFFFF, false);
+            RsccTextFit.drawFitLine(guiGraphics, font,
+                Component.translatable(BTN_LABEL_KEYS[i]),
+                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, maxWidth, 0xFFFFFF);
         }
-    }
-
-    /** 按像素宽截断字符串（尾部补省略号）：保证文字不越过相邻控件 / 槽位 / 面板边。 */
-    private static String trimToWidth(final Font font, final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     @Override

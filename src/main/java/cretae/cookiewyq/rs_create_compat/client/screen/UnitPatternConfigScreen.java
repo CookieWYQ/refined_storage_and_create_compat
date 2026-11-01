@@ -2,7 +2,8 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 
 import cretae.cookiewyq.rs_create_compat.client.tooltip.ItemCycleTooltipComponent;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RecipeTypeIcons;
-import cretae.cookiewyq.rs_create_compat.client.widget.ScrollSelectWidget;
+import cretae.cookiewyq.rs_create_compat.client.tooltip.RecipeTypeMachines;
+import cretae.cookiewyq.rs_create_compat.client.widget.RecipeTypeSelect;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
 import cretae.cookiewyq.rs_create_compat.data.SequencePatternData;
 import cretae.cookiewyq.rs_create_compat.network.CreateUnitPatternPacket;
@@ -26,7 +27,7 @@ import java.util.List;
  * 生成单元样板的「配置」子界面：收集新语义（v4）的三项基础信息后再发 C2S 创建包。
  * <ol>
  *     <li><b>名字</b>：{@link EditBox}，非空校验；</li>
- *     <li><b>配方类型</b>：{@link ScrollSelectWidget} 滚轮选择控件，候选 = 服务端
+ *     <li><b>配方类型</b>：{@link RecipeTypeSelect} 滚轮选择控件 + 搜索框，候选 = 服务端
  *     {@code SyncRecipeTypesPacket} 下发的全部已注册配方类型（已绑定的排前面），避免手打错 id；</li>
  *     <li><b>是否需要输入原料</b>：按钮切换 是/否；选「是」时取终端「输入」槽物品作为
  *     {@code input}（为空则不可确定，界面给出提示）。</li>
@@ -40,8 +41,8 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
     private static final String LANG = "gui.rs_create_compat.unit_pattern_config.";
 
     private static final int PANEL_W = 240;
-    /** 面板高 180：给按钮下方的「缺项提示」留出位置，避免压到 3px 边框。 */
-    private static final int PANEL_H = 180;
+    /** 面板高 196：配方类型选择框下方新增一行「搜索」框，其余行整体下移，绝不重叠。 */
+    private static final int PANEL_H = 196;
     private static final int BOX_H = 16;
 
     private static final int TITLE_X = 10;
@@ -52,16 +53,18 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
     private static final int RECIPE_LABEL_Y = 64;
     private static final int RECIPE_BOX_Y = 76;
     private static final int RECIPE_BOX_W = 220;
+    /** 配方类型搜索框（紧贴选择框下方一行；用户要求「也能搜 id / 名字 / 英文名」）。 */
+    private static final int RECIPE_SEARCH_Y = 94;
     /** 配方类型选择框下方的「代表物品」图标轮播行（18×18，与 tooltip 判定范围同源）。 */
-    private static final int ICON_ROW_Y = 96;
+    private static final int ICON_ROW_Y = 114;
     private static final int ICON_SIZE = 18;
-    private static final int TOGGLE_Y = 118;
+    private static final int TOGGLE_Y = 138;
     private static final int TOGGLE_W = 130;
     private static final int INPUT_ICON_X = 150;
-    private static final int INPUT_ICON_Y = 118;
+    private static final int INPUT_ICON_Y = 138;
     private static final int INPUT_TEXT_X = 170;
-    private static final int INPUT_TEXT_Y = 122;
-    private static final int ACTION_Y = 144;
+    private static final int INPUT_TEXT_Y = 142;
+    private static final int ACTION_Y = 162;
     private static final int ACTION_W = 118;
 
     /** 文字颜色（无阴影；浅灰凹陷面板上用深色字，警示用红）。 */
@@ -81,8 +84,8 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
     /** 玩家是否手动改过配方类型。 */
     private boolean recipeTouched;
 
-    /** 配方类型滚轮选择控件（候选 = 服务端下发的全部已注册配方类型，已绑定的排前面）。 */
-    private ScrollSelectWidget<String> recipePicker;
+    /** 配方类型选择器（滚轮控件 + 搜索框；两个界面共用同一个实现，见 {@link RecipeTypeSelect}）。 */
+    private RecipeTypeSelect recipeSelect;
     /** 上一帧的候选快照：变化时才回填控件。 */
     private List<String> lastCandidates = List.of();
     private EditBox nameBox;
@@ -132,20 +135,24 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
         addRenderableWidget(nameBox);
         setFocused(nameBox);
 
-        // 配方类型：滚轮选择控件（候选由服务端下发；打开界面时请求）
+        // 配方类型：滚轮选择控件 + 搜索框（候选由服务端下发；打开界面时请求）
         lastCandidates = SyncRecipeTypesPacket.getLastReceived();
         recipeTouched = false;
-        recipePicker = new ScrollSelectWidget<String>(font,
-            px + TITLE_X, py + RECIPE_BOX_Y, RECIPE_BOX_W, BOX_H)
-            .forOptions(lastCandidates)
+        recipeSelect = new RecipeTypeSelect(font,
+            px + TITLE_X, py + RECIPE_BOX_Y, RECIPE_BOX_W, BOX_H,
+            px + TITLE_X, py + RECIPE_SEARCH_Y, RECIPE_BOX_W, BOX_H)
             .titled(Component.translatable(LANG + "recipe_type"))
             .displaying(RecipeTypeNames::display)
             .hinting(Component.translatable(LANG + "recipe_type.hint"))
             .writingTo(index -> recipeTouched = true)
             // 滚轮 tooltip 最底部追加当前选中项的原始配方类型 id（暗灰+斜体，低调）
-            .showingExtraTooltip(id -> List.of(RecipeTypeNames.idLine(id)));
-        recipePicker.setState(indexOfOption(initialRecipeType));
-        addRenderableWidget(recipePicker);
+            .showingExtraTooltip(id -> List.of(RecipeTypeNames.idLine(id)))
+            // 选择框当前项的机器方块图标（与执行舱 / 单元样板 tooltip 同一套反查）
+            .iconFor(UnitPatternConfigScreen::firstMachineIcon);
+        recipeSelect.setOptions(lastCandidates);
+        recipeSelect.selectIfPresent(initialRecipeType);
+        addRenderableWidget(recipeSelect.picker());
+        addRenderableWidget(recipeSelect.searchBox());
         PacketDistributor.sendToServer(new RequestRecipeTypesPacket());
 
         // 是否需要输入原料：按钮切换 是/否
@@ -171,35 +178,28 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
 
     /** 服务端候选到达后回填控件（保留原选择；候选未到达时控件显示「无可用选项」）。 */
     private void syncRecipeCandidates() {
-        if (recipePicker == null) {
+        if (recipeSelect == null) {
             return;
         }
         final List<String> candidates = SyncRecipeTypesPacket.getLastReceived();
         if (candidates.equals(lastCandidates)) {
             return;
         }
-        final String previous = recipePicker.getSelected();
+        final String previous = recipeSelect.selected();
         lastCandidates = candidates;
-        recipePicker.setOptions(candidates);
+        recipeSelect.setOptions(candidates);
         if (!recipeTouched && !initialRecipeType.isEmpty()) {
             // 玩家还没动过控件：优先对齐被编辑样板的配方类型（避免沿用上一次的陈旧选择）
-            recipePicker.setState(indexOfOption(initialRecipeType));
+            recipeSelect.select(initialRecipeType);
             return;
         }
-        recipePicker.setState(previous == null ? 0 : indexOfOption(previous));
+        recipeSelect.select(previous);
     }
 
-    /** 在候选列表里定位某配方类型（找不到回退 0）。 */
-    private int indexOfOption(final String recipeType) {
-        final List<String> options = recipePicker.getOptions();
-        if (recipeType != null && !recipeType.isEmpty()) {
-            for (int i = 0; i < options.size(); i++) {
-                if (options.get(i).equals(recipeType)) {
-                    return i;
-                }
-            }
-        }
-        return 0;
+    /** 该配方类型对应的第一台机器方块图标（没有则空栈 = 选择框里不画图标）。 */
+    private static ItemStack firstMachineIcon(final String recipeType) {
+        final List<RecipeTypeMachines.Machine> machines = RecipeTypeMachines.forRecipeType(recipeType);
+        return machines.isEmpty() ? ItemStack.EMPTY : machines.get(0).icon();
     }
 
     /** 三项信息是否齐备（名字非空 + 已选配方类型 + 需要输入时输入槽非空）。 */
@@ -214,7 +214,7 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
         if (nameBox == null || nameBox.getValue().trim().isEmpty()) {
             missing.add(Component.translatable(LANG + "missing.name"));
         }
-        if (recipePicker == null || recipePicker.getSelected() == null) {
+        if (recipeSelect == null || recipeSelect.selected() == null) {
             missing.add(Component.translatable(LANG + "missing.recipe_type"));
         }
         if (requiresInput && inputStack.isEmpty()) {
@@ -235,7 +235,7 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
             return;
         }
         final String name = nameBox.getValue().trim();
-        final String recipeType = recipePicker.getSelected();
+        final String recipeType = recipeSelect.selected();
         final ItemStack input = requiresInput ? inputStack : ItemStack.EMPTY;
         // 目标槽：新建 = 单元样板库第一个空位；编辑 = 原格全局下标（服务端校验并写入）
         PacketDistributor.sendToServer(
@@ -261,9 +261,9 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
         guiGraphics.drawString(font, Component.translatable(LANG + "input"),
             px + TITLE_X, py + INPUT_TEXT_Y, COLOR_TEXT, false);
         // 配方类型「代表物品」图标轮播：紧贴配方类型选择框下方（JEI 风格，多个时按墙钟时间轮播）
-        currentIcons = recipePicker == null || recipePicker.getSelected() == null
+        currentIcons = recipeSelect == null || recipeSelect.selected() == null
             ? List.of()
-            : RecipeTypeIcons.forRecipeType(recipePicker.getSelected(), inputStack);
+            : RecipeTypeIcons.forRecipeType(recipeSelect.selected(), inputStack);
         ItemCycleTooltipComponent.renderCycleIcon(guiGraphics, currentIcons, px + TITLE_X, py + ICON_ROW_Y);
         // 输入物预览（16×16 与 tooltip 判定范围一致）
         if (!inputStack.isEmpty()) {
@@ -303,8 +303,12 @@ public class UnitPatternConfigScreen extends ChildConfigScreen {
             return;
         }
         // 配方类型滚轮控件：标题 + 16 行候选窗口（控件自绘，必须手动渲染 tooltip）
-        if (recipePicker != null && recipePicker.inBounds(mouseX, mouseY)) {
-            recipePicker.renderTooltip(guiGraphics, mouseX, mouseY);
+        // 搜索框（自绘控件旁边的原版输入框）：命中数 + 三种键的说明
+        if (recipeSelect != null && recipeSelect.renderTooltip(guiGraphics, font, mouseX, mouseY)) {
+            return;
+        }
+        if (recipeSelect != null && recipeSelect.picker().inBounds(mouseX, mouseY)) {
+            recipeSelect.picker().renderTooltip(guiGraphics, mouseX, mouseY);
             return;
         }
         // 配方类型代表物品图标（自绘，必须手动渲染 tooltip；判定范围与绘制范围一致）

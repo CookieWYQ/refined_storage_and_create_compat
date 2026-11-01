@@ -1,0 +1,22 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QGQ",
+    "QSQ",
+    " Q "
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "G": {
+      "item": "minecraft:glass"
+    },
+    "S": {
+      "item": "minecraft:stick"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:area_selector"
+  }
+}

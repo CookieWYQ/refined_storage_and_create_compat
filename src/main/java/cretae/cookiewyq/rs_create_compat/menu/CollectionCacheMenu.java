@@ -9,6 +9,7 @@ import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
 import cretae.cookiewyq.rs_create_compat.support.XpForm;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
@@ -120,7 +121,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
      * （红石模式 → 方块实体槽 16，见 {@link #BLOCK_DATA_REDSTONE_MODE}）；
      * 22 / 23（两个新开关）同理映射到方块实体槽 17 / 18；24 / 25 / 26（销毁确认用快照）映射到方块实体槽 19 / 20 / 21。
      */
-    public static final int DATA_SLOT_COUNT = 29;
+    public static final int DATA_SLOT_COUNT = 31;
     /** 4 个吸取开关的起始索引：+ {@link AbsorbType#ordinal()}。 */
     public static final int DATA_ABSORB_ITEM = 5;
     public static final int DATA_ABSORB_FLUID = 6;
@@ -185,6 +186,15 @@ public class CollectionCacheMenu extends AbstractContainerMenu
     private static final int DATA_DELETE_RATE = 28;
     private static final int BLOCK_DATA_DELETE_MODE = 22;
     private static final int BLOCK_DATA_DELETE_RATE = 23;
+    /**
+     * 第 101 轮「为什么没在吸」状态行：29 = 状态码、30 = 附加位（1 = 数量门槛没凑够）。
+     * <p>映射到方块实体的槽 24 / 25。值由服务端每轮扫描后算好（见
+     * {@code CollectionCacheBlockEntity#computeAbsorbStatus()}），客户端只把状态码翻成一句人话。</p>
+     */
+    private static final int DATA_ABSORB_STATUS = 29;
+    private static final int DATA_ABSORB_STATUS_ARG = 30;
+    private static final int BLOCK_DATA_ABSORB_STATUS = 24;
+    private static final int BLOCK_DATA_ABSORB_STATUS_ARG = 25;
 
     @Nullable
     private final CollectionCacheBlockEntity block;
@@ -216,7 +226,26 @@ public class CollectionCacheMenu extends AbstractContainerMenu
     public CollectionCacheMenu(final int id,
                                final Inventory inventory,
                                @Nullable final CollectionCacheBlockEntity block) {
-        super(RS_Create_Compat.COLLECTION_CACHE_MENU.get(), id);
+        this(RS_Create_Compat.COLLECTION_CACHE_MENU.get(), id, inventory, block);
+    }
+
+    /**
+     * 由子类指定自己的 {@link net.minecraft.world.inventory.MenuType}。
+     *
+     * <p><b>子类必须走这个构造器</b>：{@code AbstractContainerMenu#getType()} 决定服务端
+     * 「开界面」时通过 {@code ClientboundOpenScreenPacket} 告诉客户端建<b>哪个</b>菜单类。
+     * 若子类（高级版）沿用基础版的类型，客户端建出来的就是基础版菜单
+     * （138 槽 / 29 数据槽），而服务端是高级版（139 槽 / 35 数据槽）；
+     * 服务端第一次全量同步下发 139 个 ItemStack，客户端
+     * {@code AbstractContainerMenu#initializeContents} 循环到下标 138 时越界
+     * （实测 {@code IndexOutOfBoundsException: Index 138 out of bounds for length 138}），
+     * 客户端随即断线——玩家看到的就是「打开高级归流缓存仓就被踢」。</p>
+     */
+    protected CollectionCacheMenu(final net.minecraft.world.inventory.MenuType<?> type,
+                                  final int id,
+                                  final Inventory inventory,
+                                  @Nullable final CollectionCacheBlockEntity block) {
+        super(type, id);
         this.block = block;
         // 数据槽 0..9 来自方块实体；10..13 为两个区域各自的滚动偏移与最大偏移（服务端权威，同步给客户端）
         this.base = block != null ? block.getContainerData() : null;
@@ -257,6 +286,9 @@ public class CollectionCacheMenu extends AbstractContainerMenu
                     // 删除模式总闸 + 当前删除吞吐（映射到方块实体的 22 / 23）
                     case DATA_DELETE_MODE -> base.get(BLOCK_DATA_DELETE_MODE);
                     case DATA_DELETE_RATE -> base.get(BLOCK_DATA_DELETE_RATE);
+                    // 第 101 轮「为什么没在吸」状态行（映射到方块实体的 24 / 25）
+                    case DATA_ABSORB_STATUS -> base.get(BLOCK_DATA_ABSORB_STATUS);
+                    case DATA_ABSORB_STATUS_ARG -> base.get(BLOCK_DATA_ABSORB_STATUS_ARG);
 
                     default -> index >= 0 && index < DATA_SLOT_COUNT ? base.get(index) : 0;
                 };
@@ -370,6 +402,37 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         return getCacheOffset() * CACHE_WINDOW + (indexInWindow - MATCH_WINDOW);
     }
 
+    /** 缓存区当前实际格数（服务端 = 容器真实格数，含机器集群扩容；客户端 = 单机常量）。 */
+    public int cacheSize() {
+        return block != null ? Math.max(1, block.getCache().getContainerSize())
+            : CollectionCacheBlockEntity.CACHE_SLOTS;
+    }
+
+    /**
+     * 缓存窗口某格映射到的<b>有效</b>全局下标；越界返回 {@code -1}。
+     *
+     * <h2>第 96 轮修掉的越界（P0：点一下 = 一个异常，服务端直接吞掉这次点击）</h2>
+     * <p>缓存区格数（基础 256 / 高级 512）<b>不是</b>每页 48 格的整数倍，而滚动条的最大偏移是按
+     * 「(格数-1)/48」算的 ⇒ 最后一页一定比 48 格短（256 ⇒ 该页只有 16 格有效，512 ⇒ 32 格）。
+     * 旧实现 {@link #globalIndex(int)} 直接算出 240..287 / 480..527，
+     * {@code SimpleContainer#getItem(256)} 直接抛 {@link IndexOutOfBoundsException}：</p>
+     * <ul>
+     *     <li>服务端 {@code AbstractContainerMenu#clicked} 会 try/catch 掉 —— 玩家看到的是
+     *     「点了完全没反应」（日志里只有一行 {@code Error handling container click}）；</li>
+     *     <li>而 {@code broadcastChanges}（每 tick 遍历全部槽位）<b>没有</b>这层 catch，
+     *     越界会打断整次玩家 tick。</li>
+     * </ul>
+     * <p>现在越界格一律当成「空格」：{@link WindowSlot} 的读 / 写 / 取 / 放全部走本方法，
+     * 越界即 {@code -1} ⇒ 读空、写空、不可放置。最后一页因此显示「真实存在的那部分格子 + 若干空格」。</p>
+     */
+    public int cacheGlobalIndex(final int indexInWindow) {
+        if (isMarkerWindow(indexInWindow)) {
+            return -1;
+        }
+        final int index = getCacheOffset() * CACHE_WINDOW + (indexInWindow - MATCH_WINDOW);
+        return index >= 0 && index < cacheSize() ? index : -1;
+    }
+
     /** 客户端：该物品是否已在匹配区被标记（用于「同一物品只能标记一次」的前置拦截）。 */
     public boolean isMarkerItemPresent(final ItemStack stack) {
         if (stack.isEmpty()) {
@@ -404,6 +467,14 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         block.setInputFace(direction, enabled);
     }
 
+    /**
+     * 「查看吸取范围」按钮的菜单按钮 id（原版 {@code ServerboundContainerButtonClickPacket} 通道）。
+     * <p>与范围充电器同一个做法：<b>C2S 只表达意图</b>，坐标 / 半径 / 区域全部由服务端读方块实体
+     * 算好后经 S2C 快照下发（客户端菜单里 {@code block == null}，自己算不出也读不到）。
+     * 取值避开 {@link cretae.cookiewyq.rs_create_compat.support.RsccRedstoneMode#BUTTON_ID}（900）。</p>
+     */
+    public static final int BUTTON_SHOW_RANGE = 1;
+
     // ==================== 交互 ====================
 
     /** 红石模式：与 RS 原版机器一致地循环 忽略 → 高电平 → 低电平（服务端权威）。 */
@@ -412,6 +483,17 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         if (id == cretae.cookiewyq.rs_create_compat.support.RsccRedstoneMode.BUTTON_ID) {
             if (block != null && !block.getLevel().isClientSide()) {
                 block.setRedstoneMode(block.getRedstoneMode().toggle());
+            }
+            return true;
+        }
+        if (id == BUTTON_SHOW_RANGE) {
+            // 与范围充电器同一条纪律：先校验菜单仍然有效（方块实体身份 / 维度 / 距离），
+            // 再让方块实体自己组「此刻真正在扫的几何」快照回给这个玩家。
+            // ★ 客户端不发坐标、不发半径：它没有这些数据（block == null），也不该猜。
+            if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
+                && block != null && block.getLevel() != null && !block.getLevel().isClientSide()
+                && stillValid(player)) {
+                block.sendCollectionRangeOutline(serverPlayer, containerId);
             }
             return true;
         }
@@ -432,12 +514,8 @@ public class CollectionCacheMenu extends AbstractContainerMenu
             && button == 0 && (clickType == ClickType.PICKUP || clickType == ClickType.QUICK_MOVE)) {
             if (block != null && !block.getLevel().isClientSide()) {
                 final int markerIndex = globalIndex(slotId);
-                final ItemStack carried = getCarried();
-                if (carried.isEmpty()) {
-                    block.removeMarker(markerIndex);
-                } else {
-                    block.tryAddMarker(markerIndex, carried);
-                }
+                // 第 101 轮：走「当前编辑上下文」钩子 —— 基础版写全局匹配区，高级版写当前选中区域的过滤器
+                writeMarkerAt(markerIndex, getCarried());
                 syncMarkers();
             }
             return;
@@ -465,7 +543,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         if (markerIndex < 0 || markerIndex >= MATCH_CAPACITY) {
             return;
         }
-        block.setMarkerConfig(markerIndex, fluid, id, nbt, amount, matchNbt, tags);
+        applyMarkerConfig(markerIndex, fluid, id, nbt, amount, matchNbt, tags);
         syncMarkers();
     }
 
@@ -474,10 +552,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         if (block == null || block.getLevel().isClientSide()) {
             return;
         }
-        if (markerIndex < 0 || markerIndex >= block.getMarkerCount()) {
-            return;
-        }
-        if (block.setMarkerTag(markerIndex, tags)) {
+        if (applyMarkerTags(markerIndex, tags)) {
             syncMarkers();
         }
     }
@@ -488,10 +563,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         if (block == null || block.getLevel().isClientSide()) {
             return;
         }
-        if (markerIndex < 0 || markerIndex >= block.getMarkerCount()) {
-            return;
-        }
-        block.setMarkerConfig(markerIndex, amount, matchNbt, block.getMarkerTags(markerIndex));
+        applyMarkerConfig(markerIndex, amount, matchNbt, null);
         syncMarkers();
     }
 
@@ -796,7 +868,77 @@ public class CollectionCacheMenu extends AbstractContainerMenu
 
     /** 匹配区某下标的条目（客户端为同步包内容，服务端为方块实体真值）。 */
     public MarkerEntry getMarkerEntry(final int markerIndex) {
-        return block != null ? block.getMarkerEntry(markerIndex) : MarkerEntry.EMPTY;
+        return block != null ? markerEntryAt(markerIndex) : MarkerEntry.EMPTY;
+    }
+
+    /**
+     * 第 101 轮状态行：本轮「为什么没在吸」的状态码（0 = 正常）。
+     * <p>取值见 {@code CollectionCacheBlockEntity#ABSORB_STATUS_*}；服务端每轮扫描后算好、
+     * 经数据槽 29 同步，客户端只负责翻成一句人话（{@code CollectionCacheScreen#absorbStatusText()}）。</p>
+     */
+    public int getAbsorbStatus() {
+        return data.get(DATA_ABSORB_STATUS);
+    }
+
+    /** 状态附加位：1 = 有命中但没凑够某条标记的数量门槛。 */
+    public int getAbsorbStatusArg() {
+        return data.get(DATA_ABSORB_STATUS_ARG);
+    }
+
+    // ==================== 「当前编辑上下文」钩子（第 101 轮 P1：高级版逐区域过滤器） ====================
+    //
+    // 基础版：上下文恒为「全局匹配区」，下面 5 个钩子的实现就是原来直接调 block.* 的那几行（逐字等价）。
+    // 高级版：上下文 = 当前选中的区域（editingArea），ghost 窗口显示 / 读写的都是该区域的过滤器。
+    // 这样「逐区域编辑」不需要第二套 ghost 槽位机制，48 格匹配窗口直接复用（含标记配置子界面）。
+
+    /** 当前上下文可见窗口的条目（默认 = 全局匹配区窗口）。 */
+    protected java.util.List<MarkerEntry> markerWindowEntries(final int start, final int count) {
+        return block.getMarkerWindowEntries(start, count);
+    }
+
+    /** 当前上下文某下标的条目。 */
+    protected MarkerEntry markerEntryAt(final int markerIndex) {
+        return block.getMarkerEntry(markerIndex);
+    }
+
+    /** 当前上下文写入 / 清除一条 ghost 标记（空堆 = 清除）。 */
+    protected void writeMarkerAt(final int markerIndex, final ItemStack carried) {
+        if (carried.isEmpty()) {
+            block.removeMarker(markerIndex);
+        } else {
+            block.tryAddMarker(markerIndex, carried);
+        }
+    }
+
+    /** 当前上下文「Shift + 左键」写入一条 ghost 标记（数量默认 1）。 */
+    protected CollectionCacheBlockEntity.MarkerAddResult addMarkerFromUi(final ItemStack stack) {
+        return block.addMarkerForUi(stack);
+    }
+
+    /** 当前上下文更新某条标记的数量 / 严格 NBT / 标签集合。 */
+    protected void applyMarkerConfig(final int markerIndex, final long amount, final boolean matchNbt,
+                                     @Nullable final java.util.List<ResourceLocation> tags) {
+        block.setMarkerConfig(markerIndex, amount, matchNbt,
+            tags != null ? tags : block.getMarkerTags(markerIndex));
+    }
+
+    /** 当前上下文应用「整条标记」的配置（物品 / 流体 / 数据组件 / 数量 / 标签）。 */
+    protected void applyMarkerConfig(final int markerIndex, final boolean fluid,
+                                     @Nullable final ResourceLocation id, @Nullable final CompoundTag nbt,
+                                     final long amount, final boolean matchNbt,
+                                     final java.util.List<ResourceLocation> tags) {
+        block.setMarkerConfig(markerIndex, fluid, id, nbt, amount, matchNbt, tags);
+    }
+
+    /** 当前上下文设置某条标记的标签集合。 */
+    protected boolean applyMarkerTags(final int markerIndex,
+                                      final java.util.List<ResourceLocation> tags) {
+        return block.setMarkerTag(markerIndex, tags);
+    }
+
+    /** 当前上下文的有效条目数（状态行 / 诊断用）。 */
+    public int editingContextMarkerCount() {
+        return block == null ? 0 : block.getMarkerCount();
     }
 
     /** 当前匹配区可见窗口第一条的全局下标（= 页偏移 × 每页 48 格）。 */
@@ -813,7 +955,7 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         if (block != null && serverPlayer != null) {
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer,
                 SyncCollectionMarkersPacket.of(getMatchWindowStart(),
-                    block.getMarkerWindowEntries(getMatchWindowStart(), MATCH_WINDOW),
+                    markerWindowEntries(getMatchWindowStart(), MATCH_WINDOW),
                     block.getMarkerDestroyWindow(getMatchWindowStart(), MATCH_WINDOW),
                     block.getFluidCacheEntries(),
                     block.getBlockedItems(), block.getBlockedFluids(),
@@ -829,15 +971,21 @@ public class CollectionCacheMenu extends AbstractContainerMenu
      * <p><b>本轮修复（用户第 ③ 条）</b>：{@code tags} 非空时，除具体资源 id 外还把<b>标签集合</b>
      * 一并写进「按标签阻塞」名单 —— 于是「按标签注册的匹配条目」点阻塞后，
      * 属于该标签的<b>所有</b>资源（含金板）都被挡住，不再瞬间回流进网络。</p>
+     * <p><b>第 117 轮</b>：返回 {@link CollectionCacheBlockEntity.BlockEditResult} 而不是 void ——
+     * 名单有条数上限（{@code CollectionBlockedLimits}），「满了被拒」必须能被上层区分出来并提示玩家，
+     * 否则就是「点了没反应」。无论结果如何都会 {@link #syncMarkers()} 回传权威名单，
+     * 客户端那份乐观更新的状态因此不会撒谎。</p>
      */
-    public void setBlocked(final boolean fluid, final ResourceLocation id, final boolean blocked,
-                           @Nullable final List<ResourceLocation> tags) {
+    public CollectionCacheBlockEntity.BlockEditResult setBlocked(final boolean fluid, final ResourceLocation id,
+                                                                 final boolean blocked,
+                                                                 @Nullable final List<ResourceLocation> tags) {
         if (block == null || block.getLevel() == null || block.getLevel().isClientSide() || id == null) {
-            return;
+            return CollectionCacheBlockEntity.BlockEditResult.UNCHANGED;
         }
-        block.setBlocked(fluid, id, blocked);
-        block.setBlockedTags(fluid, tags, blocked);
+        final CollectionCacheBlockEntity.BlockEditResult result =
+            block.applyBlockedEdit(fluid, id, blocked, tags);
         syncMarkers();
+        return result;
     }
 
     /** 兼容重载：只切换具体资源 id 的阻塞（不涉及标签）。 */
@@ -876,6 +1024,16 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         }
     }
 
+    /**
+     * 服务端玩家（第 106 轮：高级版要在 {@code broadcastChanges} 里推送「区域列表快照」，
+     * 而 {@code serverPlayer} 是本类私有字段 —— 用一个只读 getter 暴露，绝不让子类自己再找一遍）。
+     * <p>客户端恒为 {@code null}（客户端不持有 ServerPlayer）。</p>
+     */
+    @Nullable
+    protected net.minecraft.server.level.ServerPlayer rscc$getServerPlayer() {
+        return serverPlayer;
+    }
+
     /** 按「containerMenu == this」反查当前打开本菜单的服务端玩家（无则 null）。 */
     @Nullable
     private net.minecraft.server.level.ServerPlayer findPlayer() {
@@ -899,6 +1057,26 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         }
     }
 
+    /**
+     * Shift 点击搬运。
+     *
+     * <h2>2026-10-25（第 95 轮用户反馈第 13 条）：shift + 单击 = <b>写标记</b>，不再塞物品</h2>
+     * <p>用户原话：「更改一个默认行为……他在处理 shift 加单击转移物品操作时……默认操作应该是标记」。
+     * 旧实现把玩家背包里 Shift 点击的整堆物品<b>直接塞进缓存区</b>（见 {@code block.insertIntoCache}），
+     * 于是「我想标记这个物品」这个最常用的动作反而会把物品搬走。现在的口径：</p>
+     * <ul>
+     *     <li><b>Shift + 左键（玩家背包 → 本界面）= 在匹配区写一条 ghost 标记</b>：只记「要吸什么」，
+     *         <b>不消耗、不移动</b>该堆物品。需求数量默认 <b>1</b>（「有就收」；第 96 轮从「手持件数」
+     *         改成 1 —— 旧口径把整组件数当成「凑够才吸」的门槛，逐件投料永远收不进来），
+     *         想要「凑够 N 件再收」可在条目标记界面里把数量改成 N；</li>
+     *     <li><b>唯一例外：RS 升级物品</b>（速度 / 堆叠 / 范围 / 创造范围）仍旧进升级槽 ——
+     *         那是「塞东西」而不是「标记」，两者不会冲突（升级物品不该出现在匹配区里）；</li>
+     *     <li><b>要塞物品进缓存</b>走：① 普通左键把物品<b>拖进</b>缓存区可见格；
+     *         ② 漏斗 / 管道经「输入面」推入（界面里逐面开关）。</li>
+     * </ul>
+     * <p>写在匹配区的哪一格：第一个空位（{@link CollectionCacheBlockEntity#tryAddMarker(int, ItemStack)}
+     * 传 {@code -1} 即「自动找空位」）；翻到后面页时不会把标记拉回第一页。</p>
+     */
     @Override
     public ItemStack quickMoveStack(final Player player, final int index) {
         if (index < 0 || index >= slots.size()) {
@@ -911,21 +1089,36 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         final ItemStack stackInSlot = slot.getItem();
         final ItemStack copy = stackInSlot.copy();
         if (index >= PLAYER_START) {
-            // 玩家背包 → 升级槽（若为允许的升级）否则直接塞入缓存（缓存区不必全部可见）
-            if (block == null || block.getLevel().isClientSide()) {
+            // 玩家背包 → 升级槽（仅限允许的升级）/ 匹配标记（其余一切）
+            if (block == null || block.getLevel() == null || block.getLevel().isClientSide()) {
                 return ItemStack.EMPTY;
             }
-            boolean moved = false;
             if (isAllowedUpgrade(stackInSlot)) {
-                moved = moveItemStackTo(stackInSlot, UPGRADE_START, UPGRADE_START + UPGRADE_COUNT, false);
-            }
-            if (!moved) {
-                final ItemStack remainder = block.insertIntoCache(stackInSlot);
-                if (remainder.getCount() == stackInSlot.getCount()) {
+                if (!moveItemStackTo(stackInSlot, UPGRADE_START, UPGRADE_START + UPGRADE_COUNT, false)) {
+                    // 升级槽满：**不移动、也不写标记**（升级物品不是「要吸的东西」）。
+                    // 返回值必须是 EMPTY —— 见下方 ghost 分支的契约说明。
                     return ItemStack.EMPTY;
                 }
-                slot.set(remainder);
+                if (slot.getItem().isEmpty()) {
+                    slot.setByPlayer(ItemStack.EMPTY);
+                } else {
+                    slot.setChanged();
+                }
+                return copy;
             }
+            // 默认行为：写标记（ghost）。物品一格都不动。
+            writeMarkerFromPlayerSlot(player, stackInSlot);
+            // ⚠ 返回值契约（第 95 轮交付前复核抓到的 P0）：原版 AbstractContainerMenu#doClick 的
+            // QUICK_MOVE 分支是
+            //     ItemStack r = quickMoveStack(player, slotId);
+            //     while (!r.isEmpty() && ItemStack.isSameItem(slot.getItem(), r)) {
+            //         r = quickMoveStack(player, slotId);
+            //     }
+            // 而 ItemStack.isSameItem 只比物品种类、不比数量。ghost 分支既不移动也不消耗源槽，
+            // 若这里返回非空的 copy，客户端/服务端就会在 while 里**无限循环**（整合端整局冻结、
+            // 专服被看门狗崩掉；而且该手势正是本轮新增的默认行为）。因此「没搬动任何东西」的
+            // 分支必须返回 EMPTY —— 提示由 writeMarkerFromPlayerSlot 自己的 actionbar 负责。
+            return ItemStack.EMPTY;
         } else {
             // 方块槽（窗口 / 升级） → 玩家背包
             if (!moveItemStackTo(stackInSlot, PLAYER_START, PLAYER_START + 36, true)) {
@@ -939,6 +1132,52 @@ public class CollectionCacheMenu extends AbstractContainerMenu
         }
         return copy;
     }
+
+    /**
+     * 把玩家 Shift 点击的那一堆写进匹配区（ghost 标记；不消耗物品、不移动物品），并给玩家一句反馈。
+     * <p>失败原因要分开说，否则玩家只会看到「点了没反应」：已标记过 / 已被标签过滤器覆盖 / 匹配区满 /
+     * （第 114 轮）这个物品的数据太大、写进去会把整张标记表撑过体积上限。</p>
+     */
+    private boolean writeMarkerFromPlayerSlot(final Player player, final ItemStack stack) {
+        if (stack.isEmpty() || block == null) {
+            return false;
+        }
+        switch (addMarkerFromUi(stack)) {
+            case OK -> {
+                // 第 96 轮诊断：界面「写标记」这条路径真的落地了（`[rscc-collect]` 会把它算进「动过的路径」）
+                block.noteCollectPath(CollectionCacheBlockEntity.PATH_UI_MARK);
+                syncMarkers();
+                // 数量必须是条目的**需求数量**（= CollectionCacheBlockEntity.MIN_UI_MARK_AMOUNT），
+                // 不能写手持件数：界面写标记已经不再用「这一堆多少件」当门槛了。
+                notifyPlayer(player, LANG_MARK + "added", stack.getHoverName(),
+                    CollectionCacheBlockEntity.MIN_UI_MARK_AMOUNT);
+                return true;
+            }
+            case DUPLICATE -> notifyPlayer(player, LANG_ALREADY_MARKED);
+            case COVERED_BY_TAG -> notifyPlayer(player, LANG_MARK + "covered_by_tag");
+            case FULL -> notifyPlayer(player, LANG_MARK + "full", CollectionCacheMenu.MATCH_CAPACITY);
+            // 第 114 轮：单条数据太大 / 整表超体积上限。必须单独说，否则玩家会以为是「匹配区满」去删标记，
+            // 结果删光了也腾不出空间（上限是按字节算的，不是按格数算的）。
+            // 文案用「线上字节」口径（≈64 KB），不是堆估算的 512 KB。
+            case TOO_COMPLEX -> notifyPlayer(player, LANG_MARK + "too_complex",
+                cretae.cookiewyq.rs_create_compat.support.MarkerBudget.MAX_TOTAL_WIRE_BYTES / 1024);
+            case INVALID -> notifyPlayer(player, LANG_MARK + "invalid");
+        }
+        return false;
+    }
+
+    /** 给玩家一条 actionbar 提示（服务端调用 ⇒ 只发给本人，不会进聊天刷屏）。 */
+    private static void notifyPlayer(final Player player, final String key, final Object... args) {
+        if (player == null) {
+            return;
+        }
+        player.displayClientMessage(Component.translatable(key, args), true);
+    }
+
+    /** 匹配标记相关提示的语言键前缀（写在这里，避免散落的字符串拼错）。 */
+    private static final String LANG_MARK = "gui.rs_create_compat.collection_cache.shift_mark.";
+    /** 复用既有「已标记过」文案（直接点匹配槽时也是这一句，保持同一句话、少一个语言键）。 */
+    private static final String LANG_ALREADY_MARKED = "gui.rs_create_compat.collection_cache.duplicate";
 
     private static boolean isAllowedUpgrade(final ItemStack stack) {
         if (stack.isEmpty()) {
@@ -1035,6 +1274,11 @@ public class CollectionCacheMenu extends AbstractContainerMenu
      * 滚动窗口槽：按菜单当前偏移映射到匹配区（ghost 标记）或缓存区（真实存储）。
      * <p>服务端（block != null）直接读写方块实体；客户端（block == null）为本地镜像槽，
      * 内容由服务端槽位同步包写入，避免偏移变更期间索引错位。</p>
+     * <p><b>第 96 轮：缓存侧所有读写都先过 {@link #cacheIndex()} 的有效性判定</b> ——
+     * 最后一页比 48 格短时，多出来的窗口格映射到容器尾部之外，旧实现会让
+     * {@code SimpleContainer#getItem(越界下标)} 抛 {@link IndexOutOfBoundsException}，
+     * 服务端的点击被 {@code AbstractContainerMenu#clicked} 的 try/catch 吞掉（表现就是「点了没反应」），
+     * 而 {@code broadcastChanges} 每 tick 遍历槽位，没有那层 catch。越界格现在等同于空格。</p>
      */
     private static final class WindowSlot extends Slot {
         private static final Container EMPTY = new SimpleContainer(0);
@@ -1056,13 +1300,31 @@ public class CollectionCacheMenu extends AbstractContainerMenu
             return menu.globalIndex(indexInWindow);
         }
 
+        /**
+         * 缓存窗口这一格对应的容器下标：{@code -1} = 该格在本页上不存在（容器尾部之后的空格）。
+         * <p>客户端恒返回 {@code -1} 是<b>有意</b>的：客户端只用 {@link #localStack} 镜像，
+         * 不应该、也不需要自己算全局下标（它会让「本地偏移还没跟服务端对齐」的瞬间读到别的格子）。</p>
+         */
+        private int cacheIndex() {
+            return menu.block == null ? -1 : menu.cacheGlobalIndex(indexInWindow);
+        }
+
+        /** 这一格此刻是否指向缓存里真实存在的一个格。 */
+        private boolean cacheSlotExists() {
+            return menu.block != null && cacheIndex() >= 0;
+        }
+
         @Override
         public ItemStack getItem() {
             final CollectionCacheBlockEntity block = menu.block;
             if (block == null) {
                 return localStack;
             }
-            return markerRegion() ? block.getMarkerStack(global()) : block.getCache().getItem(global());
+            if (markerRegion()) {
+                return block.getMarkerStack(global());
+            }
+            final int index = cacheIndex();
+            return index < 0 ? ItemStack.EMPTY : block.getCache().getItem(index);
         }
 
         @Override
@@ -1071,7 +1333,14 @@ public class CollectionCacheMenu extends AbstractContainerMenu
             if (block == null) {
                 localStack = stack;
             } else if (!markerRegion()) {
-                block.getCache().setItem(global(), stack);
+                final int index = cacheIndex();
+                if (index >= 0) {
+                    block.getCache().setItem(index, stack);
+                    // 第 96 轮诊断：界面「放入」这条路径真的写进了缓存才记（越界空格不算）
+                    if (stack != null && !stack.isEmpty()) {
+                        block.noteCollectPath(CollectionCacheBlockEntity.PATH_UI_PUT);
+                    }
+                }
             }
             // 匹配区写入由菜单 clicked() 统一处理（ghost 标记 + 去重）
             this.setChanged();
@@ -1079,12 +1348,14 @@ public class CollectionCacheMenu extends AbstractContainerMenu
 
         @Override
         public boolean mayPlace(final ItemStack stack) {
-            return !markerRegion() && !stack.isEmpty();
+            // 越界的「空格」不可放置：否则 set() 会静默丢弃玩家的物品（比报错更糟）
+            return !markerRegion() && stack != null && !stack.isEmpty()
+                && (menu.block == null || cacheSlotExists());
         }
 
         @Override
         public boolean mayPickup(final Player player) {
-            return !markerRegion();
+            return !markerRegion() && (menu.block == null || cacheSlotExists());
         }
 
         @Override
@@ -1093,13 +1364,27 @@ public class CollectionCacheMenu extends AbstractContainerMenu
             if (block == null || markerRegion()) {
                 return ItemStack.EMPTY;
             }
-            return block.getCache().removeItem(global(), amount);
+            final int index = cacheIndex();
+            if (index < 0) {
+                return ItemStack.EMPTY;
+            }
+            final ItemStack removed = block.getCache().removeItem(index, amount);
+            if (removed != null && !removed.isEmpty()) {
+                block.noteCollectPath(CollectionCacheBlockEntity.PATH_UI_TAKE);
+            }
+            return removed == null ? ItemStack.EMPTY : removed;
         }
 
         @Override
         public int getMaxStackSize() {
             final CollectionCacheBlockEntity block = menu.block;
-            return markerRegion() ? 1 : (block != null ? block.getCacheSlotCapacity() : 64);
+            if (markerRegion()) {
+                return 1;
+            }
+            if (block != null && !cacheSlotExists()) {
+                return 1; // 不存在的格：给一个无意义的 1，确保不会有人往上叠东西
+            }
+            return block != null ? block.getCacheSlotCapacity() : 64;
         }
 
         @Override

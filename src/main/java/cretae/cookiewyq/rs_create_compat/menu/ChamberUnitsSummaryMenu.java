@@ -9,10 +9,13 @@ import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 
 /**
@@ -35,6 +38,12 @@ import java.util.List;
  * 该仓 54 格单元样板槽的一个<b>滑动窗口</b>（样板多于 4 张时按 {@link #POLL_TICKS} 轮询前移）；
  * 分页切换只是把各行的目标执行仓重新指过去，槽位下标保持不变，因此原版槽位同步（
  * {@code broadcastChanges} 的逐格 diff）会自动把新内容推给客户端，无需重发菜单。</p>
+ *
+ * <p><b>滑动窗口的点击安全（第 120 轮 F3）</b>：轮转只在「手上没拿东西 + 本行最近没被点过
+ * （{@link #INTERACT_QUIET_TICKS}）+ 本行不在刚轮转的安全窗内（{@link #ROTATE_SETTLE_TICKS}）」
+ * 时才发生；安全窗内该行窗口格上的点击一律不执行并立刻全量重同步，因此<b>不会出现「看着 A 点到 B」</b>。
+ * 一次点击的取用与写回共用同一份映射快照（{@link #beginClickSnapshot()}），不会因为中途重建映射
+ * 把「放回去」的样板挪到别的槽。</p>
  *
  * <p><b>服务端权威</b>：单元格的「放」统一走
  * {@link SequenceExecutionChamberBlockEntity#acceptsUnit(ItemStack)}（必须是单元样板 && 执行仓已绑定 &&
@@ -95,8 +104,40 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
     /** 提示行（网络为空 / 轮询说明 / 选中断言）的 y。 */
     public static final int HINT_Y = 132;
 
-    /** 轮询周期（服务端 tick）：每 20 tick 把每行的样板窗口前移一格。 */
+    /**
+     * 轮询周期（<b>游戏时间</b> tick）：每 20 游戏 tick 把每行的样板窗口前移一格。
+     * <p><b>为什么按游戏时间而不是 {@code broadcastChanges} 的调用次数（第 121 轮 ②）</b>：
+     * 服务端每个 tick 会调一次 {@code broadcastChanges}，但<b>每次点击之后还会再调一次</b>
+     * （{@code ServerGamePacketListenerImpl} 处理完容器点击就补一次同步）。旧实现把
+     * {@code pollCounter} 当「调用次数」累加 ⇒ 调用次数 ≠ tick 数：玩家频繁点击时 20 次调用
+     * 可能只跨了几 tick，轮转周期远短于 1 秒，界面比设计上「更晃」，也把
+     * {@link #ROTATE_SETTLE_TICKS} 安全窗的相对占比放大（同样的操作更容易撞上被丢弃的点击）。
+     * 改成按 {@link #nowTick()}（{@code level.getGameTime()}）计后，轮转节奏只由游戏时间决定，
+     * 与点击频率彻底解耦 —— 玩家点得再快，窗口也是每 20 tick 动一格。</p>
+     */
     public static final int POLL_TICKS = 20;
+
+    /**
+     * 「交互安静期」（服务端 tick）：玩家最近一次点过本行窗口格的时间落在这么短的窗口内时，
+     * 本行<b>先不自动轮转</b>——把「取出来 / 放回去」这类连续操作留在同一份映射上。
+     * <p>取值理由：本菜单最小的一次往返（左键拿 → 左键放回）通常在 250 ms 内，8 tick = 400 ms
+     * 足够覆盖；轮转周期本身是 20 tick，安静期只推迟、不会让轮转看起来「停了」。</p>
+     */
+    public static final int INTERACT_QUIET_TICKS = 8;
+
+    /**
+     * 「轮转安全窗」（服务端 tick）：一行<b>刚轮转完</b>的这么多个 tick 内，该行窗口格上的点击
+     * <b>一律不执行</b>（改为立即全量重同步）——这是「看着 A 点到 B」的根治闸。
+     *
+     * <p><b>为什么必须挡、而不是「改按轮转前的映射执行」</b>：客户端画出来的内容比服务端晚一个
+     * 单程网络延迟，点击包跨在轮转那一拍两端时，服务端<b>无法区分</b>玩家看到的是轮转前还是轮转后
+     * 的内容；按哪一份执行都有一半是错的。两害相权：<b>忽略一次点击</b>（紧随一次全量重同步，
+     * 玩家立刻看到真值、可以再点）远好于<b>换给玩家另一张样板</b>（正是本轮要修的 bug）。</p>
+     *
+     * <p>4 tick = 200 ms 覆盖同机 / 局域网 / 一般联机的单程延迟；更差的网络下仍有极小残余窗口
+     * （见 {@code docs/ROUND120_SUMMARY_WINDOW.md} 的未验证清单）。</p>
+     */
+    public static final int ROTATE_SETTLE_TICKS = 4;
 
     /** 界面标题语言键（菜单提供者与界面共用）。 */
     public static final String TITLE_KEY = "gui.rs_create_compat.sequence_pattern_terminal.summary.title";
@@ -107,13 +148,55 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
     private final SequencePatternTerminalBlockEntity terminal;
     /** 本页首台执行仓的全局下标 = {@code page * VISIBLE_ROWS}（<b>仅在服务端有意义</b>）。 */
     private int page;
-    /** 轮询计数。 */
-    private int pollCounter;
+    /**
+     * 上一次「真正轮转」的游戏时刻（{@link #nowTick()} 口径；{@code -1} = 还没有基准）。
+     * <p>第 121 轮 ②：这里原先是一个按 {@code broadcastChanges} <b>调用次数</b>累加的
+     * {@code pollCounter}，而原版每次点击后会额外调一次 {@code broadcastChanges} ⇒
+     * 点击越频繁轮转越快（周期短于设计值）。现在只记游戏时刻，判据是
+     * {@code now - lastPollTick >= POLL_TICKS}，与调用次数无关。</p>
+     */
+    private long lastPollTick = -1L;
     /** 每行滑动窗口起点（服务端权威）。 */
     private final int[] rowStart = new int[VISIBLE_ROWS];
     /** 每行「非空单元样板槽」的压缩下标表与条目数（服务端每 tick 重建，映射真实槽位）。 */
     private final int[][] rowSlotMap = new int[VISIBLE_ROWS][SequenceExecutionChamberBlockEntity.UNIT_SLOTS];
+    /** 压缩表条目数（含「洞」，用于窗口映射的下标取模）。 */
     private final int[] rowSlotCount = new int[VISIBLE_ROWS];
+    /** 本行真实样板张数（不含「洞」，用于轮转判据：只有「样板多于 4 张」才值得轮转）。 */
+    private final int[] rowPatternCount = new int[VISIBLE_ROWS];
+    /**
+     * 每行「最近一次被玩家点击」的 tick（{@link #nowTick()} 口径；{@code -1} = 从未）。
+     * <p>用途见 {@link #shouldAdvanceRow}：最近交互过的行先不轮转（本轮 F3 的「方案 A」）。</p>
+     */
+    private final long[] rowLastClickTick = new long[VISIBLE_ROWS];
+    /** 每行「最近一次自动轮转」的 tick（{@code -1} = 从未）；用于 {@link #isRotateSettling} 安全窗。 */
+    private final long[] rowLastRotateTick = new long[VISIBLE_ROWS];
+
+    /**
+     * 每行「洞」：玩家刚刚从这个真实样板槽里把样板拿走、还没放回（本轮转周期内有效）。
+     * <p><b>为什么需要</b>：窗口是「非空槽压缩后的表」，玩家拿走一格后压缩表会整体前移一位，
+     * 于是同一格立刻显示成<b>相邻那张样板</b>；玩家「放回去」就会和相邻那张<b>交换</b>，
+     * 样板落到同一台仓的另一个槽（第 119 轮复核 F3 明确点到的现象）。把被拿空的槽在本轮转周期内
+     * 当作「空位」保留在压缩表里，其它格<b>一个都不动</b>，放回去自然落回原槽。</p>
+     * <p>生命周期：下一次该行轮转 / 换页 / 该行的执行仓换了 ⇒ 清空（洞不跨周期，避免永久留空位）。</p>
+     */
+    private final BitSet[] rowHoles = new BitSet[VISIBLE_ROWS];
+
+    /**
+     * 一次点击内的映射快照（{@link #beginClickSnapshot()} / {@link #endClickSnapshot()} 维护）。
+     * <p><b>为什么需要</b>：旧实现里 {@code removeItem} / {@code setItem} 都会当场
+     * {@link #rebuildWindow()}，于是同一次点击的「取用」与「写回」可能落在<b>两份不同映射</b>上
+     * ——「取出来又放回去」就会落到同一台仓的另一个槽。快照让一次点击从头到尾只看同一份
+     * {@code rowStart / rowSlotCount / rowSlotMap}。</p>
+     * <p>{@link #clickDepth} 处理嵌套（原版 Shift 点击 = {@code clicked} → {@code quickMoveStack}）。</p>
+     */
+    private int clickDepth;
+    private boolean clickSnapshotActive;
+    private final int[] snapStart = new int[VISIBLE_ROWS];
+    private final int[] snapCount = new int[VISIBLE_ROWS];
+    private final int[][] snapMap = new int[VISIBLE_ROWS][SequenceExecutionChamberBlockEntity.UNIT_SLOTS];
+    /** 下一次 {@link #broadcastChanges()} 要做一次全量重同步（丢弃过一次「跨轮转的点击」）。 */
+    private boolean pendingFullResync;
     /** 20 个窗口格共用的容器（服务端解析到真实执行仓，客户端落到本地镜像）。 */
     private final WindowContainer windowContainer;
     /**
@@ -132,6 +215,12 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
         super(RS_Create_Compat.CHAMBER_UNITS_SUMMARY_MENU.get(), id);
         this.terminal = terminal;
         this.windowContainer = new WindowContainer();
+        // 「从未交互 / 从未轮转」用 -1 表示（0 是合法游戏时刻，不能用 0 当哨兵）
+        Arrays.fill(this.rowLastClickTick, -1L);
+        Arrays.fill(this.rowLastRotateTick, -1L);
+        for (int row = 0; row < VISIBLE_ROWS; row++) {
+            this.rowHoles[row] = new BitSet(SequenceExecutionChamberBlockEntity.UNIT_SLOTS);
+        }
 
         // ① 执行仓单元样板窗口：5 行 × 4 格，全是真槽位（可点击取 / Shift 快速移动 / 拖拽放置）
         for (int row = 0; row < VISIBLE_ROWS; row++) {
@@ -196,6 +285,8 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
     /** 服务端：切换分页（越界自动收敛）。 */
     public void setPage(final int newPage) {
         page = Math.max(0, Math.min(newPage, maxPage()));
+        // 换页 = 每行的目标执行仓全变了：上一页留下的「洞」下标不再有意义
+        clearAllHoles();
         rebuildWindow();
     }
 
@@ -222,18 +313,113 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
 
     /**
      * 第 row 行第 col 格映射到的<b>真实单元样板槽下标</b>；
-     * 无仓 / 该仓一张样板都没有时返回 -1（表示该格为空）。
+     * 无仓 / 该仓一张样板都没有 / 该格超出本行样板张数（不足 4 张时的空位）时返回 -1（表示该格为空）。
      * <p>窗口只压缩「有样板的槽」，因此样板稀疏（例如只用了第 1、第 30 格）轮询才有意义。</p>
+     * <p><b>映射只用一次快照</b>：点击处理期间（{@link #clickSnapshotActive}）一律读
+     * {@link #snapStart} / {@link #snapCount} / {@link #snapMap}，保证同一次点击的「取用」与
+     * 「写回」指向同一张样板（旧实现在 {@code setItem} 里先 {@code rebuildWindow()} 再按新映射写，
+     * 会把放回去的样板挪到另一个槽）。</p>
      */
     int mapToUnitSlot(final int row, final int col) {
         if (row < 0 || row >= VISIBLE_ROWS || col < 0 || col >= ROW_COLS) {
             return -1;
         }
-        final int count = rowSlotCount[row];
-        if (count <= 0) {
+        final boolean snapshot = clickSnapshotActive;
+        final int count = snapshot ? snapCount[row] : rowSlotCount[row];
+        final int index = windowIndex(snapshot ? snapStart[row] : rowStart[row], col, count);
+        if (index < 0) {
             return -1;
         }
-        return rowSlotMap[row][Math.floorMod(rowStart[row] + col, count)];
+        final int[] map = snapshot ? snapMap[row] : rowSlotMap[row];
+        return index < map.length ? map[index] : -1;
+    }
+
+    // ==================== 纯函数：窗口轮转 / 映射（自检可直接复刻） ====================
+
+    /**
+     * 窗口格 → 压缩下标表里的第几项（<b>纯函数</b>）。
+     * <p>本行样板不足 {@link #ROW_COLS} 张时，超出的格返回 {@code -1}（空位）——
+     * 旧实现用 {@code floorMod(start + col, count)} 直接取模，会导致「只有 1 张样板时 4 格显示同一张、
+     * 只有 2 张时两两重复」；而 {@code WindowContainer#setItem} 里「空格子 ⇒ 放进第一个空样板槽」
+     * 那条分支正是按「不足 4 张 ⇒ 有空位」写的，两者口径现在一致了。</p>
+     */
+    static int windowIndex(final int start, final int col, final int count) {
+        if (count <= 0 || col < 0 || col >= count || col >= ROW_COLS) {
+            return -1;
+        }
+        return Math.floorMod(start + col, count);
+    }
+
+    /**
+     * 一行窗口本轮该不该前移一格（<b>纯函数</b>，把「暂停条件」集中成一条可复刻的判据）。
+     * <ul>
+     *     <li>本行样板不比 4 格多 ⇒ 不轮转（全看得见，轮转只是无意义地晃动，见设计文档 §7.3）；</li>
+     *     <li>玩家手上拿着东西 ⇒ 不轮转（原有限制，保留）；</li>
+     *     <li>玩家最近 {@link #INTERACT_QUIET_TICKS} 内点过本行 ⇒ 不轮转（本轮新增）；</li>
+     *     <li>本行上一次轮转还在 {@link #ROTATE_SETTLE_TICKS} 安全窗内 ⇒ 不轮转（本轮新增）。</li>
+     * </ul>
+     */
+    static boolean shouldAdvanceRow(final int slotCount, final boolean carriedEmpty, final long now,
+                                    final long lastClickTick, final long lastRotateTick) {
+        if (slotCount <= ROW_COLS || !carriedEmpty) {
+            return false;
+        }
+        if (lastClickTick >= 0 && now - lastClickTick < INTERACT_QUIET_TICKS) {
+            return false;
+        }
+        return !isRotateSettling(now, lastRotateTick);
+    }
+
+    /** 前移一格（<b>纯函数</b>）：起点始终留在 {@code 0..count-1}，不会溢出成负数。 */
+    static int advanceStart(final int start, final int count) {
+        return count <= 0 ? 0 : Math.floorMod(start + 1, count);
+    }
+
+    /**
+     * 该行是否处在「刚轮转完、客户端可能还没收到新映射」的安全窗内（<b>纯函数</b>）。
+     * <p>安全窗内该行窗口格上的点击一律不执行（见 {@link #ROTATE_SETTLE_TICKS}）。</p>
+     */
+    static boolean isRotateSettling(final long now, final long lastRotateTick) {
+        return lastRotateTick >= 0 && now - lastRotateTick <= ROTATE_SETTLE_TICKS;
+    }
+
+    /** 窗口格下标属于哪一行；不是本菜单窗口格（或越界）返回 -1。 */
+    static int windowRowOf(final int slotId) {
+        return slotId >= 0 && slotId < WINDOW_SLOTS ? slotId / ROW_COLS : -1;
+    }
+
+    /**
+     * 服务端当前游戏时刻（tick）。
+     * <p>客户端菜单没有方块实体引用 / 方块实体不在任何维度里时返回 {@code -1}（= 时刻未知）。
+     * 用哨兵而不是 0，是为了避免「时钟从 0 开始」与「未知」混淆：未知时所有时间窗口判据一律
+     * 按「不满足」处理（宁可这拍不轮转，也不能拿 {-1} 去算出诡异的「刚交互过」）。</p>
+     */
+    private long nowTick() {
+        return terminal == null || terminal.getLevel() == null
+            ? -1L : terminal.getLevel().getGameTime();
+    }
+
+    /** 开始一次点击的映射快照（可嵌套：{@code clicked} → {@code quickMoveStack} 只快照一次）。 */
+    private void beginClickSnapshot() {
+        if (terminal == null || clickDepth++ > 0) {
+            return;
+        }
+        for (int row = 0; row < VISIBLE_ROWS; row++) {
+            snapStart[row] = rowStart[row];
+            snapCount[row] = rowSlotCount[row];
+            System.arraycopy(rowSlotMap[row], 0, snapMap[row], 0, snapMap[row].length);
+        }
+        clickSnapshotActive = true;
+    }
+
+    /** 结束一次点击的映射快照；最外层结束时恢复「按最新映射读」。 */
+    private void endClickSnapshot() {
+        if (terminal == null || clickDepth <= 0) {
+            return;
+        }
+        if (--clickDepth == 0) {
+            clickSnapshotActive = false;
+        }
     }
 
     /** 该执行仓单元样板槽的第一个空格（全满返回 -1）。 */
@@ -246,9 +432,22 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
         return -1;
     }
 
-    /** 刷新执行仓缓存快照（客户端 / 未接入网络 → 空列表）。 */
+    /** 刷新执行仓缓存快照（客户端 / 未接入网络 → 空列表）；某一行换了执行仓时该行的洞作废。 */
     private void refreshChambers() {
-        chamberCache = terminal == null ? List.of() : terminal.networkChambers();
+        final List<SequenceExecutionChamberBlockEntity> next =
+            terminal == null ? List.of() : terminal.networkChambers();
+        if (!chamberCache.equals(next)) {
+            // 分页边界 / 网络内增删执行仓会改变「第 row 行是谁」，旧洞的下标就失去意义了
+            clearAllHoles();
+        }
+        chamberCache = next;
+    }
+
+    /** 清空所有行的「洞」（轮转 / 换页 / 行换了执行仓时调用）。 */
+    private void clearAllHoles() {
+        for (int row = 0; row < VISIBLE_ROWS; row++) {
+            rowHoles[row].clear();
+        }
     }
 
     /** 重建每行的压缩窗口映射（服务端：每 tick + 任何写入后调用，外部改动最多落后 1 tick）。 */
@@ -257,44 +456,124 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
         final List<SequenceExecutionChamberBlockEntity> chambers = chamberCache;
         for (int row = 0; row < VISIBLE_ROWS; row++) {
             rowSlotCount[row] = 0;
+            rowPatternCount[row] = 0;
             final int index = getPage() * VISIBLE_ROWS + row;
             if (index < 0 || index >= chambers.size()) {
+                rowHoles[row].clear();
                 continue;
             }
             final Container unitSlots = chambers.get(index).unitSlots;
+            final BitSet holes = rowHoles[row];
             final int[] map = rowSlotMap[row];
             int count = 0;
+            int patterns = 0;
             for (int i = 0; i < unitSlots.getContainerSize() && count < map.length; i++) {
                 // 只把「单元样板」放进窗口：序列装配总样板不属于任何单元样板界面
                 // （与「单元样板管理舱不显示总样板」同一口径、同一类型判定；旧存档里可能有，读档不做校验）。
                 // 窗口是每 tick 由服务端重建的派生视图（映射表而非固定下标契约），因此过滤不涉及两端下标对应问题。
-                if (SequenceUnitPatternItem.isUnitPattern(unitSlots.getItem(i))) {
+                final boolean pattern = SequenceUnitPatternItem.isUnitPattern(unitSlots.getItem(i));
+                if (pattern) {
+                    // 洞被重新填上（玩家放回 / 别的来源写入）⇒ 洞作废，按普通样板进表
+                    holes.clear(i);
+                    map[count++] = i;
+                    patterns++;
+                } else if (holes.get(i)) {
+                    // 「拿走还没放回」的槽在本轮转周期内仍占一个位置 ⇒ 该格显示为空，
+                    // 其余格一个都不动（旧实现会整体前移，导致「放回去」落到相邻槽）
                     map[count++] = i;
                 }
             }
             rowSlotCount[row] = count;
+            rowPatternCount[row] = patterns;
         }
     }
 
     /**
-     * 服务端每 tick 的槽位同步（原版机制调用）：<b>先轮询前移窗口、再重建映射、最后交父类做逐格 diff</b>。
-     * <p>轮询在玩家手上还拿着东西时暂停，避免「看着 A 却点到 B」的错位。</p>
+     * 服务端每 tick 的槽位同步（原版机制调用）：<b>先按闸轮转窗口、再重建映射、最后交父类做逐格 diff</b>。
+     * <p>轮转的闸门集中在纯函数 {@link #shouldAdvanceRow}：手上拿着东西、本行刚被点过、本行刚轮转过，
+     * 三种情况都不前移，避免「看着 A 却点到 B」。</p>
+     * <p><b>周期按游戏时间计（第 121 轮 ②）</b>：本方法每 tick 被调一次、<b>每次点击后还会被补调一次</b>
+     * （原版容器点击处理完会立刻同步），所以「调用次数」不等于「tick 数」。轮转只由
+     * {@code now - lastPollTick >= POLL_TICKS} 决定，点击频率不再影响节奏。</p>
      */
     @Override
     public void broadcastChanges() {
-        if (terminal != null && getCarried().isEmpty()
-            && ++pollCounter >= POLL_TICKS) {
-            pollCounter = 0;
-            for (int row = 0; row < VISIBLE_ROWS; row++) {
-                if (rowSlotCount[row] > 1) {
-                    rowStart[row]++;
+        if (terminal != null) {
+            final long now = nowTick();
+            // now < 0 = 时刻未知（拿不到方块实体的 level）：这一拍不轮转，也绝不用 -1 去更新
+            // lastPollTick / rowLastRotateTick —— 否则行状态会被写成「从未轮转」的假值，
+            // 之后所有时间窗判据都按「没有上一次轮转 / 没有交互」处理，安全窗会凭空失效。
+            if (now >= 0) {
+                if (lastPollTick < 0) {
+                    // 第 121 轮 ②：首次拿到有效时刻只对齐基准、**不**轮转 ——
+                    // 与旧实现「第 20 次调用才第一次轮转」等价，界面刚打开的那一拍不会先跳一格。
+                    lastPollTick = now;
+                } else if (now - lastPollTick >= POLL_TICKS) {
+                    lastPollTick = now;
+                    final boolean carriedEmpty = getCarried().isEmpty();
+                    for (int row = 0; row < VISIBLE_ROWS; row++) {
+                        // 轮转判据用「真实样板张数」：留了一个洞不该让只有 4 张样板的行开始晃
+                        if (!shouldAdvanceRow(rowPatternCount[row], carriedEmpty, now,
+                            rowLastClickTick[row], rowLastRotateTick[row])) {
+                            continue;
+                        }
+                        rowStart[row] = advanceStart(rowStart[row], rowPatternCount[row]);
+                        rowLastRotateTick[row] = now;
+                        // 一轮转就是「洞」周期的边界：不再保留「拿走没放回」的空位
+                        rowHoles[row].clear();
+                    }
                 }
             }
-        }
-        if (terminal != null) {
             rebuildWindow();
+            if (pendingFullResync) {
+                // 上一次点击因为「跨在轮转那一拍」被丢弃：这里把真值一次性推给客户端
+                // （内容 + 光标），客户端随即看到正确内容，且不会把这次点击的结果记在本地。
+                pendingFullResync = false;
+                broadcastFullState();
+                return;
+            }
         }
         super.broadcastChanges();
+    }
+
+    /**
+     * 原版点击入口：<b>先记「本行被点过」的时间戳，再判断该行是否处在轮转安全窗，最后才真正执行</b>。
+     * <p>三条新语义（第 120 轮 F3，见 {@code docs/ROUND120_SUMMARY_WINDOW.md}）：</p>
+     * <ol>
+     *     <li>点击本行窗口格 ⇒ 记时间戳 ⇒ 该行随后的自动轮转被推迟
+     *     {@link #INTERACT_QUIET_TICKS} tick（{@link #shouldAdvanceRow}）；</li>
+     *     <li>该行刚轮转完（{@link #ROTATE_SETTLE_TICKS} 内）⇒ <b>本次点击不执行</b>，改为立刻全量重同步。
+     *     宁可不响应，也绝不把「A 格」点成相邻那张样板；</li>
+     *     <li>其余情况：整次点击（含原版内部间接调用的 {@link #quickMoveStack}）共用一份映射快照，
+     *     「取用」与「写回」永远指向同一张样板。</li>
+     * </ol>
+     * <p>客户端菜单（{@code terminal == null}）没有轮转、也没有方块实体，原样放行。</p>
+     */
+    @Override
+    public void clicked(final int slotId, final int button, final ClickType clickType, final Player player) {
+        if (terminal == null) {
+            super.clicked(slotId, button, clickType, player);
+            return;
+        }
+        final long now = nowTick();
+        final int row = windowRowOf(slotId);
+        if (row >= 0) {
+            rowLastClickTick[row] = now;
+            if (now >= 0 && isRotateSettling(now, rowLastRotateTick[row])) {
+                pendingFullResync = true;
+                if (clickType == ClickType.QUICK_CRAFT) {
+                    // 拖拽的中间态存在菜单里，跳过一整步会让它卡在「拖拽中」：显式复位
+                    resetQuickCraft();
+                }
+                return;
+            }
+        }
+        beginClickSnapshot();
+        try {
+            super.clicked(slotId, button, clickType, player);
+        } finally {
+            endClickSnapshot();
+        }
     }
 
     /** Shift 快速移动：窗口 → 玩家背包；玩家背包 → 各执行仓窗口（放不放得下由槽位权威判定）。 */
@@ -302,6 +581,11 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
     public ItemStack quickMoveStack(final Player player, final int index) {
         if (index < 0 || index >= slots.size()) {
             return ItemStack.EMPTY;
+        }
+        // 从窗口格拿走样板同样是「一次交互」：轮转要因此让路（安全窗由 clicked 统一拦）
+        final int row = windowRowOf(index);
+        if (row >= 0 && terminal != null) {
+            rowLastClickTick[row] = nowTick();
         }
         final Slot slot = slots.get(index);
         if (slot == null || !slot.hasItem()) {
@@ -330,10 +614,9 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
         if (terminal == null || terminal.getLevel() == null) {
             return true;
         }
-        // 与终端菜单同一套有效性判定（含「高级远程终端」的虚拟方块实体特例）
-        final boolean isVirtual = terminal.getBlockPos().equals(net.minecraft.core.BlockPos.ZERO)
-            && terminal.getLevel().getBlockEntity(net.minecraft.core.BlockPos.ZERO) != terminal;
-        if (isVirtual) {
+        // 与终端菜单同一套有效性判定（含「高级远程终端」的虚拟方块实体特例）：
+        // 判据是唯一的哨兵坐标（纯常量比较，不读世界 / 不查区块 / 不看玩家位置）
+        if (cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.isVirtual(terminal)) {
             return true;
         }
         return terminal.getLevel().getBlockEntity(terminal.getBlockPos()) == terminal
@@ -396,6 +679,11 @@ public class ChamberUnitsSummaryMenu extends AbstractContainerMenu {
             }
             final ItemStack removed = chamber.unitSlots.removeItem(unitSlot, amount);
             if (!removed.isEmpty()) {
+                if (chamber.unitSlots.getItem(unitSlot).isEmpty()) {
+                    // 这一格被拿空了：在本轮转周期内留作「洞」，让「拿起又放回」落回原槽
+                    // （否则压缩表前移一位，放回去会和相邻那张样板交换位置）
+                    rowHoles[index / ROW_COLS].set(unitSlot);
+                }
                 chamber.setChanged();
                 rebuildWindow();
             }

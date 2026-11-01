@@ -288,7 +288,8 @@ public final class RsccSheathChain {
             // 这样「连锁」与既有的单格语义不会互相打架。
             return 0;
         }
-        final int added = kind.addAll(level, toSheath, infinite, !free);
+        final int added = kind.addAll(player instanceof final ServerPlayer actor ? actor : null,
+            level, toSheath, infinite, !free);
         if (added <= 0) {
             return 0;
         }
@@ -299,6 +300,24 @@ public final class RsccSheathChain {
         }
         player.displayClientMessage(Component.translatable(kind.messageKey()), true);
         return added;
+    }
+
+    /**
+     * <b>连锁规划的唯一入口</b>（本轮抽出来给「连锁应用材质」复用）：
+     * 目标格 → FTB 候选 → 同族邻接 BFS，按 {@code limit} 截断。
+     *
+     * <p><b>为什么必须共用这一份</b>：「哪些格属于同一段管线」这个口径只能有一处
+     * （{@link Family#of} / {@link #expand}）。连锁套壳与连锁改材质如果各写一份 BFS，
+     * 迟早会出现「套壳连到 40 格、改材质只连到 25 格」这种玩家无法理解的分叉。</p>
+     *
+     * @return 保序去重后的坐标；目标格本身不可套（非管线族）时返回空表
+     */
+    public static List<BlockPos> planTargets(final Level level, final BlockPos anchor,
+                                             final Collection<BlockPos> candidates, final int limit) {
+        final Family family = Family.of(level, anchor);
+        return family == null
+            ? List.of()
+            : plan(level, anchor, family, candidates, limit);
     }
 
     /**
@@ -374,9 +393,9 @@ public final class RsccSheathChain {
             }
 
             @Override
-            int addAll(final ServerLevel level, final List<BlockPos> toSheath, final boolean infinite,
-                       final boolean paid) {
-                return RsccSheaths.addAll(level, toSheath, infinite, paid);
+            int addAll(@Nullable final ServerPlayer actor, final ServerLevel level,
+                       final List<BlockPos> toSheath, final boolean infinite, final boolean paid) {
+                return RsccSheaths.addAll(actor, level, toSheath, infinite, paid);
             }
 
             @Override
@@ -392,9 +411,10 @@ public final class RsccSheathChain {
             }
 
             @Override
-            int addAll(final ServerLevel level, final List<BlockPos> toSheath, final boolean infinite,
-                       final boolean paid) {
-                // 伪装没有无限版，infinite 恒为 false；这里只转交「这次是否真的会扣框架」那一位
+            int addAll(@Nullable final ServerPlayer actor, final ServerLevel level,
+                       final List<BlockPos> toSheath, final boolean infinite, final boolean paid) {
+                // 伪装没有无限版，infinite 恒为 false；这里只转交「这次是否真的会扣框架」那一位。
+                // 伪装套壳没有对应的成就（成就表里只有分隔框架那三条），因此 actor 不用往下传。
                 return RsccCamouflage.addAll(level, toSheath, paid);
             }
         };
@@ -423,7 +443,8 @@ public final class RsccSheathChain {
         abstract boolean alreadyWrapped(Level level, BlockPos pos);
 
         /** 把这一批写进本框架的记录，返回真正<b>新增</b>的格数（幂等与守恒由被调用方保证）。 */
-        abstract int addAll(ServerLevel level, List<BlockPos> toSheath, boolean infinite, boolean paid);
+        abstract int addAll(@Nullable ServerPlayer actor, ServerLevel level, List<BlockPos> toSheath,
+                            boolean infinite, boolean paid);
 
         /** 这一件手持物品是不是「无限版」（只有分隔框架有无限版）。 */
         boolean infinite(final ItemStack stack) {

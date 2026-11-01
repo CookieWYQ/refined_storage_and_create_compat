@@ -11,6 +11,7 @@ import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotRefer
 import com.refinedmods.refinedstorage.common.content.Items;
 import com.refinedmods.refinedstorage.common.support.containermenu.ExtendedMenuProvider;
 import cretae.cookiewyq.rs_create_compat.Config;
+import cretae.cookiewyq.rs_create_compat.support.RsccTerminalLocator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -65,7 +66,18 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     public static final int MODE_SEQUENCE = 4;
     /** 模式 5：单元样板管理舱（本模组自建界面；按执行舱分组管理单元样板 + 跨仓内存合并视图）。 */
     public static final int MODE_UNIT_MANAGER = 5;
-    public static final int MODE_COUNT = 6;
+    /**
+     * 模式 6：<b>RS 网络能耗监视</b>（本模组自建只读界面：列出本网络所有耗电方块，按方块类型合并，
+     * 带坐标 / 维度 / 当前 FE/t，可选中某台在世界里高亮）。
+     *
+     * <p><b>它和其他模式的一个结构性差别</b>：能耗页<b>没有物品槽</b>，因此<b>没有容器菜单</b>
+     * （不需要 {@code MenuType} / {@code ClientInit} 的界面注册），客户端就是一个普通 {@code Screen}，
+     * 由 S2C 快照打开。服务端在切进这一档时会先 {@code closeContainer()} 关掉上一个模式留下的菜单
+     * （见 {@code support/NetworkEnergyAudit#open}）。</p>
+     */
+    public static final int MODE_ENERGY = 6;
+    /** 模式总数（Tab 一排画这么多颗；{@code TerminalModeTabOverlay} 的图标 / 语言键数组必须与之等长）。 */
+    public static final int MODE_COUNT = 7;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AdvancedRemoteTerminalItem.class);
 
@@ -198,13 +210,38 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
      * 共用同一实现，不可能出现「某个型号能开、另一个不能」的分叉。</p>
      */
     public void useFromShortcut(final ServerPlayer player, final SlotReference slotReference) {
-        final Optional<ItemStack> stackOpt = slotReference.resolve(player);
-        if (stackOpt.isEmpty()) {
+        if (player == null || slotReference == null) {
             return;
         }
         // 仿 RS 原版：不检查网络绑定与电量，总是打开界面；未绑定/没电时界面内操作禁用（由 RS 原版机制处理）。
-        rescueLegacyExtraSlot(player, stackOpt.get());
-        openModeScreen(player, stackOpt.get(), slotReference);
+        ItemStack stack = slotReference.resolve(player).orElse(ItemStack.EMPTY);
+        SlotReference reference = slotReference;
+        if (stack.isEmpty()) {
+            // 【第 82 轮｜静默出口封死】旧实现这里是一句 `return;`：引用解引用不到就**什么都不做、
+            // 也不说话**。玩家看到的恰好就是「按下去完全没反应、没有红字」—— 整条打开链路上
+            // 唯一能产生「既没界面、也没提示」的出口就是它。
+            // 现在改成：再按<b>服务端固定优先级</b>（主手 → 副手 → 背包 0..35 → Curios，与快捷键入口
+            // 完全同一套顺序）重新定位一次；仍然定位不到才算失败，并由调用方（C2S 包处理体）给出
+            // 可见提示 + 节流日志（见 OpenAdvancedRemoteTerminalPacket#handle 的失败兜底）。
+            // <p><b>这条兜底保证什么、不保证什么</b>：它保证的是「这条链路上不再存在第三种结局」——
+            // 要么真的开出界面，要么玩家收到一条可见提示 + 服务端留下一条节流日志；
+            // 而「按一下完全没反应、无红字」这种**无出口**的情形被结构性删除。
+            // 它<b>不</b>声称解释了「必须先走动一下才能开」这个现象：客户端按键层与服务端打开层
+            // 都没有任何位置 / 移动判定（见 TerminalKeybinds 的类注释与 round72 自检的 31 个 token），
+            // 因此那一层结论仍然只能靠实机日志（[rscc-terminal-key] + 新的 logOpenFailure）取证。
+            // 【第 83 轮｜五/六点日志】这条出口是「引用失效 + 兜底也定位不到 ⇒ 没有界面」的唯一路径。
+            // 以前它只有 locate 内部的节流日志（且要开 devLogs），从外面看不出「到底停在 ⑤ 之前」。
+            LOGGER.info("[rscc-terminal-open] ⑤前置：引用解引用失败且兜底重新定位也失败 ⇒ 不会走到 openModeScreen");
+            final Optional<RsccTerminalLocator.Location> relocated = RsccTerminalLocator.locate(player);
+            if (relocated.isEmpty()) {
+                // 不是静默：locate 内部已经打过「一台都没有」的节流日志，且调用方还会给出界面提示。
+                return;
+            }
+            stack = relocated.get().stack();
+            reference = relocated.get().slotReference();
+        }
+        rescueLegacyExtraSlot(player, stack);
+        openModeScreen(player, stack, reference);
     }
 
     @Override
@@ -250,16 +287,31 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
      */
     public static boolean isModeSupported(final int mode) {
         return mode == MODE_GRID || mode == MODE_MONITOR || mode == MODE_PATTERNS
-            || mode == MODE_MANAGER || mode == MODE_SEQUENCE || mode == MODE_UNIT_MANAGER;
+            || mode == MODE_MANAGER || mode == MODE_SEQUENCE || mode == MODE_UNIT_MANAGER
+            || mode == MODE_ENERGY;
     }
 
-    /** 根据物品当前模式打开对应 RS 原版界面。 */
-    public void openModeScreen(final ServerPlayer player, final ItemStack stack, final SlotReference slotReference) {
+    /**
+     * 根据物品当前模式打开对应界面 —— <b>真正的实现</b>（手持右键、快捷键、模式切换包三条链路最终都走这里）。
+     *
+     * @param returnMode 仅 {@code MODE_ENERGY} 用到：切进能耗页<b>之前</b>的那一档模式号。
+     *                   {@code SwitchTerminalModePacket#handle} 在写模式之前记下它并传进来，
+     *                   因此玩家从「合成仓监视」切到能耗页、点「返回终端」会回到合成仓监视，
+     *                   而不是被硬拽回合成终端。不知道上一档的调用方走下面的三参重载。
+     */
+    public void openModeScreen(final ServerPlayer player, final ItemStack stack,
+                               final SlotReference slotReference, final int returnMode) {
         final int mode = getMode(stack);
         final Component title = Objects.requireNonNullElse(
             stack.getHoverName(),
             Component.translatable("item.rs_create_compat.advanced_remote_terminal")
         );
+        // 【第 83 轮｜⑤开菜单】整条打开链路的第三个观测点：走到这里说明「真的在开界面」，
+        // 于是之后仍然没界面就只剩两种可能 —— createMenu 返回 null（原版静默 return），
+        // 或者菜单开出来又被服务端 tick 的 stillValid 关掉（见网络包处理体的 ⑥）。
+        // 不受 devLogs 控制：一次按键只有一条，且紧跟着 ⑥ 的成功/失败判定。
+        LOGGER.info("[rscc-terminal-open] ⑤开菜单 mode={} item={}", mode, stack.getItem());
+        boolean opened = true;
         try {
             switch (mode) {
                 case MODE_MONITOR -> Items.INSTANCE.getWirelessAutocraftingMonitor()
@@ -268,14 +320,39 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                 case MODE_MANAGER -> openAutocrafterManager(player, stack, slotReference, title);
                 case MODE_SEQUENCE -> openSequencePatternTerminal(player, stack, slotReference, title);
                 case MODE_UNIT_MANAGER -> openUnitPatternManager(player, stack, slotReference, title);
+                // 第 101 轮：能耗监视（纯 Screen、无容器菜单）——服务端在 NetworkEnergyAudit#open 里
+                // 先 closeContainer() 再下发第一份快照，客户端据此开界面。
+                case MODE_ENERGY -> cretae.cookiewyq.rs_create_compat.support.NetworkEnergyAudit
+                    .open(player, returnMode);
                 default -> openWirelessCraftingGrid(player, stack, slotReference);
             }
         } catch (final Throwable t) {
-            LOGGER.error("Failed to open terminal mode {}", mode, t);
+            opened = false;
+            // 与另外两条终端日志共用同一套节流（同一玩家同类消息最快每 5 秒一条，首次必打）：
+            // 玩家反复按 G 复现时每次窗口都能留下一条 + 被压次数汇总，不会刷屏也不会只剩第一次。
+            cretae.cookiewyq.rs_create_compat.support.RsccTerminalLocator.logOpenFailure(player, mode, t);
             player.displayClientMessage(
                 Component.translatable("item.rs_create_compat.advanced_remote_terminal.mode_failed"),
                 true);
         }
+        // 【第 100 轮｜绑定网络电量心跳】界面真的开出来之后才开始观察：
+        // 立刻下发一条快照（客户端拿首个快照就能把模式 Tab 置灰，不用等心跳），之后每 20 tick 一条，
+        // 关界面 / 终端没了即停。判据唯一实现 = support/TerminalNetworkPower（服务端权威），
+        // 客户端只把 powered 画成「全灰不可点」。界面没开出来（上面的 catch）不启动观察。
+        // 能耗页（MODE_ENERGY）不启动：它不是容器界面、没有 Mode Tab 需要置灰，
+        // 且它的数据链路由 NetworkEnergyAudit 的轮询快照负责。
+        if (opened && mode != MODE_ENERGY) {
+            cretae.cookiewyq.rs_create_compat.support.TerminalNetworkPower.start(player, slotReference);
+        }
+    }
+
+    /**
+     * 根据物品当前模式打开对应界面（<b>不知道「上一个模式」的调用方</b>走这个重载：
+     * 手持右键 / 快捷键打开终端时，物品上的模式就是目标模式，没有「返回上一页」的语义，
+     * 因此 {@code MODE_ENERGY} 的「返回终端」固定回合成终端）。
+     */
+    public void openModeScreen(final ServerPlayer player, final ItemStack stack, final SlotReference slotReference) {
+        openModeScreen(player, stack, slotReference, MODE_GRID);
     }
 
     // ========== 虚拟方块实体：在服务端内存中构造 RS 原版菜单 ==========
@@ -303,7 +380,10 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
         beCtor.setAccessible(true);
         // 虚拟方块实体：不放置世界，仅承载容器与网络节点
         final Object be = beCtor.newInstance(
-            net.minecraft.core.BlockPos.ZERO,
+            // 虚拟方块实体统一建在「建筑高度之外」的哨兵坐标上（绝不用 BlockPos.ZERO：
+            // 那会让「界面能不能保持打开」取决于原点那一格的世界状态 / 区块是否加载，
+            // 而这两种东西都随玩家走动变化 —— 正是「站着不动打不开、动一下就能打开」的来源）。
+            cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.sentinel(),
             com.refinedmods.refinedstorage.common.content.Blocks.INSTANCE.getPatternGrid().getDefault().defaultBlockState());
         // 设置虚拟 BE 的 level（配方矩阵/切石机需要 getLevel() 非 null）
         setVirtualBeLevel(be, player.level());
@@ -338,7 +418,8 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             net.minecraft.core.BlockPos.class, net.minecraft.world.level.block.state.BlockState.class);
         beCtor.setAccessible(true);
         final Object be = beCtor.newInstance(
-            net.minecraft.core.BlockPos.ZERO,
+            // 同上：虚拟方块实体一律用哨兵坐标（见 RsccVirtualTerminalBe 的说明）
+            cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.sentinel(),
             com.refinedmods.refinedstorage.common.content.Blocks.INSTANCE.getAutocrafterManager().getDefault().defaultBlockState());
         setVirtualBeLevel(be, player.level());
 
@@ -386,10 +467,21 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                                              final Component title) {
         final cretae.cookiewyq.rs_create_compat.block.entity.SequencePatternTerminalBlockEntity be =
             new cretae.cookiewyq.rs_create_compat.block.entity.SequencePatternTerminalBlockEntity(
-                net.minecraft.core.BlockPos.ZERO,
+                // 虚拟方块实体一律用哨兵坐标（见 RsccVirtualTerminalBe 的说明）
+                cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.sentinel(),
                 cretae.cookiewyq.rs_create_compat.RS_Create_Compat.SEQUENCE_PATTERN_TERMINAL_BLOCK.get()
                     .defaultBlockState());
         be.setLevel(player.level());
+        // 绑定终端解析出的 RS 网络（与样板终端 / 合成仓管理器 / 单元样板管理舱**同一套判据**）。
+        // 【第 75 轮根因修复】此前这里漏了这一步：虚拟方块实体的 mainNetworkNode.network 恒为 null，
+        // 而服务端枚举候选机器（SequencePatternTerminalBlockEntity#listChambers）第一行就是
+        // 「network == null ⇒ 返回空列表」⇒ 无线「序列样板终端」里**永远是**「无可用机器」，
+        // 点开的机器选择子界面也是空的 —— 与刷新机制无关（那是一份当场现算的列表，只是入口网络为空）。
+        // 绑不到（未绑定 / 绑定节点未加载 / 未接入网络）时绑空网络：界面照常打开、显示空状态，
+        // 不崩、不用旧数据糊弄。
+        if (!bindNetworkSafely(be, stack, player, slotReference)) {
+            bindEmptyNetworkToVirtualBe(be);
+        }
         // 读回物品 NBT 里的终端内容（老物品没有该键 = 全新空终端，原样打开，不报错）
         final net.minecraft.nbt.CompoundTag saved = stack.getOrDefault(
                 net.minecraft.core.component.DataComponents.CUSTOM_DATA,
@@ -449,7 +541,8 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                                         final Component title) {
         final cretae.cookiewyq.rs_create_compat.block.entity.UnitPatternManagerBlockEntity be =
             new cretae.cookiewyq.rs_create_compat.block.entity.UnitPatternManagerBlockEntity(
-                net.minecraft.core.BlockPos.ZERO,
+                // 虚拟方块实体一律用哨兵坐标（见 RsccVirtualTerminalBe 的说明）
+                cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.sentinel(),
                 cretae.cookiewyq.rs_create_compat.RS_Create_Compat.UNIT_PATTERN_MANAGER_BLOCK.get()
                     .defaultBlockState());
         setVirtualBeLevel(be, player.level());
@@ -517,10 +610,48 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     }
 
     /**
+     * 解析终端<b>绑定的那张 RS 网络</b>（第 100 轮：提成 public，供「绑定网络有没有电」复用）。
+     *
+     * <p>这是「终端 → 网络」的<b>唯一解析口径</b>：打开模式界面时把网络绑到虚拟方块实体（见
+     * {@link #bindNetworkToVirtualBe}）以及服务端判定「能不能切模式」（见
+     * {@code support/TerminalNetworkPower#snapshot}）都走这一条，因此「界面拿到的是哪张网络」与
+     * 「判断的是哪张网络」不可能分叉。</p>
+     *
+     * <p>与 {@code NetworkItemContext.resolveNetwork()} 不同：这里<b>跳过无线发射器范围检查</b>，
+     * 只要终端已绑定到任意网络节点方块且其网络存在即可（样板/管理器是方块界面，不需要远程范围）。</p>
+     *
+     * @return 绑定位置存在、区块已加载、方块是网络节点且该节点已接入网络时返回网络；
+     *     任何一步失败都返回 empty（= 未绑定 / 不可达 / 未成形，调用方按「没有网络」处理）
+     */
+    public static Optional<com.refinedmods.refinedstorage.api.network.Network> resolveBoundNetwork(
+        final ServerPlayer player, final ItemStack stack) {
+        if (player == null || stack == null || stack.isEmpty()) {
+            return Optional.empty();
+        }
+        final com.refinedmods.refinedstorage.common.content.DataComponents dc =
+            com.refinedmods.refinedstorage.common.content.DataComponents.INSTANCE;
+        final net.minecraft.core.GlobalPos location = stack.get(dc.getNetworkLocation());
+        if (location == null) {
+            return Optional.empty(); // 未绑定网络：提示玩家绑定
+        }
+        final var server = player.getServer();
+        if (server == null) {
+            return Optional.empty();
+        }
+        final net.minecraft.server.level.ServerLevel boundLevel = server.getLevel(location.dimension());
+        if (boundLevel == null || !boundLevel.isLoaded(location.pos())) {
+            return Optional.empty(); // 绑定位置未加载
+        }
+        final net.minecraft.world.level.block.entity.BlockEntity boundBe = boundLevel.getBlockEntity(location.pos());
+        if (!(boundBe instanceof com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemTargetBlockEntity target)) {
+            return Optional.empty(); // 绑定位置不是网络节点方块
+        }
+        // 绑定节点尚未接入网络（网络未成形）⇒ 同样视为「没有网络」
+        return Optional.ofNullable(target.getNetworkForItem());
+    }
+
+    /**
      * 将终端绑定到的 RS 网络绑定到虚拟方块实体的 mainNetworkNode（反射访问 protected 字段）。
-     * <p>
-     * 与 {@code NetworkItemContext.resolveNetwork()} 不同：这里<b>跳过无线发射器范围检查</b>，
-     * 只要终端已绑定到任意网络节点方块且其网络存在即可打开（样板/管理器是方块界面，不需要远程范围）。
      *
      * @return 是否成功绑定网络（未绑定 / 绑定位置失效时返回 false，避免构造菜单时 NPE）
      */
@@ -528,27 +659,11 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                                                   final ItemStack stack,
                                                   final ServerPlayer player,
                                                   final SlotReference slotReference) throws ReflectiveOperationException {
-        final com.refinedmods.refinedstorage.common.content.DataComponents dc =
-            com.refinedmods.refinedstorage.common.content.DataComponents.INSTANCE;
-        final net.minecraft.core.GlobalPos location = stack.get(dc.getNetworkLocation());
-        if (location == null) {
-            return false; // 未绑定网络：提示玩家绑定
-        }
-        final var server = player.getServer();
-        if (server == null) {
-            return false;
-        }
-        final net.minecraft.server.level.ServerLevel boundLevel = server.getLevel(location.dimension());
-        if (boundLevel == null || !boundLevel.isLoaded(location.pos())) {
-            return false; // 绑定位置未加载
-        }
-        final net.minecraft.world.level.block.entity.BlockEntity boundBe = boundLevel.getBlockEntity(location.pos());
-        if (!(boundBe instanceof com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemTargetBlockEntity target)) {
-            return false; // 绑定位置不是网络节点方块
-        }
-        final com.refinedmods.refinedstorage.api.network.Network network = target.getNetworkForItem();
+        // 解析口径唯一实现 = resolveBoundNetwork（界面打开与「绑定网络有没有电」共用同一套）
+        final com.refinedmods.refinedstorage.api.network.Network network =
+            resolveBoundNetwork(player, stack).orElse(null);
         if (network == null) {
-            return false; // 绑定节点尚未接入网络
+            return false;
         }
         setVirtualBeNetwork(be, network, true);
         return true;

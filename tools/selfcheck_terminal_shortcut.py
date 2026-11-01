@@ -102,7 +102,7 @@ check(overlay_marks == 1, "置位点②模式切换按钮回调 TerminalModeTabO
 check(item_marks == 1, "置位点③手持右键 Item#use", "%d 处" % item_marks)
 
 # 置位必须先于消费/加按钮：按键置位在发包之前
-kb_body = java_body(keybind, "public static void onKeyInput")
+kb_body = java_body(keybind, "public static void onClientTick")
 check(kb_body.find("TerminalOpenIntent.mark()") < kb_body.find("sendToServer"),
       "快捷键：先置位、后发包")
 # 右键置位只在客户端分支，且先于 super.use
@@ -110,8 +110,10 @@ item_body = java_body(item, "public InteractionResultHolder<ItemStack> use(")
 check("level.isClientSide()" in item_body and item_body.find("TerminalOpenIntent.mark()")
       < item_body.find("super.use"), "右键：仅在 isClientSide() 分支置位，然后走 super.use")
 # 按钮回调置位在发包之前（同一 lambda 内）
+# 【第 73 轮更新】发包调用的实参改成了「存活状态」里的引用（sendSwitch(player, state.slotReference(), mode, ...)），
+# 因此这里只断言「置位之后才出现 sendSwitch(」——它才是本条判据的语义（先置位、后发包），与实参写法无关。
 cb = overlay.find("TerminalOpenIntent.mark()")
-check(cb > 0 and overlay.find("sendSwitch(player, slotReference, mode", cb) > cb,
+check(cb > 0 and overlay.find("sendSwitch(", cb) > cb,
       "模式切换：先在按钮回调置位、再发包重开界面")
 
 # 消费位置：必须在加按钮之前，且未置位直接 return
@@ -119,8 +121,13 @@ init = java_body(overlay, "public static void onScreenInit")
 consume_at = init.find("TerminalOpenIntent.consume(screen)")
 add_at = init.find("event.addListener")
 check(consume_at > 0 and add_at > consume_at, "onScreenInit：先消费标记、后加按钮")
-check("if (!TerminalOpenIntent.consume(screen))" in init and init[consume_at:consume_at + 120].find("return") > 0,
+# 【第 73 轮更新】置位判据外面多了一层「同一界面的重复初始化」身份判定
+# （rowOwner.get() == screen）：窗口缩放 / 从子界面返回不再被 3 秒时限判死。
+# 本判据只要求「consume(screen) 一旦为 false 就 return，一个按钮都不加」这一语义不变。
+check(consume_at > 0 and init[consume_at:consume_at + 160].find("return") > 0,
       "未置位（超时/已被别人消费）→ 直接 return，一个按钮都不加")
+check("rowOwner.get() == screen" in init and "!sameScreen &&" in init,
+      "绕过 3 秒时限的只有「同一界面的重复初始化」（身份判定），不是无条件放行")
 check("findTerminal(player)" not in overlay and "TerminalLocation" not in overlay,
       "onScreenInit 不再按「玩家身上有没有终端」决定是否加按钮")
 check("instanceof AdvancedRemoteTerminalItem" not in overlay,
@@ -150,8 +157,12 @@ check("TERMINAL_IDS.contains(" in locator,
       "id 兜底确实接在 isTerminal 里（不是只声明了常量）")
 check("isCreative" not in locator and "Type." not in locator,
       "查找逻辑完全不区分型号（无 Type / isCreative 分支；三个型号同一条路径）")
-check("NOT_FOUND_LOGGED" in locator and "logNothingFound(" in locator,
-      "一台都没找到时打一条节流日志（每名玩家一次，便于反馈时定位，且不刷屏）")
+# 【第 80 轮更新】「每名玩家永久只打一次」已改成「同玩家同类消息 5 秒节流、首次必打」：
+# 判据随之改为「有节流窗口 + 仍在唯一出口打日志」，旧写法的消失由
+# tools/selfcheck_round80_terminal_log_throttle.py 的源码判据（code_only 视角）负责。
+check("THROTTLE_TICKS" in locator and "logNothingFound(" in locator
+      and "logThrottled(" in locator,
+      "一台都没找到时打一条**可重复**的服务端日志（同玩家 5 秒节流，首次必打）")
 
 shortcut_body = java_body(item, "public void useFromShortcut(")
 check(len(shortcut_body) > 0 and "type" not in shortcut_body and "isCreative" not in shortcut_body,
@@ -199,14 +210,22 @@ print("=" * 78)
 print("D. 找不到时的短提示：只提示一次、不刷屏")
 print("=" * 78)
 handle = java_body(packet, "public static void handle(")
-check(handle.count("displayClientMessage") == 1, "服务端每次请求最多一条提示")
+# round82：打开链路上现在有两条**互斥**的失败提示（「找不到终端」/「没打开成功」），
+# 每条之后都立刻 return ⇒ 「一次请求最多一条提示」的不变量不变；
+# 断言方式改成「每一条提示之后都必须紧跟 return」，比原来的计数更能表达这条不变量。
+_dm = [m.start() for m in re.finditer(r"displayClientMessage", handle)]
+check(len(_dm) == 2 and all("return;" in handle[i:i + 400] for i in _dm),
+      "服务端每次请求最多一条提示（两条互斥分支：找不到 / 没打开成功，各自提示后立刻 return）")
 check("return;" in handle and handle.find("displayClientMessage") < handle.find("useFromShortcut"),
       "找不到 → 提示后立刻 return（不会继续打开界面）")
 check("ChatFormatting.RED" in handle, "提示为红字")
-check("if (!mapping.consumeClick())" in kb_body and kb_body.count("sendToServer") == 1,
-      "快捷键一次按键只发一条请求（先 consumeClick 一次，再清空累计按下）")
-check(len(re.findall(r"discardClicks\(mapping\)", kb_body)) == 2,
-      "累计按下被丢弃（界面中按键 / 连按都不会攒成多条请求）")
+# round83：驱动点改成 tick 轮询状态机 ⇒ 点击计数在 onClientTick 开头一次排空（drainClicks），
+# 因此「累计按下被丢弃」不再靠多处 discardClicks，而是「每 tick 排空一次 + 只有一处发包」。
+check("drainClicks(mapping)" in kb_body and kb_body.count("sendToServer") == 1,
+      "快捷键一次按键只发一条请求（每 tick 排空一次点击，全方法只有一处发包）")
+check(len(re.findall(r"drainClicks\(mapping\)", kb_body)) == 1
+      and kb_body.find("drainClicks(mapping)") < kb_body.find("TerminalOpenIntent.mark()"),
+      "点击计数在 tick 开头一次性排空（先排空、后置位、再发包；不存在「攒成多条请求」）")
 
 lang_dir = os.path.join(ROOT, "src", "main", "resources", "assets", "rs_create_compat", "lang")
 LANG = {}

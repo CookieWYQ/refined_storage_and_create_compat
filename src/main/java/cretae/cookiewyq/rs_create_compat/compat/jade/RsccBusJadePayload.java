@@ -2,7 +2,6 @@ package cretae.cookiewyq.rs_create_compat.compat.jade;
 
 import cretae.cookiewyq.rs_create_compat.block.entity.SequenceExecutionChamberBlockEntity;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusCategory;
-import cretae.cookiewyq.rs_create_compat.support.RsccBusInterference;
 import cretae.cookiewyq.rs_create_compat.support.RsccExporterExecutorMode;
 import cretae.cookiewyq.rs_create_compat.support.RsccImporterExecutorMode;
 import net.minecraft.core.BlockPos;
@@ -66,6 +65,25 @@ import java.util.Map;
  * 类别的「原料 / 输入时原料」分流按<b>定义该类别的链成员</b>（{@code chainCategories()} 的属主）
  * 判定 —— 与执行仓界面 / 总线界面看到的分类同一份数据，不另造链口径。</p>
  *
+ * <h2>未绑定 = 一行都不加（用户第 79 轮）</h2>
+ * <p>用户原话：「<i>输出总线那个地方，如果说他没有绑定序列执行舱，你就不要显示那些（就是）绑定之后
+ * 才该显示的东西，也不要显示什么「未连接」什么「执行仓」之类的东西，否则怪怪的。</i>」
+ * 因此本类的口径是：</p>
+ * <ul>
+ *     <li><b>服务端</b> {@link #write} 在归属执行仓为 {@code null} 时<b>一个键都不写</b>
+ *     （连 {@link #ROOT} 都不写）—— 于是客户端 {@link #hasData} 为假，
+ *     {@code RsccBusJadeProvider#appendTooltip} 在「按 Shift 显示」档位下也<b>不会</b>补
+ *     「按住 Shift 查看总线状态」那行提示（没有内容可看时那句提示本身就是误导）；</li>
+ *     <li><b>客户端</b> {@link #lines} 再按 {@link #LINKED} 做一次<b>防御性</b>判定：
+ *     为假就<b>立刻返回空表</b>。因此旧存档 / 外部拼出来的载荷也不会冒出
+ *     「未连接 / 未绑定执行仓 / 执行仓：—」这类<b>绑定后才有意义</b>的占位行；</li>
+ *     <li>未绑定时玩家看到的只剩 <b>RS 原版普通总线</b>自己的提示（方块名 / 模组名等），
+ *     它们由 RS / Jade 自己给，不经过本类 —— 这正是「只显示与未绑定状态真正相关的信息」。</li>
+ * </ul>
+ * <p>反过来，<b>一旦绑定</b>（唯一归属成立）就照常显示：归属名 → 全自动（仅输入总线）→ 方向 →
+ * 六节类别（没有类别时才是「当前没有负责的类别」）。这条「已绑定分支」由自检
+ * {@code tools/selfcheck_round79_bus_unbound_ui.py} 逐键断言，防止把功能改没了。</p>
+ *
  * <h2>为什么六节的名字直接复用「类别详细配置」界面那六个键</h2>
  * <p>「原料 / 输入时原料 / 流体 / 成品 / 废料 / 中间产物」在工程里只能有<b>一套</b>说法与
  * <b>一套顺序</b>（那里是 {@code GROUP_ORDER}，顺序不可调换）。这里复用同一批键，
@@ -78,12 +96,8 @@ public final class RsccBusJadePayload {
     private static final String KIND = "kind";
     public static final String KIND_IMPORTER = "importer";
     public static final String KIND_EXPORTER = "exporter";
-    /** 是否绑定了执行仓（真时 {@link #CHAMBER} 是有意义的名字）。 */
+    /** 是否绑定了执行仓（服务端只在绑定成功时才写本载荷，因此这里恒为 {@code true}；客户端仍按它做防御性判定）。 */
     private static final String LINKED = "linked";
-    /** 玩家是否把本总线强制成了普通总线（此时它不按执行仓工作）。 */
-    private static final String PLAIN = "plain";
-    /** 归属是否未确定（= 延长型已停用），与服务端横幅同一判据 {@link RsccBusInterference#inspect}。 */
-    private static final String DISABLED = "disabled";
     /** 输入总线是否处于全自动收回模式。 */
     private static final String AUTO = "auto";
     /** 归属执行仓的显示名（链委托名 / 坐标串）。 */
@@ -115,8 +129,6 @@ public final class RsccBusJadePayload {
 
     /** 本类自己的文案键前缀（绑定 / 自动 / 方向 / 分组行 / 空态）。 */
     private static final String LANG = "gui.rs_create_compat.jade_bus.";
-    /** 「已停用：归属未确定」直接用既有横幅那一句（同一状态只能有一个说法）。 */
-    private static final String DISABLED_LANG = "gui.rs_create_compat.bus_interference.banner";
 
     /**
      * <b>每一组最多列几个代表物</b>（= 提示宽度的上限锚点）。
@@ -133,8 +145,12 @@ public final class RsccBusJadePayload {
     // ==================== 服务端：写 ====================
 
     /**
-     * 把一条总线的状态写进 Jade 的服务端数据（服务端调用；客户端 / 无方块实体时什么都不做，
-     * 于是客户端那条路读到的永远是「空复合标签 ⇒ 一行都不加」，不会出现凭空的提示）。
+     * 把一条<b>已绑定执行仓</b>的总线状态写进 Jade 的服务端数据（服务端调用；客户端 / 无方块实体时
+     * 什么都不做）。
+     *
+     * <p><b>未绑定 ⇒ 一个键都不写</b>（连 {@link #ROOT} 都不写）：这是用户第 79 轮「没绑定就不要显示
+     * 绑定后才有意义的东西」的落点。客户端因此 {@code hasData} 为假、一行都不加，
+     * 与「不是本模组总线」走同一条短路 —— 玩家看到的只剩 RS 原版普通总线的提示。</p>
      *
      * <p><b>只读</b>：全程只调既有的只读入口（归属缓存报告 / 类别快照 / 链类别表），
      * 不写任何状态、不重装策略 —— 与「打开总线界面」同一条只读纪律。</p>
@@ -147,27 +163,25 @@ public final class RsccBusJadePayload {
         final CompoundTag root = new CompoundTag();
         // 输入总线与输出总线是两个互斥的桥接接口；各自只认自己那一个（同一台方块实体不会同时是两者）。
         if (blockEntity instanceof RsccImporterExecutorMode importer) {
+            final SequenceExecutionChamberBlockEntity chamber = importer.rscc$getLinkedExecutor();
+            if (chamber == null) {
+                return; // 未绑定：一个键都不写（连根标签都不写）
+            }
             root.putString(KIND, KIND_IMPORTER);
             root.putBoolean(AUTO, importer.rscc$isAutoCollect());
-            final SequenceExecutionChamberBlockEntity chamber = importer.rscc$getLinkedExecutor();
-            root.putBoolean(PLAIN, importer.rscc$isForceNormalBus());
-            root.putBoolean(DISABLED, importer.rscc$linkReport().disabled());
-            root.putBoolean(LINKED, chamber != null);
-            if (chamber != null) {
-                root.putString(CHAMBER, chamber.getChamberDisplayName());
-            }
+            root.putBoolean(LINKED, true); // 走到这里必然已绑定；客户端仍按它做防御性判定
+            root.putString(CHAMBER, chamber.getChamberDisplayName());
             root.put(GROUPS, groups(importer.rscc$getCategorySnapshot(), chamber));
         } else if (blockEntity instanceof RsccExporterExecutorMode exporter) {
+            final SequenceExecutionChamberBlockEntity chamber = exporter.rscc$getLinkedExecutor();
+            if (chamber == null) {
+                return; // 未绑定：一个键都不写（连根标签都不写）
+            }
             root.putString(KIND, KIND_EXPORTER);
             // 输出总线没有「全自动」这一档：它的勾选永远显式（未显式时按默认集展示，见类别快照）
             root.putBoolean(AUTO, false);
-            final SequenceExecutionChamberBlockEntity chamber = exporter.rscc$getLinkedExecutor();
-            root.putBoolean(PLAIN, exporter.rscc$isForceNormalBus());
-            root.putBoolean(DISABLED, exporter.rscc$linkReport().disabled());
-            root.putBoolean(LINKED, chamber != null);
-            if (chamber != null) {
-                root.putString(CHAMBER, chamber.getChamberDisplayName());
-            }
+            root.putBoolean(LINKED, true);
+            root.putString(CHAMBER, chamber.getChamberDisplayName());
             root.put(GROUPS, groups(exporter.rscc$getCategorySnapshot(), chamber));
         } else {
             return; // 不是本模组的两条总线：一个键都不写（Jade 侧因此完全保持原样）
@@ -285,9 +299,13 @@ public final class RsccBusJadePayload {
     /**
      * 服务端数据 → 提示行（<b>纯函数</b>：NBT 进、{@code Component} 出，可被自检直接锚定）。
      *
-     * <p><b>空数据 = 一行都不加</b>：{@code client/jade/RsccBusJadeProvider} 用
-     * {@link #hasData(CompoundTag)} 先短路，因此没装 Jade 的数据通道 / 服务端没注册本 provider /
-     * 看的根本不是本模组总线时，Jade 的提示与改动前逐字相同。</p>
+     * <p><b>空数据 / 未绑定 = 一行都不加</b>：{@code client/jade/RsccBusJadeProvider} 用
+     * {@link #hasData(CompoundTag)} 先短路；即使拿到了旧存档 / 外部拼出来的载荷，
+     * {@link #LINKED} 为假时本方法也<b>立刻返回空表</b> —— 未绑定时绝不出现
+     * 「归属执行舱 / 方向 / 当前没有负责的类别」这类<b>绑定后才有意义</b>的行。</p>
+     *
+     * <p><b>已绑定</b>时的行序固定为：归属名 → 全自动（仅输入总线）→ 方向 → 六节类别
+     * （一个类别都没有时才是「当前没有负责的类别」）。</p>
      */
     public static List<Component> lines(@Nullable final CompoundTag serverData) {
         final List<Component> out = new ArrayList<>();
@@ -296,23 +314,17 @@ public final class RsccBusJadePayload {
         }
         final CompoundTag root = serverData.getCompound(ROOT);
         final boolean linked = root.getBoolean(LINKED);
-        if (linked) {
-            out.add(Component.translatable(LANG + "linked", root.getString(CHAMBER)));
-        } else {
-            // 「强制普通总线」与「压根没连线」是两件事，玩家看到的说法必须不同（否则会去查不存在的线）
-            out.add(Component.translatable(root.getBoolean(PLAIN) ? LANG + "plain" : LANG + "unlinked"));
+        if (!linked) {
+            // 未绑定 ⇒ 一行都不加：绑定后才有意义的行（归属名 / 方向 / 类别 / 空态）一律不出现。
+            return out;
         }
-        if (root.getBoolean(DISABLED)) {
-            out.add(Component.translatable(DISABLED_LANG));
-        }
+        out.add(Component.translatable(LANG + "linked", root.getString(CHAMBER)));
         if (root.getBoolean(AUTO)) {
             out.add(Component.translatable(LANG + "auto"));
         }
-        if (linked && !root.getBoolean(PLAIN)) {
-            // 方向行只说「这条总线往哪个方向搬」，不重复任何界面上的操作说明
-            out.add(Component.translatable(KIND_IMPORTER.equals(root.getString(KIND))
-                ? LANG + "dir.importer" : LANG + "dir.exporter"));
-        }
+        // 方向行只说「这条总线往哪个方向搬」，不重复任何界面上的操作说明
+        out.add(Component.translatable(KIND_IMPORTER.equals(root.getString(KIND))
+            ? LANG + "dir.importer" : LANG + "dir.exporter"));
         final ListTag groups = root.getList(GROUPS, Tag.TAG_COMPOUND);
         if (groups.isEmpty()) {
             out.add(Component.translatable(LANG + "none"));
@@ -327,7 +339,11 @@ public final class RsccBusJadePayload {
         return out;
     }
 
-    /** 服务端数据里有没有本模组那条根复合标签（客户端据此决定「加行」还是「完全放行」）。 */
+    /**
+     * 服务端数据里有没有本模组那条根复合标签（客户端据此决定「加行」还是「完全放行」）。
+     * <p><b>未绑定就一定是 {@code false}</b>：服务端 {@link #write} 在归属为 {@code null} 时
+     * 连根标签都不写 —— 于是「按 Shift 显示」档位的提示行也不会为本模组总线冒出来。</p>
+     */
     public static boolean hasData(@Nullable final CompoundTag serverData) {
         return serverData != null && !serverData.getCompound(ROOT).isEmpty();
     }

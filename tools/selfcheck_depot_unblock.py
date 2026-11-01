@@ -137,6 +137,39 @@ def main():
           "busResidualInputToken" in chamber
           and "no_player_order_scrap_reclaim" in read(SRC, "support", "RsccChamberImportStrategy.java"))
 
+    section("U8 运行期残留（2026-10-18：废料齿轮 / 金板 在正常运行中堵死站台）")
+    # 与 U2/U3 的「堵塞自愈」互补：那条只处理「不在本仓输出类别里」的件，且明确排除输入类；
+    # 「废料齿轮 / 废料金板」恰好既是输入类又是结果池物品 ⇒ 需要一条独立的、有凭据的清理。
+    check("存在运行期残留清理（与 recoverBlockingTargetItem 各管一类，不重复搬运）",
+          "private int reclaimRuntimeStationResidue() {" in chamber
+          and "reclaimRuntimeStationResidue();" in chamber)
+    check("凭据 = 在制登记表（本仓推过的那件）+ Create 配方结果池（台上那件是它的产出）",
+          "new ArrayList<>(inFlightUnits.keySet())" in chamber
+          and "for (final ProcessingOutput output : recipe.resultPool) {" in chamber)
+    check("合法等待硬约束：机械手手里那件 / 我们推过去的结果池那一份 / 正在加工（进度在推进）的件 全部保留",
+          "if (operatingPosOf(level, station) != null) {" in chamber
+          and "if (unit.item() != null && unit.item() == item) {" in chamber
+          and "final boolean sameProgress =" in chamber
+          and "logRuntimeResidueSkip(station, item, \"assembly_progressing\");" in chamber)
+    check("2026-10-23 修「过渡件永久占位」：裸过渡件 / 进度卡死的件 现在是<b>候选</b>（旧判据把它们一律排除）",
+          "final boolean bareTransition = assembly == null && isTransitionOfMyRecipes(item);" in chamber
+          and "if (frozenTicks < RUNTIME_RESIDUE_PROGRESS_STALL_TICKS) {" in chamber
+          and "reasonClass = \"bare_transition_blocked\";" in chamber
+          and "reasonClass = \"frozen_assembly_blocked\";" in chamber)
+    check("强旁证：machine_full 计数（写点 = 拒收记录，读点 = rscc$refusedTargetHits）"
+          "在涨才清；没旁证只观察",
+          "refusedTargetHits.merge(target.immutable(), 1L, Long::sum);" in chamber
+          and "public long rscc$refusedTargetHits(" in chamber
+          and "rscc$refusedTargetHits(station) > 0L" in chamber
+          and "\"bare_transition_not_blocking\"" in chamber)
+    check("有界：每 40 tick 至多一轮、每轮至多 1 件、只扫登记表（不每 tick 全扫所有站台）",
+          "RUNTIME_RESIDUE_SWEEP_INTERVAL_TICKS = 40L;" in chamber
+          and "RUNTIME_RESIDUE_CLEAR_MAX = 1;" in chamber
+          and "RUNTIME_RESIDUE_STATION_COOLDOWN_TICKS = 200L;" in chamber
+          and "Math.min(size, RUNTIME_RESIDUE_STATION_MAX)" in chamber
+          and "supplyStations(" not in chamber.split("private int reclaimRuntimeStationResidue() {", 1)[1]
+                                                  .split("private boolean isSettledResultOfRecipe(", 1)[0])
+
     print()
     print("=" * 78)
     if FAILURES:

@@ -258,15 +258,20 @@ def main():
                  "ExporterBlock" if exporter else "缺 ExporterBlock"),
               importer and exporter)
     if common_body is not None:
-        check("②c 公共注册用官方 API registerBlockDataProvider（两条）",
-              len(re.findall(r"registerBlockDataProvider\s*\(", common_body)) == 2,
-              "出现 %d 次" % len(re.findall(r"registerBlockDataProvider\s*\(", common_body)))
+        # 第 108 轮：多了一条「容器代理器」的服务端数据通道（两路内容物的格数 / 罐数 / 四态
+        # 只有服务端算得出来），所以 3 → 4。判据仍是「逐个方法数清楚」，不是放宽。
+        check("②c 公共注册用官方 API registerBlockDataProvider（输入 / 输出 + 接收器 + 容器代理器）",
+              len(re.findall(r"registerBlockDataProvider\s*\(", common_body)) == 4,
+              "出现 %d 次（期望 4：总线 2 + 接收器 1 + 容器代理器 1）"
+              % len(re.findall(r"registerBlockDataProvider\s*\(", common_body)))
         check("②d 公共注册体不含任何客户端类型",
               not has_client_prefix(common_body), "; ".join(has_client_prefix(common_body)))
     if client_body is not None:
-        check("②e 客户端注册用官方 API registerBlockComponent（输入 / 输出各一条）",
-              len(re.findall(r"registerBlockComponent\s*\(", client_body)) == 3,
-              "出现 %d 次（伪装 1 + 总线 2）" % len(re.findall(r"registerBlockComponent\s*\(", client_body)))
+        # 第 108 轮：多了一条「容器代理器」的 tooltip 补充行（只报事实，内容物仍交给 Jade 自己显示）。
+        check("②e 客户端注册用官方 API registerBlockComponent（输入 / 输出各一条 + 伪装 + 接收器 + 代理器）",
+              len(re.findall(r"registerBlockComponent\s*\(", client_body)) == 5,
+              "出现 %d 次（期望 5：伪装 1 + 总线 2 + 接收器 1 + 容器代理器 1）"
+              % len(re.findall(r"registerBlockComponent\s*\(", client_body)))
 
     # ---------------- ③ 数据来源（服务端权威 → Jade 通道，不新增同步包） ----------------
     check("③a 服务端数据 provider 实现 IServerDataProvider<BlockAccessor>",
@@ -330,14 +335,28 @@ def main():
           and "gui.rs_create_compat.jade_bus.hold" in zh)
 
     # ---------------- ⑦ 缺失 Jade 时不崩 ----------------
+    # 第 87 轮：剪贴板 tooltip 复用**同一份** Jade 载荷（用户要求「至少对标 Jade 的信息量」），
+    # 因此 RsccBusJadePayload 多了两个引用者。这两个类都是无条件加载的（common / 客户端 tooltip），
+    # 所以「Jade 缺席时不加载它」这条规则必须改写成：**允许**它们引用，但要求被引用的
+    # RsccBusJadePayload 自己**不 import 任何 Jade 类型** —— 它的载荷格式 / 文案全是本模组自己的
+    # NBT 与语言键，Jade 只是它的一个读者。⑦a2 就是对这条豁免的自证；豁免不成立就判负。
+    CLIPBOARD_REFERRERS = (
+        PKG_PATH + "/support/RsccBusClipboard.java",
+        PKG_PATH + "/client/tooltip/ClipboardTooltipHandler.java",
+    )
     forbidden_refs = {}
     for rel, src in sources.items():
         for name in ("RsccBusJadeServerData", "RsccBusJadePayload", "RsccBusJadeProvider", "RsccJadePlugin"):
-            if name in src.code and rel not in (PLUGIN, CLIENT_PROVIDER, SERVER_DATA, PAYLOAD):
+            if name in src.code and rel not in ((PLUGIN, CLIENT_PROVIDER, SERVER_DATA, PAYLOAD)
+                                                + CLIPBOARD_REFERRERS):
                 forbidden_refs.setdefault(name, []).append(rel)
-    check("⑦a 四个新类只被彼此引用（Jade 缺席时没有任何第三方加载它们）",
+    check("⑦a 四个新类只被彼此引用（Jade 缺席时没有任何第三方加载它们；剪贴板两个引用者见 ⑦a2）",
           not forbidden_refs,
           "; ".join("%s <- %s" % (k, v) for k, v in sorted(forbidden_refs.items())))
+    jade_imports = [line for line in payload.raw_code.splitlines()
+                    if line.strip().startswith("import ") and "snownee" in line]
+    check("⑦a2 剪贴板引用豁免的前提：RsccBusJadePayload 不 import 任何 Jade 类型（纯数据类）",
+          not jade_imports, "; ".join(jade_imports))
     for rel in (SERVER_DATA, PAYLOAD):
         hits = has_client_prefix(sources[rel].code)
         check("⑦b %s 不引用客户端类型" % os.path.basename(rel), not hits, "; ".join(hits))

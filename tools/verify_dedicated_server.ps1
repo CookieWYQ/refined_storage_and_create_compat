@@ -60,6 +60,34 @@ Write-Output "  超时上限 : ${TimeoutSec}s"
 Write-Output "  日志     : $OutputLog"
 Write-Output "  期望     : $Expect"
 
+# --- ⓪ 并发闸门（2026-10-17 新增）--------------------------------------------
+# 【为什么必须有】本探针整套状态是**共享且互斥**的：同一个 gameDir、同一个 OutputLog、
+#   同一份 Gradle build/ 目录。两个探针同时跑时实测到的症状是「结论不可信」：
+#     ① 后启动的那个在 ② 处 Remove-Item $OutputLog，把前一个已经写出 Done(...) 的日志删掉；
+#     ② 前一个的服务端 JVM 仍持有旧句柄，于是日志被截断成几百字节 ⇒ 判据读到 NO_TERMINAL；
+#     ③ 两个 Gradle 构建抢 build/ 锁 ⇒ 其中一个 cmd 立刻退出 ⇒ PROCESS_EXITED 假结论。
+#   症状具有极强的误导性（看起来像「服务端起不来」），所以这里直接拒绝并发，
+#   而不是让两个都跑出垃圾结论。锁文件里写 PID；发现锁时校验那个 PID 是否还活着
+#   （Stale lock 自动接管，避免上一次被强杀后永久锁死）。
+$lockFile = Join-Path $root "build\verify_dedicated_server.lock"
+$lockHolders = @()
+if (Test-Path $lockFile) {
+    foreach ($line in (Get-Content $lockFile -ErrorAction SilentlyContinue)) {
+        $pidText = "$line".Trim()
+        if ($pidText -match '^\d+$') {
+            $alive = Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue
+            if ($alive) { $lockHolders += $pidText }
+        }
+    }
+}
+if ($lockHolders.Count -gt 0) {
+    Write-Output "PROBE_SKIPPED 已有探针在跑（PID $($lockHolders -join ', ')）——同一条 gameDir / 日志 / build 目录不允许并发。"
+    Write-Output "  做法：等它跑完再跑一次；或先结束该进程再重试。锁文件：$lockFile"
+    exit 3
+}
+Set-Content -Path $lockFile -Value "$PID" -Encoding ASCII
+try {
+
 # --- ① 准备独立游戏目录 ------------------------------------------------------
 if (!(Test-Path $probeGame)) { New-Item -ItemType Directory -Path $probeGame -Force | Out-Null }
 if (!(Test-Path (Join-Path $probeGame "mods"))) { New-Item -ItemType Directory -Path (Join-Path $probeGame "mods") -Force | Out-Null }
@@ -253,3 +281,9 @@ if ($NoJudge) { exit 0 }
 Write-Output ""
 & $python $judge $OutputLog "--expect=$Expect"
 exit $LASTEXITCODE
+
+} finally {
+    # 并发闸门释放：无论从哪条路径退出（含 exit 2 / 3、异常、超时）都要放锁，
+    # 否则下一个探针会被自己的上一轮挡在门外。
+    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+}

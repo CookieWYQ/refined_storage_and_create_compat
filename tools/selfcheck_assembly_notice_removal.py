@@ -113,9 +113,9 @@ wrench = read(os.path.join(JAVA_ROOT, "cretae", "cookiewyq", "rs_create_compat",
 action = read(os.path.join(JAVA_ROOT, "cretae", "cookiewyq", "rs_create_compat", "network",
                            "AssemblyTaskActionPacket.java"))
 check("拨线缆的交互类里已无 actionbar 播报（displayClientMessage 一处不剩），"
-      "但状态切换本身仍在（toggleSeam / toggleFace 都还在）",
+      "但状态切换本身仍在（toggleSeam / toggleFace 都还在，且 toggleSeam 必须带操作者）",
       "displayClientMessage" not in wrench
-      and "RsccCableCuts.toggleSeam(level, pos, seam);" in wrench
+      and "RsccCableCuts.toggleSeam(level, pos, seam, actor);" in wrench
       and "RsccCableCuts.toggleFace(level, pos, face);" in wrench)
 check("「继续」动作包只在**失败**时提示一次；成功时一个字都不播（用户点名的那句已删）",
       "displayClientMessage" in action
@@ -124,8 +124,9 @@ check("「继续」动作包只在**失败**时提示一次；成功时一个字
       and "assembly.resumed" not in action
       and "if (!AssemblyWatchdog.resume(player, packet.taskId())) {" in action)
 check("成就（一刀两断 / 破镜重圆）不受影响：触发点在 RsccCableCuts 内部，"
-      "因此删掉动作栏文案不会连带删掉成就",
-      "RsccAdvancements.onSeamToggled(level, pos, wasCut);" in read(
+      "因此删掉动作栏文案不会连带删掉成就；且**必须带操作者**（只记给转扳手的那名玩家，"
+      "不再按 64 格半径散给附近所有人）",
+      "RsccAdvancements.onSeamToggled(actor, level, pos, wasCut);" in read(
           os.path.join(JAVA_ROOT, "cretae", "cookiewyq", "rs_create_compat", "support",
                        "RsccCableCuts.java")))
 

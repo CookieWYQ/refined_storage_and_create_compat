@@ -1,14 +1,18 @@
 package cretae.cookiewyq.rs_create_compat.network;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity;
 import cretae.cookiewyq.rs_create_compat.menu.CollectionCacheMenu;
+import cretae.cookiewyq.rs_create_compat.support.CollectionBlockedLimits;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,13 +36,54 @@ public record SetCollectionBlockedPacket(int containerId, boolean fluid, Resourc
     public static final Type<SetCollectionBlockedPacket> TYPE =
         new Type<>(ResourceLocation.fromNamespaceAndPath(RS_Create_Compat.MODID, "set_collection_blocked"));
 
+    /**
+     * 标签集合的编解码（第 117 轮）。
+     *
+     * <h2>为什么不再用 {@code ResourceLocation.STREAM_CODEC.apply(ByteBufCodecs.list())}</h2>
+     * <p>那个写法把<b>条数完全交给对端</b>：一个改包客户端声明 2³¹-1 条，解码器就会一路读下去
+     * （每个 {@code ResourceLocation} 还允许到协议字符串上界），最后进到服务端集合里落盘 + 随同步包回发。
+     * 与第 98 轮充电过滤、第 114 轮标记标签、第 115/116 轮导入包是同一类缺陷。</p>
+     *
+     * <h2>解码规则（与那几轮逐字相同）</h2>
+     * <ul>
+     *     <li><b>按对端声明的条数消费字节</b>（否则流会错位，后续字段全错）；</li>
+     *     <li><b>只暂存前 {@link CollectionBlockedLimits#MAX_TAGS_PER_PACKET} 条</b>；
+     *     预分配容量取 {@code min(声明条数, 上限)}，绝不拿对端给的数量直接开数组。</li>
+     * </ul>
+     * <p>正常客户端下发的标签是「示例物自身标签里被勾选的那几条」（通常个位数），
+     * 上限 128 留了充足余量，正常玩法一个字节都不会被截。</p>
+     */
+    private static final StreamCodec<RegistryFriendlyByteBuf, List<ResourceLocation>> TAGS_CODEC =
+        StreamCodec.of(
+            (buf, tags) -> {
+                final List<ResourceLocation> list =
+                    CollectionBlockedLimits.clamp(tags, CollectionBlockedLimits.MAX_TAGS_PER_PACKET);
+                ByteBufCodecs.VAR_INT.encode(buf, list.size());
+                for (final ResourceLocation tag : list) {
+                    ResourceLocation.STREAM_CODEC.encode(buf, tag);
+                }
+            },
+            buf -> {
+                final int declared = Math.max(0, ByteBufCodecs.VAR_INT.decode(buf));
+                final int keep = Math.min(declared, CollectionBlockedLimits.MAX_TAGS_PER_PACKET);
+                final List<ResourceLocation> kept = new ArrayList<>(keep);
+                for (int i = 0; i < declared; i++) {
+                    final ResourceLocation tag = ResourceLocation.STREAM_CODEC.decode(buf);
+                    if (kept.size() < keep) {
+                        kept.add(tag);
+                    }
+                }
+                return List.copyOf(kept);
+            }
+        );
+
     public static final StreamCodec<RegistryFriendlyByteBuf, SetCollectionBlockedPacket> STREAM_CODEC =
         StreamCodec.composite(
             ByteBufCodecs.VAR_INT, SetCollectionBlockedPacket::containerId,
             ByteBufCodecs.BOOL, SetCollectionBlockedPacket::fluid,
             ResourceLocation.STREAM_CODEC, SetCollectionBlockedPacket::id,
             ByteBufCodecs.BOOL, SetCollectionBlockedPacket::blocked,
-            ResourceLocation.STREAM_CODEC.apply(ByteBufCodecs.list()), SetCollectionBlockedPacket::tags,
+            TAGS_CODEC, SetCollectionBlockedPacket::tags,
             SetCollectionBlockedPacket::new
         );
 
@@ -56,7 +101,47 @@ public record SetCollectionBlockedPacket(int containerId, boolean fluid, Resourc
         if (menu.containerId != packet.containerId() || !(menu instanceof CollectionCacheMenu cacheMenu)) {
             return;
         }
-        cacheMenu.setBlocked(packet.fluid(), packet.id(), packet.blocked(), packet.tags());
+        final CollectionCacheBlockEntity.BlockEditResult result =
+            cacheMenu.setBlocked(packet.fluid(), packet.id(), packet.blocked(), packet.tags());
+        // 第 117 轮：「名单已满」必须被玩家看见 —— 否则就是点了没反应。
+        // 菜单无论结果如何都已经 syncMarkers() 回传权威名单，客户端那份乐观更新的状态会自己改回来。
+        if (result == CollectionCacheBlockEntity.BlockEditResult.REJECTED_IDS_FULL) {
+            warnFull(true);
+            player.displayClientMessage(Component.translatable(
+                "message.rs_create_compat.collection_cache.blocked_ids_full",
+                CollectionBlockedLimits.MAX_BLOCKED_IDS), true);
+        } else if (result == CollectionCacheBlockEntity.BlockEditResult.REJECTED_TAGS_FULL) {
+            warnFull(false);
+            player.displayClientMessage(Component.translatable(
+                "message.rs_create_compat.collection_cache.blocked_tags_full",
+                CollectionBlockedLimits.MAX_BLOCKED_TAGS), true);
+        }
+    }
+
+    /** 「阻塞名单已满已拒绝」的 WARN（每进程每种名单只打一条）：改包反复刷包不会刷日志。 */
+    private static boolean idsFullWarned;
+    private static boolean tagsFullWarned;
+
+    private static final org.slf4j.Logger LOGGER =
+        org.slf4j.LoggerFactory.getLogger("rs_create_compat/SetCollectionBlockedPacket");
+
+    private static void warnFull(final boolean ids) {
+        if (ids) {
+            if (idsFullWarned) {
+                return;
+            }
+            idsFullWarned = true;
+            LOGGER.warn("[rs_create_compat] 归流缓存仓：具体资源阻塞名单已满（上限 "
+                + CollectionBlockedLimits.MAX_BLOCKED_IDS + " 条），拒绝了一次加入；"
+                + "正常玩法只会逐个 Ctrl+左键添加，若是改包刷包，本条即证据");
+        } else {
+            if (tagsFullWarned) {
+                return;
+            }
+            tagsFullWarned = true;
+            LOGGER.warn("[rs_create_compat] 归流缓存仓：按标签阻塞名单已满（上限 "
+                + CollectionBlockedLimits.MAX_BLOCKED_TAGS + " 条），拒绝了一次加入");
+        }
     }
 
     @Override

@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "fe_energy_cube": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:fe_energy_cube"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.fe_energy_cube.description"
+    },
+    "frame": "goal",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:fe_energy_cube"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.fe_energy_cube.title"
+    }
+  },
+  "parent": "rs_create_compat:range_charger",
+  "requirements": [
+    [
+      "fe_energy_cube"
+    ]
+  ]
+}

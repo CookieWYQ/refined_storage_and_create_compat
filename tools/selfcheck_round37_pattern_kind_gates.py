@@ -150,8 +150,12 @@ def section_mask_from_server():
           "!clientMirror || isDisplayable" not in manager_menu and "clientMirror" not in manager_menu)
     check("显示层仍保留按类型的第二道网（内容后到 / 中途变化也不漏）",
           "!section.isHidden(i) && isDisplayable(stack)" in manager_menu)
+    # 第 120 轮：窗口映射改成「先算 pattern 布尔再分支」（窗格里多了「空位 / 洞」两种非样板条目），
+    # 判据原意不变——进窗口的过滤仍然只有 SequenceUnitPatternItem#isUnitPattern 这一条类型口径。
+    window_rebuild = body(summary_menu, "void rebuildWindow() {", "void broadcastChanges()")
     check("同一口径覆盖「执行仓单元样板汇总」窗口（只放单元样板进窗口）",
-          "if (SequenceUnitPatternItem.isUnitPattern(unitSlots.getItem(i))) {" in summary_menu)
+          "SequenceUnitPatternItem.isUnitPattern(unitSlots.getItem(i))" in window_rebuild
+          and "if (pattern) {" in window_rebuild)
     check("同一口径覆盖汇总的「行内张数 / 机器图标」元数据（与窗口同一判定，不会两套计数）",
           "if (SequenceUnitPatternItem.isUnitPattern(stack)) {\n                    units.add(stack.copy());"
           in terminal)

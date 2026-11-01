@@ -3,17 +3,17 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import com.refinedmods.refinedstorage.common.api.storage.StorageInfo;
 import com.refinedmods.refinedstorage.common.util.IdentifierUtil;
+import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers;
-import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
 import cretae.cookiewyq.rs_create_compat.menu.IntermediateCacheMenu;
 import cretae.cookiewyq.rs_create_compat.support.RsccSharedCache;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
@@ -29,10 +29,11 @@ import java.util.Optional;
  * 容量完全由插进来的磁盘提供，没插盘时共享池就是空的。界面文案与 tooltip 必须说清这一点，
  * 绝不能再写出「自带 1728 件」这种数字（本轮已全部改写）。</p>
  *
- * <h2>不新画背景贴图（工程硬规则）</h2>
- * 面板用工程既有的原版九宫格绘制（{@link McGui#panel}，取自 MC 自带精灵
- * {@code minecraft:recipe_book/overlay_recipe}），槽位框用 {@link McGui#slotFrame}（原版观感，Java 绘制）。
- * 盘位从 4 格扩到 27 格后，面板只<b>按九宫格拉伸</b>（176×198），不新增任何 PNG。
+ * <h2>背景 = 工具生成（第 128 轮）</h2>
+ * 背景是 {@code textures/gui/intermediate_cache.png}（176×198），由
+ * {@code tools/make_gui_bg.py --slots-menu "8,36,9,3" "8,116,9,3" "8,174,9,1"} 生成：
+ * {@code pic/bg.png} 九宫格 4px 容器边框 + {@code pic/slot.png} 17×17 槽框（槽框左上角 = Menu 坐标 − 1）。
+ * {@code renderBg} 里<b>一次 blit</b> 画完 —— 不再有 {@code McGui.panel} / 逐槽 {@code McGui.slotFrame} 现画。
  *
  * <h2>文字与 tooltip</h2>
  * 所有 {@code drawString} 一律传 {@code false}（无阴影）；自绘元素（盘位说明 / 用量两行）的 tooltip
@@ -41,6 +42,10 @@ import java.util.Optional;
  */
 public class IntermediateCacheScreen extends AbstractContainerScreen<IntermediateCacheMenu> {
     private static final String LANG = "gui.rs_create_compat.intermediate_cache.";
+
+    /** 背景贴图（173×? 见 {@link IntermediateCacheMenu#PANEL_W} / {@code PANEL_H}；工具生成，槽框已烘焙）。 */
+    private static final ResourceLocation TEXTURE = ResourceLocation.fromNamespaceAndPath(
+        RS_Create_Compat.MODID, "textures/gui/intermediate_cache.png");
 
     /** 标题颜色：黑色（浅色面板上白字看不清，全模组机器标题统一口径）。 */
     private static final int COLOR_TITLE = 0xFF333333;
@@ -72,11 +77,8 @@ public class IntermediateCacheScreen extends AbstractContainerScreen<Intermediat
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick,
                             final int mouseX, final int mouseY) {
-        McGui.panel(guiGraphics, leftPos, topPos, imageWidth, imageHeight);
-        // 槽位框：与 Menu 槽位坐标严格同源（背景精灵坐标 = Menu 坐标 − 1）
-        for (final Slot slot : menu.slots) {
-            McGui.slotFrame(guiGraphics, leftPos + slot.x - 1, topPos + slot.y - 1);
-        }
+        // 整图 blit：槽框已烘焙在 PNG 里（槽框左上角 = Menu 坐标 − 1），一次画完
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, imageWidth, imageHeight);
     }
 
     @Override
@@ -99,8 +101,14 @@ public class IntermediateCacheScreen extends AbstractContainerScreen<Intermediat
         renderCacheTooltips(guiGraphics, mouseX, mouseY);
     }
 
-    /** 自绘元素 tooltip（盘位说明行 / 用量行；判定范围与绘制范围严格一致）。 */
+    /** 自绘元素 tooltip（盘位说明行 / 用量行；判定范围与绘制范围严格一致）。
+     *  <p><b>同一帧同一格只画一份</b>：这两行是<b>几何命中</b>（与 {@code hoveredSlot} 不同源），
+     *  而原版槽位路径（{@link #renderTooltip}）可能已经为鼠标下那个有物品的盘位画了一份 —— 两份 tooltip
+     *  行数不同 ⇒ 贴边时定位点不同 ⇒ 文字互相压，故原版会画时这里直接让位。</p> */
     private void renderCacheTooltips(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
+        if (RsccTooltipLayers.vanillaSlotTooltipWillDraw(hoveredSlot)) {
+            return; // 原版已画：绝不再叠第二份
+        }
         // 判定用原版 AbstractContainerScreen#isHovering（内部把鼠标坐标换算成菜单坐标），
         // 因此与 renderLabels 里按菜单坐标绘制的那两行严格同源，不会自己再算一遍左上角。
         final boolean onText = isHovering(LABEL_X, LABEL_Y, TEXT_W, TEXT_H, mouseX, mouseY)

@@ -92,8 +92,13 @@ public final class KeeperTarget {
             }
             lastSet = setTarget;
             cooldown = CLAMP_LOG_COOLDOWN_TICKS;
-            LOGGER.info("{} {} 生效目标被钳制：设定 {}，网络现有 {}，不可自动合成 ⇒ 当前维持 {}（设定值未被改写）",
-                KeeperOverflow.LOG_PREFIX, who, setTarget, stored, effective);
+            // 走唯一的开发日志判据（RsccAssemblyDebug.isEnabled()）：本行是周期性诊断（每 tick 调用），
+            // 开关关掉时必须一句都不打 —— 第 122 轮自检 tools/selfcheck_round122_devlog_gate.py 守着。
+            // 节流状态照旧维护（与上次值无关），这样「开关中途打开」也不会立刻补打一条旧状态。
+            if (RsccAssemblyDebug.isEnabled()) {
+                LOGGER.info("{} {} 生效目标被钳制：设定 {}，网络现有 {}，不可自动合成 ⇒ 当前维持 {}（设定值未被改写）",
+                    KeeperOverflow.LOG_PREFIX, who, setTarget, stored, effective);
+            }
         }
     }
 }

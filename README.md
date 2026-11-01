@@ -7,8 +7,8 @@
 | Minecraft | 1.21.1 |
 | NeoForge | 21.1.248（版本范围 `[21,)`） |
 | 机械动力 Create | 6.0.10-280（版本范围 `[6.0,)`） |
-| 精致存储 Refined Storage 2 | 2.0.0（版本范围 `[2.0.0,3.0.0)`） |
-| 本模组版本 | 1.1.0 |
+| 精致存储 Refined Storage 2 | 2.0.9（版本范围 `[2.0.0,3.0.0)`） |
+| 本模组版本 | 1.2.0-beta.29（开发版；最后一个正式版是 `1.1.0`） |
 | 模组 ID | `rs_create_compat` |
 | 作者 | CallMeACookieWYQ |
 | 许可证 | All Rights Reserved |
@@ -352,14 +352,40 @@
 
 ## 十二、依赖与致谢
 
-- [NeoForge](https://neoforged.net/) —— 模组加载器
-- [机械动力 Create](https://modrinth.com/mod/create) —— 序列装配、扳手、蓝图加农炮、流体管道
-- [精致存储 Refined Storage](https://modrinth.com/mod/refined-storage) —— 网络、终端、总线、自动合成
-- [Curios API](https://modrinth.com/mod/curios) —— 饰品槽与终端快捷键
-- [Refined Storage - Curios Integration](https://github.com/refinedmods/refinedstorage-curios-integration) —— 提供装下远程终端的饰品槽
-- [JEI](https://www.curseforge.com/minecraft/mc-mods/jei) —— 序列装配配方的一键导入
-- [Jade](https://modrinth.com/mod/jade) —— 被伪装 / 套壳方块的指向提示
-- [FTB Ultimine (NeoForge)](https://www.curseforge.com/minecraft/mc-mods/ftb-ultimine-forge) —— 连锁套壳
+本项目的「能用」建立在下面这些作者与项目的工作之上。按**使用方式**分类列出并标注仓库与许可证；其中「反编译对照」表示只把对方的实现当行为参照（证据见 `docs/` 各设计文档的「证据等级」），**没有**复制其代码或资源。若你发现本表漏了谁，欢迎提 issue —— 我们会补上。
+
+### 12.1 直接依赖 / 调用 API / 复用其代码或资源
+
+| 项目 | 作者 | 许可证 | 本项目的使用方式 | 仓库 |
+| --- | --- | --- | --- | --- |
+| 精致存储 Refined Storage 2 | Refined Mods | MIT | 网络节点 / 菜单 / 控件 / 数据组件框架；**直接复用**其 `ProgressWidget`（能量条）、`BaseBlockItem`（常显帮助）与 GUI 精灵；执行仓「成链」骨架照抄其链式自动合成仓（见 `docs/DESIGN_DECISIONS_ROUND4.md` §7.1）；反编译 2.0.9 对照行为 | https://github.com/refinedmods/refinedstorage2 |
+| Refined Storage: Quartz Arsenal | Refined Mods | 见仓库 | 可选的 RS 扩展兼容 | https://github.com/refinedmods/refinedstorage-quartz-arsenal |
+| 机械动力 Create | simibubi / Creators of Create | MIT | 序列装配 / 配方类型 / 剪贴板 / 扳手 / 蓝图加农炮 / 流体等 API；反编译 6.0.10 对照行为 | https://github.com/Creators-of-Create/Create |
+| Ponder | The Create Team | MIT | Create 思索场景运行时（构建依赖） | https://github.com/Creators-of-Create/Ponder |
+| Catnip（Create 客户端工具库） | The Create Team | MIT | `Outliner` / `Outline` 区域描边、`Pointing` 朝向提示、`SchematicLevel` | https://github.com/Creators-of-Create/Catnip |
+| Jade | Snownee | CC-BY-NC-SA-4.0 | 方块信息悬浮层（Jade 插件 API） | https://github.com/Snownee/Jade |
+| JEI | mezz | MIT | 序列装配配方一键导入、信息页 | https://github.com/mezz/JustEnoughItems |
+| Curios API | C4（TheIllusiveC4） | LGPL-3.0-or-later | 饰品槽（背饰 / 胸饰）查询，经本工程封装层访问 | https://github.com/TheIllusiveC4/Curios |
+| Refined Storage - Curios Integration | Refined Mods | 见仓库 | 让远程终端可放进饰品槽（可选） | https://github.com/refinedmods/refinedstorage-curios-integration |
+| Just Enough Characters（通用拼音搜索） | Towdium, yzl210, Death-123, vfyjxf_ | MIT | **运行时反射**调用其 `Match.contains`，让本模组自绘搜索框支持拼音 / 简拼（零编译期依赖，未复制代码） | https://github.com/Towdium/JustEnoughCharacters |
+| NeoForge | NeoForged | 见仓库 | 模组加载器、事件、能力与网络系统 | https://github.com/neoforged/NeoForge |
+| FTB Ultimine | FTB Team | 见仓库 | 连锁套壳（可选兼容） | https://github.com/FTBTeam/FTB-Ultimine |
+
+> MIT 代码的版权归各原作者；本项目在 `local_src/` 与 `docs/` 中保留了对 Refined Storage 源码的引用 / 反编译对照记录，相关版权与许可声明以对方仓库的 `LICENSE` 为准。
+
+### 12.2 只做反编译对照 / 排障（未使用其代码或资源）
+
+| 项目 | 作者 | 许可证 | 用途 |
+| --- | --- | --- | --- |
+| Sophisticated Backpacks | P3pp3rF1y、Ridanisaurus | All Rights Reserved | 反编译 3.26.3 排障「容器代理器为什么只显示流体、不显示物品」；结论见 `docs/ROUND108_ENERGY_BAR_AND_PROXY.md`，**未复制任何代码 / 资源** |
+| Sophisticated Core | P3pp3rF1y | All Rights Reserved | 同上（背包能力实现） |
+| Minecraft | Mojang Studios / Microsoft | 原版 EULA | 原版资源与 API |
+
+### 12.3 资源说明
+
+- 本模组的方块贴图由仓库内生成器（`tools/gen_*_textures.py`）程序化绘制、逐像素可复现，**没有直接引用其它模组的贴图**；
+- **唯一直接引用的既有贴图资源**是 Refined Storage 的 GUI 精灵（如 `refinedstorage:widget/progress_bar`），按 RS 的 MIT 许可与其 GUI 系统使用；
+- 其余音效、模型、语言文件的来源见 `docs/` 与对应生成脚本的注释。
 
 ---
 

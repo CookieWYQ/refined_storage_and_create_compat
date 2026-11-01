@@ -83,6 +83,45 @@ LAYOUTS = {
         "button_regions": [],
         "blank_regions": [],
     },
+    # 容器代理器（第 97 轮重制：224×248 → 224×222，背包上移 36px、快捷栏下方留 8px）。
+    # 尺寸必须与 InventoryProxyScreen#imageWidth/imageHeight 逐字一致，否则 blit 会拉伸/裁切。
+    # 注：本图槽位格左上角是奇数坐标（25/135/195）且起点 x=25，而 detect_slot_cells() 按 18 栅格
+    # 对齐 + 偶数步长采样，结构上采不到（其它条目同样会报「槽位缺失」噪声）；本图槽位的严格逐格
+    # 判据在 tools/selfcheck_round97_proxy_layout.py（自己解 PNG 像素，逐格验倒角/高光）。
+    "inventory_proxy.png": {
+        "size": (224, 222),
+        "slot_regions": [
+            # 代理对象槽 (10,22) 不变；玩家背包行首 y=136；快捷栏 y=196（与 InventoryProxyMenu 一致）
+            ("proxy_object",     10,  22, 1, 1),
+            ("player_inventory", 26, 136, 9, 3),
+            ("hotbar",           26, 196, 9, 1),
+        ],
+        "button_regions": [
+            # 六面按钮 (108,20) 起、步长 18、宽 110 高 16（最后一颗底边 126）
+            ("face_down",  108,  20, 110, 16),
+            ("face_up",    108,  38, 110, 16),
+            ("face_north", 108,  56, 110, 16),
+            ("face_south", 108,  74, 110, 16),
+            ("face_west",  108,  92, 110, 16),
+            ("face_east",  108, 110, 110, 16),
+        ],
+        "blank_regions": [
+            ("title_and_status",  0,   0, 224, 134, "标题 / 代理对象槽 / 状态文字折行区（x=10..108）与按钮底板"),
+            ("hotbar_bottom_air", 0, 214, 224,   8, "快捷栏格底 214 到面板底 222 的 8px 留白"),
+        ],
+    },
+    # FE 能量立方（第 99 轮）：小界面，尺寸 = FEEnergyCubeScreen.imageWidth × imageHeight = 176×166，
+    # **没有物品槽**（能量立方无库存，Menu 不 addSlot、不画玩家背包），所以 slot_regions 为空；
+    # 面板内左侧有一个「竖向电量条凹槽」（贴图内 (14,18) 起 14×60；凹槽内缩 1px 的 12×58 是
+    # Screen 用 GuiGraphics#fill 从下往上填电量的区域）—— 这是与 Java 的坐标契约，
+    # 另外右侧 x=32..168 / y=20..84 是 6 行正文（TEXT_X=32、ROW_1..6_Y=20/31/42/53/64/75）的
+    # **零装饰纯色区**；两条契约都由 tools/gen_fe_energy_cube_assets.py 逐像素断言，本脚本不重复判。
+    "fe_energy_cube.png": {
+        "size": (176, 166),
+        "slot_regions": [],
+        "button_regions": [],
+        "blank_regions": [],
+    },
 }
 
 
@@ -232,6 +271,9 @@ def main():
         "advanced_remote_terminal.png": "AdvancedRemoteTerminalScreen.java",
         "schematic_loader.png": "SchematicLoaderScreen.java",
         "advanced_schematic_loader.png": "AdvancedSchematicLoaderScreen.java",
+        # 第 99 轮：FE 能量立方。Java 文件还没落地时这里只会跳过（候选为空），落地后自动核对
+        # 「贴图尺寸 == imageWidth × imageHeight」，两边不一致会打 WARN。
+        "fe_energy_cube.png": "FEEnergyCubeScreen.java",
     }
     for fname, sf in screen_files.items():
         candidates = glob.glob(os.path.join(ROOT, "src", "main", "java", "**", sf), recursive=True)

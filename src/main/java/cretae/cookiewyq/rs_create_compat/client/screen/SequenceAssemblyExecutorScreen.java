@@ -1,6 +1,7 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
 import com.refinedmods.refinedstorage.common.api.autocrafting.PatternOutputRenderingScreen;
+import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.menu.SequenceAssemblyExecutorMenu;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -51,8 +52,14 @@ import net.minecraft.world.item.ItemStack;
  */
 public class SequenceAssemblyExecutorScreen extends AbstractContainerScreen<SequenceAssemblyExecutorMenu>
     implements PatternOutputRenderingScreen {
-    private static final ResourceLocation TEXTURE =
-        ResourceLocation.withDefaultNamespace("textures/gui/container/generic_54.png");
+    /**
+     * 背景贴图（176×222）：第 128 轮起改由 {@code tools/make_gui_bg.py} 生成
+     * （{@code pic/bg.png} 九宫格 4px 容器边框 + {@code pic/slot.png} 槽框烘焙，
+     * {@code --slots-menu "8,18,9,6" "8,140,9,3" "8,198,9,1"}）—— 不再是原版 {@code generic_54.png}，
+     * 与模组其它机器同一套观感；槽框左上角 = Menu 坐标 − 1。
+     */
+    private static final ResourceLocation TEXTURE = ResourceLocation.fromNamespaceAndPath(
+        RS_Create_Compat.MODID, "textures/gui/sequence_assembly_executor.png");
 
     /** 标题颜色：黑色（浅色面板上白字看不清，全模组机器标题统一口径）。 */
     private static final int COLOR_TITLE = 0xFF333333;
@@ -89,7 +96,8 @@ public class SequenceAssemblyExecutorScreen extends AbstractContainerScreen<Sequ
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight);
+        // 整图 blit（9 参：176×222 不是 256×256 的贴图，7 参会按 256 取样而画错）
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, imageWidth, imageHeight);
     }
 
     @Override

@@ -380,8 +380,11 @@ public final class RsccMachineCluster {
         for (final BlockPos p : positions) {
             map.put(p.asLong(), next);
         }
-        LOGGER.debug("[rs_create_compat] 机器集群成型：{} 台，主控 {}（{}）",
-            members.size(), master.rscc$clusterPos(), level.dimension().location());
+        // 开发诊断：走唯一判据（开关关掉时一句都不打；集群成型会随方块增删反复发生）。
+        if (RsccAssemblyDebug.isEnabled()) {
+            LOGGER.debug("[rs_create_compat] 机器集群成型：{} 台，主控 {}（{}）",
+                members.size(), master.rscc$clusterPos(), level.dimension().location());
+        }
     }
 
     /** 把一份载荷搬进目标载荷；搬不走的余量交给兜底归宿（落回世界），绝不销毁。 */

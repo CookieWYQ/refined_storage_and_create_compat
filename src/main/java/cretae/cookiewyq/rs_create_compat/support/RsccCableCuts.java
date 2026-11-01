@@ -266,7 +266,8 @@ public final class RsccCableCuts {
      * </ol>
      * <p>已经由本功能断开的接缝可直接恢复（此时外形数据本来就已是「不连」，不能再拿它做校验）。</p>
      */
-    public static ToggleResult toggleSeam(final ServerLevel level, final BlockPos pos, final Direction dir) {
+    public static ToggleResult toggleSeam(final ServerLevel level, final BlockPos pos, final Direction dir,
+                                          @Nullable final ServerPlayer actor) {
         final BlockPos other = pos.relative(dir);
         final Saved saved = saved(level);
         final boolean posIsLower = pos.asLong() <= other.asLong();
@@ -282,8 +283,10 @@ public final class RsccCableCuts {
         broadcast(level, saved);
         refresh(level, pos);
         refresh(level, other);
-        // 成就触发点：断开 / 接回一道线缆缝（服务端；wasCut 区分两件事，各对应一条成就）
-        RsccAdvancements.onSeamToggled(level, pos, wasCut);
+        // 成就触发点：断开 / 接回一道线缆缝（服务端；wasCut 区分两件事，各对应一条成就）。
+        // 只记给**这一次拿扳手的玩家**（actor）——用户原话「谁发出操作才让谁得到进度」；
+        // 以前按 64 格半径散给附近所有人，导致旁边站着的玩家白拿成就（真人实测踩到）。
+        RsccAdvancements.onSeamToggled(actor, level, pos, wasCut);
         return wasCut ? ToggleResult.RESTORED : ToggleResult.CUT;
     }
 

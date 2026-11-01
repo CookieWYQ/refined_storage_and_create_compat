@@ -1,6 +1,8 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
+import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
 import cretae.cookiewyq.rs_create_compat.menu.SequenceExecutionChamberMenu;
@@ -27,14 +29,17 @@ import java.util.List;
  * （容器打开时发送一次、确认修改后服务端回发一次），在背包标签带处渲染展示。</p>
  * <p><b>本界面已无磁盘槽（用户决定）</b>：中间产物的磁盘改插在「中间产物缓存仓」
  * （{@code intermediate_cache}）里，网络内所有执行舱共用那一份池子；因此面板高度恢复成
- * 引入磁盘槽之前的 176×222（原版 {@code generic_54.png} 整图直出，<b>不新画任何背景贴图</b>）。
- * 需要放 / 换盘请打开缓存仓界面。</p>
+ * 引入磁盘槽之前的 176×222。该尺寸的底图是 {@code textures/gui/sequence_execution_chamber.png}，
+ * 第 128 轮起由 {@code tools/make_gui_bg.py} 生成
+ * （{@code pic/bg.png} 九宫格 + {@code pic/slot.png} 槽框烘焙，槽框左上角 = Menu 坐标 − 1），
+ * 与模组其它机器同一套观感。需要放 / 换盘请打开缓存仓界面。</p>
  * <p>硬规则：文字全部 {@code drawString(..., false)}（含按钮标签，见 {@link NoShadowButton}）；
  * 自绘元素（配置按钮、绑定状态行）的 tooltip 全部手动渲染，hover 判定与绘制范围同源。</p>
  */
 public class SequenceExecutionChamberScreen extends AbstractContainerScreen<SequenceExecutionChamberMenu> {
-    private static final ResourceLocation TEXTURE =
-        ResourceLocation.withDefaultNamespace("textures/gui/container/generic_54.png");
+    /** 背景贴图（176×222，工具生成，槽框已烘焙）。 */
+    private static final ResourceLocation TEXTURE = ResourceLocation.fromNamespaceAndPath(
+        RS_Create_Compat.MODID, "textures/gui/sequence_execution_chamber.png");
 
     private static final String LANG = "gui.rs_create_compat.sequence_execution_chamber.";
 
@@ -119,18 +124,21 @@ public class SequenceExecutionChamberScreen extends AbstractContainerScreen<Sequ
 
     @Override
     protected void renderBg(final GuiGraphics guiGraphics, final float partialTick, final int mouseX, final int mouseY) {
-        // 原版双箱整图直出：单元样板槽 + 绑定状态带 + 玩家背包 + 快捷栏（与引入磁盘槽之前逐像素一致）
-        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight);
+        // 整图 blit（9 参：176×222 不是 256×256 的贴图，7 参会按 256 取样而画错）
+        guiGraphics.blit(TEXTURE, leftPos, topPos, 0, 0, imageWidth, imageHeight, imageWidth, imageHeight);
     }
 
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         // 标题 = 本执行仓的名字（未命名时回落到菜单标题，即方块默认名「序列执行仓」）；
-        // 太长按像素截断成「…」（完整名字放 tooltip）。名字只在这里显示，配方类型行不再重复。
-        guiGraphics.drawString(font, Component.literal(trimToWidth(font, screenTitle(), TITLE_MAX_W)),
-            titleLabelX, titleLabelY, COLOR_TITLE, false);
-        // 绑定状态：单行横排（配方类型 + 链台数后缀；占 128..136，不与任何槽位重叠）
-        guiGraphics.drawString(font, statusLine(), STATUS_X, STATUS_Y, 0x404040, false);
+        // 第 104 轮：名字**完整显示**——放不下时整体缩字号（下限 0.6 倍），绝不再切成「名字…」；
+        // 缩到下限还放不下的超长名字，悬停标题即可看到完整原文（renderSptTooltips 的标题那一段）。
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(screenTitle()),
+            titleLabelX, titleLabelY, TITLE_MAX_W, COLOR_TITLE);
+        // 绑定状态：单行横排（配方类型 + 链台数后缀；占 128..136，不与任何槽位重叠）。
+        // 同样走完整显示（缩字号而不截断）——这一行是「为什么没在跑」的答案，不能出现省略号。
+        RsccTextFit.drawFitLine(guiGraphics, font, statusLine(), STATUS_X, STATUS_Y,
+            STATUS_MAX_W, 0x404040);
     }
 
     /** 界面标题：优先本执行仓的名字；未命名（或尚未同步到）时用菜单标题（方块名「序列执行仓」）。 */
@@ -228,8 +236,15 @@ public class SequenceExecutionChamberScreen extends AbstractContainerScreen<Sequ
 
     /** 自绘元素 tooltip（判定范围与绘制范围严格一致，左闭右开）。
      *  <p>本模组附加的说明统一走唯一实现 {@link RsccTooltipLayers}：默认收起，按住对应键才展开；
-     *  标题 / 状态文字等<b>身份信息</b>保持常显。</p> */
+     *  标题 / 状态文字等<b>身份信息</b>保持常显。</p>
+     *  <p><b>同一帧同一格只画一份</b>：本节四个命中判定全是<b>几何矩形</b>（与 {@code hoveredSlot} 不同源），
+     *  而原版槽位路径（{@link #renderTooltip}）这一帧可能已经为鼠标下那个有物品的槽画了一份。两张
+     *  tooltip 的行数不同 ⇒ {@code DefaultTooltipPositioner} 贴边时反算出的 y 不同 ⇒ 两套文字互相压，
+     *  因此原版会画时这里一律不再画（几何上这几块矩形与 6×9 单元样板槽并不相交，本守卫只挡不可能发生的叠画）。</p> */
     private void renderSptTooltips(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
+        if (RsccTooltipLayers.vanillaSlotTooltipWillDraw(hoveredSlot)) {
+            return;
+        }
         if (isHoveringRect(CONFIG_BTN_X, CONFIG_BTN_Y, CONFIG_BTN_W, CONFIG_BTN_H, mouseX, mouseY)) {
             RsccTooltipLayers.renderAttached(guiGraphics, font,
                 Component.translatable(LANG + "config.tip"), mouseX, mouseY);
@@ -268,21 +283,6 @@ public class SequenceExecutionChamberScreen extends AbstractContainerScreen<Sequ
                                    final double mouseX, final double mouseY) {
         return mouseX >= leftPos + x && mouseX < leftPos + x + w
             && mouseY >= topPos + y && mouseY < topPos + y + h;
-    }
-
-    /** 按像素宽截断字符串（尾部补省略号）。 */
-    private static String trimToWidth(final Font font, final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     @Override

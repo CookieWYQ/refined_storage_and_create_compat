@@ -2,8 +2,8 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 
 import com.refinedmods.refinedstorage.common.support.widget.ScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -73,7 +73,12 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
     private static final int QUEUE_BTN_Y = 4;
     private static final int QUEUE_BTN_W = 56;
     private static final int QUEUE_BTN_H = 12;
-    /** 标题可占用的最大像素宽（到队列按钮左侧再留 2px），超宽截断，避免压到按钮 / 右侧升级槽。 */
+    /**
+     * 标题可占用的最大像素宽（到队列按钮左侧再留 2px）。
+     * <p><b>第 104 轮（用户口径：不许省略号）</b>：超宽时用 {@link RsccTextFit#drawFitLine}
+     * <b>整体缩字号</b>完整显示（下限 {@link RsccTextFit#MIN_SCALE}），不再截断加 {@code ...}，
+     * 因此「高级蓝图加农炮装填器」/「Advanced Schematic Loader」都会被完整画出来，且不压按钮 / 升级槽。</p>
+     */
     private static final int TITLE_MAX_W = QUEUE_BTN_X - 8 - 2;
 
     private ScrollbarWidget scrollbar;
@@ -254,38 +259,22 @@ public class AdvancedSchematicLoaderScreen extends AbstractContainerScreen<Advan
 
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
-        // 标题超宽截断：右侧是队列按钮（x=120），再往右是升级槽列（x=187 起）
-        guiGraphics.drawString(font,
-            Component.literal(trimToWidth(font, title.getString(), TITLE_MAX_W)),
-            titleLabelX, titleLabelY, COLOR_TITLE, false);
+        // 标题：右侧是队列按钮（x=120），再往右是升级槽列（x=187 起）。
+        // 第 104 轮起放不下时「整体缩字号」完整显示，绝不截断加省略号（{@link RsccTextFit#MIN_SCALE} 为下限）。
+        RsccTextFit.drawFitLine(guiGraphics, font, title, titleLabelX, titleLabelY,
+            TITLE_MAX_W, COLOR_TITLE);
         // 资源存储标签：队列(3 行 y=19..73)下方、库存(y=83)上方
         guiGraphics.drawString(font, Component.translatable("gui.rs_create_compat.advanced_schematic_loader.storage"),
             8, 74, 0xFFFFFF, false);
         for (int i = 0; i < TOGGLE_LABEL_KEYS.length; i++) {
             final int row = i / 2;
             final int col = i % 2;
-            // 标签可用宽度 = 到同行勾叉按钮左侧再留 2px（英文串较长时截断，保证不压按钮）
+            // 标签可用宽度 = 到同行勾叉按钮左侧再留 2px；放不下整体缩字号（不截断、不补省略号）
             final int maxWidth = TOGGLE_BTN_X[col] - TOGGLE_LABEL_X[col] - 2;
-            final String label = Component.translatable(TOGGLE_LABEL_KEYS[i]).getString();
-            guiGraphics.drawString(font, Component.literal(trimToWidth(font, label, maxWidth)),
-                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, 0xFFFFFF, false);
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.translatable(TOGGLE_LABEL_KEYS[i]),
+                TOGGLE_LABEL_X[col], ROW0_Y + row * ROW_H + 2, maxWidth, 0xFFFFFF);
         }
         // 玩家背包标签已含在背景中，不再绘制
-    }
-
-    /** 按像素宽截断字符串（尾部补省略号）：保证文字不越过相邻控件 / 槽位 / 面板边。 */
-    private static String trimToWidth(final Font font, final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     @Override

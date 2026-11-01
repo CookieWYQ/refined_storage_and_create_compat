@@ -144,6 +144,64 @@ MIXIN_DIR = os.path.join(ROOT, "src", "main", "java", "cretae", "cookiewyq",
                          "rs_create_compat", "mixin")
 JAVAP = r"D:\java21\bin\javap.exe"
 
+# javap 子进程的硬性超时 / 重试（见 run_javap 的说明）。
+JAVAP_TIMEOUT_SECONDS = 60
+JAVAP_RETRIES = 2
+JAVAP_KILL_GRACE_SECONDS = 10
+
+
+def _kill_process_tree(proc):
+    """强杀 javap 及其子进程（Windows 用 taskkill /T 更彻底；其它平台退化为 kill）。"""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, text=True, timeout=30)
+            return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def run_javap(argv, timeout=JAVAP_TIMEOUT_SECONDS, retries=JAVAP_RETRIES):
+    """跑一次 javap；子进程无响应就 kill 并重试，重试耗尽返回 None。
+
+    为什么需要它（2026-10-24 实证，不是预防性写法）：本机 javap 子进程会**偶发卡死**
+    （CPU 0、无输出、不退出）。而 `subprocess.run(timeout=...)` 超时后的收尾是
+    「kill() → 再 communicate()」，**第二次 communicate 没有任何超时保护** ⇒ 整轮
+    @Shadow / 注入目标校验会被一个卡死的 javap 永久拖住。实测两次：一次挂在第 1 遍的
+    `ServerLevel` 上，一次挂在第 2 遍的 `AbstractImporterBlockEntity` 上，都是 20 分钟以上
+    不动（`py-spy`/faulthandler 的栈落在 `subprocess._communicate → threading.join`）。
+
+    这里改成显式 kill + 有限重试：**读不到仍然返回 None**（调用方按「目标类不可读」处理，
+    判据强度不变、不会假绿），只是不再把整轮校验一起拖死。重试成功会打印一行提示，
+    避免「悄悄重试」把环境问题藏起来。
+    """
+    last_error = None
+    for attempt in range(retries + 1):
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            last_error = "超时 %ds（第 %d 次尝试）" % (timeout, attempt + 1)
+            _kill_process_tree(proc)
+            try:
+                proc.communicate(timeout=JAVAP_KILL_GRACE_SECONDS)
+            except Exception:
+                pass
+            if attempt < retries:
+                print("        [提示] javap 无响应，已 kill 并重试（%s）：%s"
+                      % (last_error, " ".join(str(a) for a in argv[1:])), flush=True)
+            continue
+        if attempt > 0:
+            print("        [提示] javap 第 %d 次尝试才成功（此前：%s）"
+                  % (attempt + 1, last_error), flush=True)
+        return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    return None
+
 # 缓存根定位 + 同族多版本挑选：唯一实现放在 tools\_gradle_cache.py（与 PowerShell 侧同一套判据）。
 # 以前这里写死 `os.path.expanduser("~")/.gradle/caches`，而本机 GRADLE_USER_HOME=D:\gradle
 # ⇒ 校验的其实是另一个缓存里的制品 —— 这正是「0 问题」却与真实编译/运行环境不符的来源。
@@ -858,12 +916,14 @@ class JarIndex:
             self._failed[bin_name] = "专用服务端上不存在（dist=%s 视界）" % self.dist
             return None
         try:
-            proc = subprocess.run(
-                [JAVAP, "-p", "-s", "-cp", self.classpath, bin_name],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=180)
+            proc = run_javap([JAVAP, "-p", "-s", "-cp", self.classpath, bin_name])
         except Exception as exc:  # pragma: no cover
             self._failed[bin_name] = str(exc)
+            return None
+        if proc is None:
+            # 重试耗尽仍然没有响应：按「读不到」处理（严格方向，绝不当作通过）。
+            self._failed[bin_name] = ("javap 无响应（已 kill 并重试 %d 次，超时 %ds/次）"
+                                      % (JAVAP_RETRIES, JAVAP_TIMEOUT_SECONDS))
             return None
         if proc.returncode != 0 or not proc.stdout:
             self._failed[bin_name] = (proc.stderr or proc.stdout or "").strip()

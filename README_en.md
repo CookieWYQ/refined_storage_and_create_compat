@@ -7,8 +7,8 @@
 | Minecraft | 1.21.1 |
 | NeoForge | 21.1.248 (range `[21,)`) |
 | Create | 6.0.10-280 (range `[6.0,)`) |
-| Refined Storage 2 | 2.0.0 (range `[2.0.0,3.0.0)`) |
-| Mod version | 1.1.0 |
+| Refined Storage 2 | 2.0.9 (range `[2.0.0,3.0.0)`) |
+| Mod version | 1.2.0-beta.29 (development build; the latest stable release is `1.1.0`) |
 | Mod ID | `rs_create_compat` |
 | Author | CallMeACookieWYQ |
 | License | All Rights Reserved |
@@ -352,14 +352,40 @@ Diagnostic logging is **off by default** (`devLogs`, same name as the config opt
 
 ## 12. Dependencies and credits
 
-- [NeoForge](https://neoforged.net/) — mod loader
-- [Create](https://modrinth.com/mod/create) — sequenced assembly, wrench, schematic cannon, fluid pipes
-- [Refined Storage](https://modrinth.com/mod/refined-storage) — network, terminals, buses, autocrafting
-- [Curios API](https://modrinth.com/mod/curios) — Curios slot and terminal hotkey
-- [Refined Storage - Curios Integration](https://github.com/refinedmods/refinedstorage-curios-integration) — provides the Curios slot that holds the remote terminals
-- [JEI](https://www.curseforge.com/minecraft/mc-mods/jei) — one-click sequenced assembly recipe import
-- [Jade](https://modrinth.com/mod/jade) — aimed-at hints for camouflaged and sheathed blocks
-- [FTB Ultimine (NeoForge)](https://www.curseforge.com/minecraft/mc-mods/ftb-ultimine-forge) — chained framing
+Everything this mod does stands on the work of the authors and projects below. They are grouped by **how** this project uses them, with repository and license noted where verified. "Decompiled reference" means we only used the implementation as a behavioural reference (evidence levels are documented in the design docs under `docs/`) and did **not** copy code or assets. If we missed someone, please open an issue and we will add them.
+
+### 12.1 Direct dependencies / API use / reused code or assets
+
+| Project | Authors | License | How this project uses it | Repository |
+| --- | --- | --- | --- | --- |
+| Refined Storage 2 | Refined Mods | MIT | Network node / menu / widget / data-component framework; we **reuse** its `ProgressWidget` (energy bars), `BaseBlockItem` (always-visible help) and GUI sprites; the execution-chamber "chaining" skeleton follows its chained autocrafter (see `docs/DESIGN_DECISIONS_ROUND4.md` §7.1); decompiled 2.0.9 for behavioural parity | https://github.com/refinedmods/refinedstorage2 |
+| Refined Storage: Quartz Arsenal | Refined Mods | see repository | Optional RS add-on compatibility | https://github.com/refinedmods/refinedstorage-quartz-arsenal |
+| Create | simibubi / Creators of Create | MIT | Sequenced assembly / recipe types / clipboard / wrench / schematic cannon / fluids APIs; decompiled 6.0.10 for behavioural parity | https://github.com/Creators-of-Create/Create |
+| Ponder | The Create Team | MIT | Runtime for Create's ponder scenes (build dependency) | https://github.com/Creators-of-Create/Ponder |
+| Catnip (Create's client-side utility library) | The Create Team | MIT | `Outliner` / `Outline` area outlines, `Pointing` orientation hints, `SchematicLevel` | https://github.com/Creators-of-Create/Catnip |
+| Jade | Snownee | CC-BY-NC-SA-4.0 | Block information overlay (Jade plugin API) | https://github.com/Snownee/Jade |
+| JEI | mezz | MIT | One-click import of sequence assembly recipes, information pages | https://github.com/mezz/JustEnoughItems |
+| Curios API | C4 (TheIllusiveC4) | LGPL-3.0-or-later | Curios slots (back / chest) queried through this project's wrapper | https://github.com/TheIllusiveC4/Curios |
+| Refined Storage - Curios Integration | Refined Mods | see repository | Lets a remote terminal go into a Curios slot (optional) | https://github.com/refinedmods/refinedstorage-curios-integration |
+| Just Enough Characters | Towdium, yzl210, Death-123, vfyjxf_ | MIT | **Reflection-only** call to its `Match.contains` so our hand-drawn search boxes accept pinyin / initials (no compile-time dependency, no code copied) | https://github.com/Towdium/JustEnoughCharacters |
+| NeoForge | NeoForged | see repository | Mod loader, events, capabilities, networking | https://github.com/neoforged/NeoForge |
+| FTB Ultimine | FTB Team | see repository | Chained camouflaging (optional compatibility) | https://github.com/FTBTeam/FTB-Ultimine |
+
+> MIT code remains copyright of its respective authors. This project keeps the Refined Storage source references / decompilation notes in `local_src/` and `docs/`; the copyright and license terms are those of each upstream repository's `LICENSE`.
+
+### 12.2 Decompiled reference / troubleshooting only (no code or assets used)
+
+| Project | Authors | License | Purpose |
+| --- | --- | --- | --- |
+| Sophisticated Backpacks | P3pp3rF1y, Ridanisaurus | All Rights Reserved | Decompiled 3.26.3 to diagnose "why does the Container Proxy show fluids but no items"; conclusions in `docs/ROUND108_ENERGY_BAR_AND_PROXY.md`; **no code or assets copied** |
+| Sophisticated Core | P3pp3rF1y | All Rights Reserved | Same as above (backpack capability implementation) |
+| Minecraft | Mojang Studios / Microsoft | vanilla EULA | Vanilla assets and APIs |
+
+### 12.3 Assets
+
+- Every block texture in this mod is drawn procedurally by the in-repo generators (`tools/gen_*_textures.py`) and is reproducible pixel by pixel; **no other mod's textures were copied**;
+- The **only existing texture assets referenced directly** are Refined Storage's GUI sprites (e.g. `refinedstorage:widget/progress_bar`), used through RS's own GUI system under its MIT license;
+- Sources for sounds, models and language files are documented in `docs/` and in the generator scripts' headers.
 
 ---
 

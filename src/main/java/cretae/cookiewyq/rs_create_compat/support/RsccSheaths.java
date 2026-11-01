@@ -313,7 +313,8 @@ public final class RsccSheaths {
      *             无限版 / 创造模式为 false）；取下与被拆时按它决定要不要归还，任何模式下一进一出都相抵
      * @return {@code false} = 这一格本来就套着（调用方据此给出「先取下」的提示，并且<b>不</b>扣物品）
      */
-    public static boolean add(final ServerLevel level, final BlockPos pos, final boolean infinite, final boolean paid) {
+    public static boolean add(final @Nullable ServerPlayer actor, final ServerLevel level, final BlockPos pos,
+                              final boolean infinite, final boolean paid) {
         final Saved saved = saved(level);
         if (saved.sheaths.containsKey(pos)) {
             return false;
@@ -326,8 +327,9 @@ public final class RsccSheaths {
         // 顺序要点：先把新快照发给客户端，再发方块更新 —— 客户端重算连接臂时用的已是新数据
         broadcast(level, saved);
         SeparationFrameGuard.refreshAround(level, pos);
-        // 成就触发点：套上框架外壳（服务端；无限版会再多发一次它的专属事件）
-        RsccAdvancements.onSheathApplied(level, pos, infinite);
+        // 成就触发点：套上框架外壳（服务端；无限版会再多发一次它的专属事件）。
+        // 只记给这一格的套壳者（actor）——用户原话「谁发出操作才让谁得到进度」
+        RsccAdvancements.onSheathApplied(actor, level, pos, infinite);
         return true;
     }
 
@@ -348,9 +350,11 @@ public final class RsccSheaths {
      *
      * @param paid 调用方这一次是否<b>真的</b>会从玩家手里按格扣掉物品（无限版 / 创造模式为 false）；
      *             与 {@link #add} 同一位语义，只影响「取下 / 被拆时还不还」
+     * @param actor 触发这次连锁的玩家；成就只记给他本人（{@code null} = 拿不到操作者，成就就不发）
      * @return 真正<b>新增</b>的套壳格数（调用方据此逐个消耗物品，保证「物品数 == 套壳数」）
      */
-    public static int addAll(final ServerLevel level, final Collection<BlockPos> positions, final boolean infinite,
+    public static int addAll(final @Nullable ServerPlayer actor, final ServerLevel level,
+                             final Collection<BlockPos> positions, final boolean infinite,
                              final boolean paid) {
         if (positions.isEmpty()) {
             return 0;
@@ -386,7 +390,7 @@ public final class RsccSheaths {
         SeparationFrameGuard.refreshBlocks(level, refreshTargets);
         // 成就触发点：批量套壳真正新增了多格才算「一整段」（单格右键走 add，不会误触发）
         if (masks.size() >= 2) {
-            RsccAdvancements.onSheathChained(level, masks.keySet().iterator().next());
+            RsccAdvancements.onSheathChained(actor, level, masks.keySet().iterator().next());
         }
         return masks.size();
     }

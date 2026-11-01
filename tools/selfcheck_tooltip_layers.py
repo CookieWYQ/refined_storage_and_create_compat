@@ -4,6 +4,8 @@
 方向（用户最新原话）：
 - **物品级的本模组附加信息也要按键分层**（`SequenceAssemblyPatternItem` / `SequenceUnitPatternItem`
   的 `appendHoverText`、以及 `UnitPatternTooltipComponent` 的图标行）：默认隐藏，按 Shift/Ctrl/Alt 分层显示；
+  **唯一例外（2026-10-17 用户要求）**：单元样板的「机器 / 输入池原料」两行改常显（见 `selfcheck_round76`），
+  输入流体行仍按 Ctrl；
 - RS 原生常显帮助（`HelpTooltipComponent`、`RsccHelpBlockItem` 交给父类的 helpText）**保持不变**；
 - 分层实现只有一处：`client/tooltip/RsccTooltipLayers`（物品级与屏幕级都调它）。
 
@@ -241,9 +243,14 @@ def section_item_layers():
           "②序列装配样板把步数 / 循环与产物 · 废料概率放进 Ctrl 层（数值）")
     check("RsccTooltipLayers.shift(" in unit and "RsccTooltipLayers.alt(" in unit,
           "②单元样板：配方类型名 = Shift，内部 id = Alt")
-    check("RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.SHIFT)" in comp
-          and "RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.CTRL)" in comp,
-          "②图标组件：机器 / 输入原料行 = Shift，输入流体行 = Ctrl（含数量）")
+    # 2026-10-17 用户要求：单元样板的「机器 / 输入池原料」两行改常显（不再按 Shift）；
+    # 输入流体行仍按 Ctrl。总样板（AssemblyInputsTooltipComponent）一字不动，仍全部走 Shift/Ctrl。
+    check("RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.CTRL)" in comp,
+          "②图标组件：输入流体行仍 = Ctrl（含数量）")
+    check("MAX_ALWAYS_ROWS = 2" in comp
+          and "return !machines.isEmpty();" in comp
+          and "return !input.isEmpty() || !inputCandidates.isEmpty();" in comp,
+          "②图标组件：机器 / 输入池原料行常显（单元样板专用例外，见 round76 自检）")
     check("RsccTooltipLayers.componentVisible(" in comp
           and "Screen.hasShiftDown" not in comp and "hasControlDown" not in comp,
           "②图标组件不自己读按键（一律问唯一实现）")

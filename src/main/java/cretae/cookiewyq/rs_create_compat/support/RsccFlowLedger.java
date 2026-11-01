@@ -43,8 +43,16 @@ import java.util.function.ToLongFunction;
  * <h2>为什么「未对平」只作诊断、不做硬崩溃</h2>
  * <p>账本只挂在本模组自己的四个执行点（备料 / 推料 / 收集 / 收尾回流）上。世界里有<b>本模组之外的
  * 搬运</b>（玩家手动、别的模组、集群拆分 / 区块卸载 / 读档基线）同样会改变舱内存量，它们不该被
- * 误报成「本模组漏计」。因此本类把差额如实列出并标注<b>可能的来源</b>（{@code external_or_baseline}），
+ * 误报成「本模组漏计」。因此本类把差额如实列出，并用 {@link #verdictOf(Row)} /
+ * {@link #breakdown(Row)} <b>把差额定位到具体那一小段</b>（舱内存量 / 推给机器 / 进入网络 / 销毁），
  * 供 {@code /rs_create_compat diag} 与日志取证；<b>任何判定都不读它</b>，因此对既有行为零影响。</p>
+ * <p><b>第 95 轮修正（用户实机日志里的持续失衡）</b>：一开始这里只把差额写成
+ * {@code 可能来源: external_or_baseline}，结果真出现失衡时（{@code create:incomplete_precision_mechanism}
+ * 每 60 秒一条）完全指不出是哪条路径 —— 而那一次的实际根因是工位侧残留回流
+ * <b>只记了「进入网络」没记「从机器取回」</b>（见 {@code SequenceExecutionChamberBlockEntity
+ * #flushStationStartIngredients}），一条纯记账漏项。所以「指出路径」不是锦上添花：
+ * 没有它，账本只会制造新的误报。现在判决里能直接读出
+ * {@code station_return_unbooked} 这种「差在哪一段」的结论。</p>
  *
  * <p>基线的取法：某个资源<b>第一次</b>被记账时，用 {@code liveProbe} 把「此刻的真实舱内存量」记成基线，
  * 于是重启 / 读档 / 中途存盘都不会制造假差额（计数器是内存态、不落盘）。</p>
@@ -175,15 +183,129 @@ public final class RsccFlowLedger {
             final String key = entry.getKey();
             final Cell cell = entry.getValue();
             final long live = Math.max(0L, safeProbe(key));
-            // 留存 = 舱内存量增量 + 推给机器 − 从机器取回（= 离开网络 / 世界后仍留在本产线上的量）
-            final long retained = (live - cell.baseLive) + cell.toMachine - cell.fromMachine;
-            // 未对平 = 留存 + 销毁 −（离开网络 + 世界收集 − 进入网络）：应为 0
-            final long unaccounted = retained + cell.destroyed
-                - (cell.fromNetwork + cell.fromWorld - cell.toNetwork);
-            result.add(new Row(key, cell.fromNetwork, cell.toNetwork, cell.toMachine, cell.fromMachine,
-                cell.fromWorld, cell.destroyed, live, retained, unaccounted));
+            result.add(rowOf(key, cell.fromNetwork, cell.toNetwork, cell.toMachine, cell.fromMachine,
+                cell.fromWorld, cell.destroyed, live, cell.baseLive));
         }
         return result;
+    }
+
+    /**
+     * <b>守恒算式的唯一实现</b>（纯函数：只吃数字，不碰 Minecraft、不读任何字段）。
+     *
+     * <p>为什么单独抽出来：公式此前埋在 {@link #rows()} 里，于是「账本算得对不对」既没法单独验、
+     * 也没法在自检里把两条模拟路径（正常跨步 / 真丢）真的跑一遍 —— 只能靠读源码相信。
+     * 现在 {@link #rows()} 与自检走<b>同一份</b>实现，改公式就一定会同时改到两边。</p>
+     *
+     * <pre>
+     *   留存   = 舱内存量增量 + 推给机器 − 从机器取回
+     *   未对平 = 留存 + 销毁 −（离开网络 + 世界收集 − 进入网络）
+     * </pre>
+     *
+     * @param live     此刻舱内（本仓边界内）该资源的真实存量
+     * @param baseLive 该资源第一次被记账时的存量基线（读档 / 重启不会制造假差额）
+     */
+    public static Row rowOf(final String key, final long fromNetwork, final long toNetwork,
+                            final long toMachine, final long fromMachine, final long fromWorld,
+                            final long destroyed, final long live, final long baseLive) {
+        final long retained = (live - baseLive) + toMachine - fromMachine;
+        final long unaccounted = retained + destroyed
+            - (fromNetwork + fromWorld - toNetwork);
+        return new Row(key, fromNetwork, toNetwork, toMachine, fromMachine, fromWorld, destroyed,
+            live, retained, unaccounted);
+    }
+
+    /**
+     * <b>把差额定位到具体搬运路径</b>（纯函数，自检直接跑它）。
+     *
+     * <p>恒等式：{@code 未对平 = 舱内Δ + 机器Δ + 销毁 + 网络净额}，其中
+     * {@code 网络净额 = 进入网络 − 离开网络 − 世界收集}、{@code 机器Δ = 推给机器 − 从机器取回}。
+     * 于是「哪一段能吞下这笔差额」就等价于「这笔差额只可能落在哪条路径上」，而不是一句
+     * {@code 可能来源: external_or_baseline} 让玩家自己猜。</p>
+     *
+     * @return {@code balanced} = 对平；其余取值见 {@link #explain(String)}
+     */
+    public static String verdictOf(final Row row) {
+        final long diff = row.unaccounted();
+        if (diff == 0L) {
+            return "balanced";
+        }
+        // 四个能「吞下」差额的桶（它们的和恒等于 diff）
+        final long chamber = row.retained() - row.toMachine() + row.fromMachine();
+        final long machine = row.toMachine() - row.fromMachine();
+        final long networkNet = row.toNetwork() - row.fromNetwork() - row.fromWorld();
+        final long destroyed = row.destroyed();
+        if (diff > 0L) {
+            if (chamber > 0L) {
+                return "retained_in_chamber";
+            }
+            if (machine > 0L) {
+                return "station_return_unbooked";
+            }
+            if (networkNet > 0L) {
+                return "network_in_unbooked";
+            }
+            if (destroyed > 0L) {
+                return "destroyed_unexplained";
+            }
+            return "created_from_nowhere";
+        }
+        if (chamber < 0L) {
+            return "lost_from_chamber";
+        }
+        if (machine < 0L) {
+            return "machine_over_reclaimed";
+        }
+        if (networkNet < 0L) {
+            return "lost_after_leaving_network";
+        }
+        if (destroyed > 0L) {
+            return "destroyed_miscount";
+        }
+        return "deficit_unexplained";
+    }
+
+    /** {@link #verdictOf(Row)} 的中文解释（日志用；一条判决对应一句「该查哪里」）。 */
+    public static String explain(final String verdict) {
+        return switch (verdict) {
+            case "balanced" -> "对平";
+            case "retained_in_chamber" -> "差额落在「舱内存量」：多出来的还压在本仓存储里（跨步保留 / "
+                + "未记账的进料：外部插入、别的模组、或读档基线漂移）";
+            case "station_return_unbooked" -> "差额落在「推给机器」：这一份推给工位后离开了工位，"
+                + "却没有配对的「从机器取回 / 入网」记账（工位侧残留回流漏记）";
+            case "network_in_unbooked" -> "差额落在「进入网络」：入网量比记账多（入网侧漏记）";
+            case "destroyed_unexplained" -> "差额落在「销毁」：销毁记账与差额对不上";
+            case "created_from_nowhere" -> "凭空多出：既不在舱内、也不在机器上、也没有销毁记账 ⇒ 疑似复制";
+            case "lost_from_chamber" -> "舱内比记账少：这一份离开了本仓、却没有任何出网 / 销毁记账 ⇒ "
+                + "真丢失（或被本模组之外的路径取走）";
+            case "machine_over_reclaimed" -> "从机器取回多于推给机器 ⇒ 重复记账 / 怀疑复制";
+            case "lost_after_leaving_network" -> "离开网络之后既不在舱内也不在机器上、且无销毁记账 ⇒ "
+                + "真丢失（或被本模组之外的路径取走）";
+            case "destroyed_miscount" -> "销毁记账比实际多";
+            default -> "差额来源无法从四段里定位（公式被改过？）";
+        };
+    }
+
+    /**
+     * 一条失衡的<b>路径拆解</b>：把「进 / 出 / 销毁 / 回收 / 舱内」四段数字与判决放在同一行。
+     * <p>用户实机日志里原本只有 {@code item:X=1} 这样一个数字，看不出是哪条搬运路径错 ——
+     * 这条拆解就是为了让下一份日志能直接指向路径，而不是再猜一次。</p>
+     */
+    public static String breakdown(final Row row) {
+        final String verdict = verdictOf(row);
+        final long chamber = row.retained() - row.toMachine() + row.fromMachine();
+        final long machine = row.toMachine() - row.fromMachine();
+        final long networkNet = row.toNetwork() - row.fromNetwork() - row.fromWorld();
+        return row.key()
+            + " 差额=" + row.unaccounted()
+            + " 路径[离开网络=" + row.fromNetwork()
+            + " 进入网络=" + row.toNetwork()
+            + " 世界收集=" + row.fromWorld()
+            + " 推给机器=" + row.toMachine()
+            + " 从机器取回=" + row.fromMachine()
+            + " 销毁=" + row.destroyed()
+            + " 舱内=" + row.live() + " 舱内存量基线外=" + chamber
+            + " 网络净额=" + networkNet + " 机器Δ=" + machine + "]"
+            + " 判定=" + verdict + "（" + explain(verdict) + "）";
     }
 
     /**
@@ -234,7 +356,8 @@ public final class RsccFlowLedger {
         out.put("cells", all);
         final List<Object> bad = new ArrayList<>();
         for (final Row row : unbalanced()) {
-            bad.add(describe(row) + " (可能来源: external_or_baseline)");
+            // 每一条失衡都带「路径拆解 + 判决」：导出 JSON 的人不需要自己再算一遍四段数字
+            bad.add(breakdown(row));
         }
         out.put("unbalanced", bad);
         return out;
@@ -345,8 +468,8 @@ public final class RsccFlowLedger {
             state.lastReportMillis = millis;
             // 开发诊断（INFO）：受 devLogs 总开关控制。
             if (RsccAssemblyDebug.isEnabled()) {
-                LOGGER.info("{} {} unbalanced (first) peak={} on {} :: {}",
-                    PREFIX, origin, state.peak, state.peakKey, signature);
+                LOGGER.info("{} {} unbalanced (first) peak={} on {} :: {} || {}",
+                    PREFIX, origin, state.peak, state.peakKey, signature, breakdownOf(bad));
             }
             return;
         }
@@ -354,20 +477,46 @@ public final class RsccFlowLedger {
         if (!state.reported && state.samples >= SUSTAINED_SAMPLES) {
             state.reported = true;
             state.lastReportMillis = millis;
-            LOGGER.warn("{} {} unbalanced (sustained {} samples) peak={} on {} :: {}",
-                PREFIX, origin, state.samples, state.peak, state.peakKey, signature);
+            // 【第 95 轮】持续失衡的那一条必须能<b>指向具体搬运路径</b>：
+            // 旧稿只有 `资源=差额`（例如 `item:create:incomplete_precision_mechanism=1`），
+            // 用户实机日志里连续刷了 2 分半，却完全看不出是「进 / 出 / 销毁 / 回收」哪一段错 ——
+            // 只能靠事后读代码猜。现在把四段数字 + 判决（含中文解释）接在同一行。
+            LOGGER.warn("{} {} unbalanced (sustained {} samples) peak={} on {} :: {} || {}",
+                PREFIX, origin, state.samples, state.peak, state.peakKey, signature, breakdownOf(bad));
             return;
         }
         state.suppressed++;
         if (millis - state.lastReportMillis >= REPEAT_WINDOW_MILLIS) {
             // 开发诊断（INFO）：受 devLogs 总开关控制。
             if (RsccAssemblyDebug.isEnabled()) {
-                LOGGER.info("{} {} unbalanced (same imbalance repeated {} times, peak={} on {}) :: {}",
-                    PREFIX, origin, state.suppressed, state.peak, state.peakKey, signature);
+                LOGGER.info("{} {} unbalanced (same imbalance repeated {} times, peak={} on {}) :: {} || {}",
+                    PREFIX, origin, state.suppressed, state.peak, state.peakKey, signature,
+                    breakdownOf(bad));
             }
             state.lastReportMillis = millis;
             state.suppressed = 0L;
         }
+    }
+
+    /** 一次采样里最多列出几条失衡的路径拆解（其余折成「另有 N 条」，避免一行日志刷出一屏）。 */
+    private static final int MAX_BREAKDOWN_ROWS = 4;
+
+    /** 把本次采样的失衡条目折成「路径拆解」串（与 {@link #breakdown(Row)} 同一份实现）。 */
+    private static String breakdownOf(final List<Row> bad) {
+        final StringBuilder sb = new StringBuilder(320);
+        int shown = 0;
+        for (final Row row : bad) {
+            if (shown >= MAX_BREAKDOWN_ROWS) {
+                sb.append(" | ...另有 ").append(bad.size() - shown).append(" 条失衡未列出");
+                break;
+            }
+            if (shown > 0) {
+                sb.append(" | ");
+            }
+            sb.append(breakdown(row));
+            shown++;
+        }
+        return sb.toString();
     }
 
     /** 失衡签名：{@code 资源=差额}（按资源键排序，保证同一状态两次采样逐字节一致，自身可 diff）。 */

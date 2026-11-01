@@ -87,7 +87,12 @@ public class SchematicLoaderMenu extends AbstractContainerMenu
         addSlot(new SlotItemHandler(blueprintHandler, 0, 9, 19) {
             @Override
             public boolean mayPlace(final ItemStack stack) {
+                // 第 118 轮（只读复核 H1）：除了「本集群被高级装填器锁定」之外，还要挡「共享蓝图槽
+                // 此刻由队列流水线掌管」这一种。原因：原版点击路径（数字键 SWAP / Shift 点击）在调用
+                // slot.set 之前就**已经把物品从玩家背包摘掉**，若只靠共享视图的 setStackInSlot 拒收，
+                // 物品会凭空消失。mayPlace 返回 false ⇒ 原版根本不会去 detach。
                 return !isBlueprintSlotLocked()
+                    && !(loader != null && loader.isSharedBlueprintSlotQueueLocked())
                     && cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity
                         .isValidBlueprintStack(stack);
             }

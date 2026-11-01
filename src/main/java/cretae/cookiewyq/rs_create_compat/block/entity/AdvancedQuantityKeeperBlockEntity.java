@@ -16,7 +16,9 @@ import cretae.cookiewyq.rs_create_compat.support.KeeperOverflow;
 import cretae.cookiewyq.rs_create_compat.support.KeeperSlotConfig;
 import cretae.cookiewyq.rs_create_compat.support.KeeperTarget;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
+import cretae.cookiewyq.rs_create_compat.support.MarkerBudget;
 import cretae.cookiewyq.rs_create_compat.support.MultiFluidCache;
+import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
 import cretae.cookiewyq.rs_create_compat.support.RsccSlotNbt;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -84,7 +86,14 @@ public class AdvancedQuantityKeeperBlockEntity
     public static final int DATA_SLOT_HAS_MARKER = 4;
     public static final int DATA_SLOT_DESTROY_OVERFLOW = 5;
     /** 全局：速度升级数量（4*6=24）。 */
-    public static final int DATA_SPEED_UPGRADES = SLOT_COUNT * DATA_PER_SLOT;
+    /**
+     * 每槽「目标数量」高 16 位的起始下标（第 118 轮；紧跟每槽 6 个常规下标之后，整块新增）。
+     * <p>MC 1.21.1 的 ContainerData 线上是 short ⇒ int 目标数量 > 32767 会被截断（流体按 mB 计，
+     * > 32.7 桶就中招：界面回填 0，点 ± 会把服务端目标静默改小，开「过量销毁」时按错目标销毁）。</p>
+     */
+    public static final int DATA_TARGET_HIGH_BASE = SLOT_COUNT * DATA_PER_SLOT;
+
+    public static final int DATA_SPEED_UPGRADES = DATA_TARGET_HIGH_BASE + SLOT_COUNT;
     /** 全局：是否装有自动合成升级。 */
     public static final int DATA_HAS_AUTOCRAFT_UPGRADE = DATA_SPEED_UPGRADES + 1;
     /** 全局：红石模式（0=忽略 / 1=高电平工作 / 2=低电平工作，与 RS 原版机器同一套编码）。 */
@@ -124,6 +133,9 @@ public class AdvancedQuantityKeeperBlockEntity
     private final CompoundTag[] fluidMarkerNbts = new CompoundTag[SLOT_COUNT];
     /** 每槽标记形态（物品/流体/气体）。 */
     private final int[] fluidForms = new int[SLOT_COUNT];
+
+    /** 第 115 轮：标记「太大」告警只打一次（改包者被拒后可能反复重发，日志不许被刷）。 */
+    private boolean markerTooLargeWarned;
 
     /** 每槽目标数量。 */
     private final int[] targets = new int[SLOT_COUNT];
@@ -264,10 +276,17 @@ public class AdvancedQuantityKeeperBlockEntity
     /**
      * 设置第 {@code slot} 槽的物品标记（同时清除该槽流体标记）；空栈 = 清除该槽标记。
      * 标记变更后重算堵塞状态（残留资源不匹配则停止输出，但绝不销毁）。
+     * <p>第 115 轮（独立复核 H3）：JEI 拖入走 {@code SetAdvKeeperMarkerPacket}（C2S，ItemStack 由客户端给）。
+     * 标记物品的<b>全部数据组件</b>会落盘、随槽位同步并按槽回传；超单条上限就拒收，该槽旧标记保持不变。</p>
      */
     public void setItemMarker(final int slot, final ItemStack stack) {
         if (slot < 0 || slot >= SLOT_COUNT) {
             return;
+        }
+        if (!stack.isEmpty() && MarkerBudget.isStackTooBig(stack,
+                level == null ? null : level.registryAccess())) {
+            warnMarkerTooLarge("物品标记（槽 " + slot + "）", 0);
+            return; // 拒绝：该槽旧标记原样保留（不落盘、不清流体标记）
         }
         inventory.setItem(slot, stack.isEmpty() ? ItemStack.EMPTY : stack.copyWithCount(1));
         fluidMarkerIds[slot] = null;
@@ -278,12 +297,45 @@ public class AdvancedQuantityKeeperBlockEntity
     }
 
     /**
+     * 标记「太大」的统一告警（节流：同一台机器只打一次，避免改包者刷包刷日志）。
+     * <p>UI 口径沿用既有 ghost 槽「失败即静默」（不新增语言键 / 不弹屏），日志里给足证据。</p>
+     */
+    private void warnMarkerTooLarge(final String what, final int heapBytes) {
+        if (markerTooLargeWarned) {
+            return;
+        }
+        markerTooLargeWarned = true;
+        LOGGER.warn("[rs_create_compat] 高级定量保持器（{}）：{}超过单条上限（堆估算 {} B > {} B，≈ 线上 {} KB）"
+                + " ⇒ 本次设置被拒绝，该槽原标记保持不变。正常物品不会触发；若是改包，本条日志即证据",
+            worldPosition, what, heapBytes, MarkerBudget.MAX_ENTRY_BYTES,
+            MarkerBudget.MAX_ENTRY_WIRE_BYTES / 1024);
+    }
+
+    /**
      * 设置第 {@code slot} 槽的流体/气体标记（与物品标记互斥）；{@code id == null} 等价于清除该槽标记。
+     *
+     * <h2>标记槽里<b>不放任何物品</b>（第 90 轮改回）</h2>
+     * <p>用户明确否掉上一轮「流体标记槽里放真实桶物品」的做法：
+     * 「<b>岩浆必须显示为液体/流体渲染，不能显示为桶状</b>」。
+     * 因此这里把标记槽写成 {@link ItemStack#EMPTY}，流体 / 气体标记的<b>视觉</b>由客户端
+     * {@code AdvancedQuantityKeeperScreen#renderSlot} 用工程既有的
+     * {@code GhostMarkerRenderer#renderFluid} 铺<b>流体贴图</b>完成（不是物品、不是桶）。</p>
+     * <p><b>语义边界</b>：该槽「是流体标记」只由 {@link #fluidMarkerIds} / {@link #fluidForms}
+     * 判定，<b>绝不</b>从槽里的物品类型反推（见 {@link #getSlotConfig}、
+     * {@link #matchesItemMarker}、{@link #networkResourceKey} 三处的优先判据）。</p>
+     * <p><b>旧存档兼容</b>：上一版把该槽写过流体桶；{@link #clearLegacyFluidSlotItems()}
+     * 在读档 / 拆下再放下时把那些展示物清掉，保证槽里永远不会残留一个桶。</p>
      */
     public void setFluidMarker(final int slot, final int form,
                                @Nullable final ResourceLocation id, @Nullable final CompoundTag nbt) {
         if (slot < 0 || slot >= SLOT_COUNT || id == null) {
             clearSlot(slot);
+            return;
+        }
+        // 第 115 轮（独立复核 H3，与基础版同一口径）：nbt 是 C2S 包带来的不透明负载，
+        // 以前直接 copy() 落盘并按槽回传；超单条上限就拒收，旧标记保持不变。
+        if (MarkerBudget.isTagTooBig(nbt)) {
+            warnMarkerTooLarge("流体 / 气体标记（槽 " + slot + "）", nbt == null ? 0 : nbt.sizeInBytes());
             return;
         }
         inventory.setItem(slot, ItemStack.EMPTY);
@@ -292,6 +344,24 @@ public class AdvancedQuantityKeeperBlockEntity
         fluidMarkerNbts[slot] = nbt == null ? new CompoundTag() : nbt.copy();
         updateBlockedState();
         setChanged();
+    }
+
+    /**
+     * 清掉旧版本（第 88~89 轮）写在流体 / 气体标记槽里的「桶展示物」。
+     *
+     * <h2>为什么需要它</h2>
+     * <p>标记类型只由 {@link #fluidMarkerIds} 决定，槽里的物品只是展示物。上一版把流体槽写成
+     * 该流体的桶；现在渲染改回<b>流体贴图</b>，槽里若残留桶，客户端虽然不会画它
+     * （{@code renderSlot} 命中流体分支后不再走 {@code super}），但数据层留着一个物品会被
+     * JEI 拖拽 / 槽位点击误当成物品标记。因此读档与「拆下再放下」两条路径都逐槽清一次。</p>
+     * <p><b>只碰有流体 / 气体标记的槽</b>：物品标记槽原样保留，绝不覆盖玩家的物品标记。</p>
+     */
+    private void clearLegacyFluidSlotItems() {
+        for (int i = 0; i < SLOT_COUNT; i++) {
+            if (fluidMarkerIds[i] != null && !inventory.getItem(i).isEmpty()) {
+                inventory.setItem(i, ItemStack.EMPTY);
+            }
+        }
     }
 
     /** 清除第 {@code slot} 槽的标记（该槽原有资源保留，可取出，绝不销毁）。 */
@@ -668,12 +738,15 @@ public class AdvancedQuantityKeeperBlockEntity
         return hasAutocraftingUpgrade() && isAutoCraft(slot);
     }
 
-    /** 每秒销毁的过量数量（沿用定量保持器升级公式）。 */
+    /**
+     * 本机销毁速率（<b>每秒</b>；沿用定量保持器升级公式）——两个保持器必须逐字同源，
+     * 因此与 {@code QuantityKeeperBlockEntity#getDestroyRate()} 一样走 {@link RsccRateLimiter}
+     * 的饱和移位：数值与改前逐格相同（速度 {@code 1,2,4,8,16,32,64}；堆叠 6 级 → power 18 → 262,144），
+     * 但配置上限值下的溢出（会变负数 ⇒ 每次只销毁 1 个）被堵住（I1/I3/I4）。
+     */
     public int getDestroyRate() {
-        final int speed = Math.min(countUpgrades(SPEED_UPGRADE), 6);
-        final int stack = Math.min(countUpgrades(STACK_UPGRADE), 6);
-        final int power = Math.min(speed + stack * 3, 24);
-        return Config.quantityKeeperDestroyRate << power;
+        return RsccRateLimiter.rateSaturating(Config.quantityKeeperDestroyRate,
+            countUpgrades(SPEED_UPGRADE), countUpgrades(STACK_UPGRADE));
     }
 
     public int getSpeedUpgradeCount() {
@@ -723,6 +796,9 @@ public class AdvancedQuantityKeeperBlockEntity
             }
         }
         readConfigs(tag, registries);
+        // 旧版本曾在流体标记槽里放「该流体的桶」当展示物；现在渲染改回流体贴图，槽里不能再有物品
+        // （否则桶图标 / 槽位点击会被误当成物品标记）⇒ 读档时把残留的展示物清掉。
+        clearLegacyFluidSlotItems();
         for (int i = 0; i < SLOT_COUNT; i++) {
             if (tag.contains(TAG_ITEM_STORAGE + i)) {
                 itemStorages[i].deserializeNBT(registries, tag.getCompound(TAG_ITEM_STORAGE + i));
@@ -829,6 +905,9 @@ public class AdvancedQuantityKeeperBlockEntity
             return;
         }
         readConfigs(tag, registries);
+        // 掉落物 NBT 只带配置（标记类型）、不带 ghost 标记槽：流体 / 气体标记槽必须保持空栈
+        // （渲染由客户端铺流体贴图），顺手清掉旧版本可能带过来的桶展示物。
+        clearLegacyFluidSlotItems();
         readFluidStorages(tag);
         updateBlockedState();
         setChanged();
@@ -863,6 +942,10 @@ public class AdvancedQuantityKeeperBlockEntity
                         case DATA_SLOT_DESTROY_OVERFLOW -> destroyOverflow[slot] ? 1 : 0;
                         default -> 0;
                     };
+                }
+                if (index >= DATA_TARGET_HIGH_BASE && index < DATA_TARGET_HIGH_BASE + SLOT_COUNT) {
+                    // 第 118 轮：目标数量的高 16 位（低位仍在每槽的 DATA_SLOT_TARGET）
+                    return targets[index - DATA_TARGET_HIGH_BASE] >>> 16;
                 }
                 return switch (index) {
                     case DATA_SPEED_UPGRADES -> getSpeedUpgradeCount();
@@ -924,6 +1007,18 @@ public class AdvancedQuantityKeeperBlockEntity
     }
 
     private long extractNetworkItem(final int slot, final long amount, final boolean simulate) {
+        // 第 118 轮（只读复核 H2）：同线程重入保护 —— 见 KeeperNetworkReadGuard 的类注释。
+        if (!cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.enter()) {
+            return 0L;
+        }
+        try {
+            return extractNetworkItemRaw(slot, amount, simulate);
+        } finally {
+            cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.exit();
+        }
+    }
+
+    private long extractNetworkItemRaw(final int slot, final long amount, final boolean simulate) {
         if (amount <= 0) {
             return 0L;
         }
@@ -941,6 +1036,19 @@ public class AdvancedQuantityKeeperBlockEntity
 
     private long extractNetworkFluid(final int slot, final ResourceLocation id, final CompoundTag nbt,
                                      final long amount, final boolean simulate) {
+        // 第 118 轮（只读复核 H2）：同线程重入保护 —— 见 KeeperNetworkReadGuard 的类注释。
+        if (!cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.enter()) {
+            return 0L;
+        }
+        try {
+            return extractNetworkFluidRaw(slot, id, nbt, amount, simulate);
+        } finally {
+            cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.exit();
+        }
+    }
+
+    private long extractNetworkFluidRaw(final int slot, final ResourceLocation id, final CompoundTag nbt,
+                                        final long amount, final boolean simulate) {
         if (amount <= 0 || !matchesFluidMarker(slot, id)) {
             return 0L;
         }

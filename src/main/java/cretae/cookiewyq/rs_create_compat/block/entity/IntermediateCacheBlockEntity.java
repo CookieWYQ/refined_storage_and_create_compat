@@ -1,11 +1,13 @@
 package cretae.cookiewyq.rs_create_compat.block.entity;
 
+import com.refinedmods.refinedstorage.api.resource.ResourceAmount;
 import com.refinedmods.refinedstorage.common.api.storage.SerializableStorage;
 import com.refinedmods.refinedstorage.common.support.network.AbstractBaseNetworkNodeContainerBlockEntity;
 import com.refinedmods.refinedstorage.neoforge.api.RefinedStorageNeoForgeApi;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.IntermediateCacheNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.RsccSharedCache;
+import cretae.cookiewyq.rs_create_compat.support.ViewOnlyHandlers;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -13,8 +15,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -232,6 +236,21 @@ public class IntermediateCacheBlockEntity
      * 网络节点容器能力：让缓存仓成为 RS 网络成员（线缆接得上、能枚举到）。
      * <p>与其它机器完全同一套注册方式，因此「尊重扳手断开与分隔框架的阻断」这件事由 RS 的网络图
      * 全权负责，本模组不需要、也不允许再写第二套连接判定。</p>
+     *
+     * <h2>物品能力（用户硬规则：所有带缓存的方块都必须对外暴露 Inventory）</h2>
+     * <p>盘位里的每一块磁盘都已通过 {@link IntermediateCacheNetworkNode} 注册为本网络存储源，
+     * 因此这里<b>只读</b>地把「本仓自己这些盘的合计内容」再暴露一次，供 Jade / 信息类模组查看：</p>
+     * <ul>
+     *     <li><b>只读</b>（{@link ViewOnlyHandlers#itemOf}）：不写、不抽。本仓本身已经是网络存储源，
+     *     若再允许外部按 {@code IItemHandler} 读写，同一批磁盘就会出现两条读写路径，
+     *     与 {@code RsccCacheExposedStorage} 的复合 / 优先级语义直接打架；</li>
+     *     <li><b>只在 {@code direction == null} 时暴露</b>：Jade 用 {@code side = null} 查询；
+     *     RS 外部存储方块用非空朝向查询。因此「把 RS 外部存储贴到本仓上」拿不到这份视图，
+     *     不可能把已经注册进网络的磁盘内容<b>再当外部存储收一遍</b>（双重计数 / 环路）；</li>
+     *     <li><b>只算物品盘</b>：与 {@link #appendPoolStorages} 同一判据
+     *     （{@link RsccSharedCache#acceptsItems}）；流体盘本来就不进本仓的池子，
+     *     因此这里不额外编派一个「能看不能用」的流体视图。</li>
+     * </ul>
      */
     public static void registerCapabilities(final RegisterCapabilitiesEvent event) {
         event.registerBlockEntity(
@@ -239,5 +258,33 @@ public class IntermediateCacheBlockEntity
             RS_Create_Compat.INTERMEDIATE_CACHE_BLOCK_ENTITY.get(),
             (blockEntity, direction) -> blockEntity.getContainerProvider()
         );
+        event.registerBlockEntity(
+            Capabilities.ItemHandler.BLOCK,
+            RS_Create_Compat.INTERMEDIATE_CACHE_BLOCK_ENTITY.get(),
+            (blockEntity, direction) -> direction == null
+                ? ViewOnlyHandlers.itemOf(() -> poolContentsOf(blockEntity))
+                : null
+        );
+    }
+
+    /**
+     * 本仓<b>自己</b>盘位里能存物品的盘的合计内容（只读快照）。
+     * <p>与共享池的 {@code RsccSharedCache.poolContents} 刻意不同：那是<b>整个网络</b>的合并池
+     * （多台仓相加），而 Jade 指着某一台仓时应显示<b>这一台</b>的盘 —— 否则两台仓会互相显示对方的
+     * 内容，玩家无法判断东西到底在哪一台。判据 / 解析顺序仍复用
+     * {@link #appendPoolStorages}，不另写一套磁盘解析。</p>
+     */
+    private static List<ResourceAmount> poolContentsOf(final IntermediateCacheBlockEntity blockEntity) {
+        final List<ResourceAmount> out = new ArrayList<>();
+        final Level level = blockEntity.getLevel();
+        if (level == null || level.isClientSide()) {
+            return out; // 客户端没有服务端存档里的盘存储：空表即为诚实答案
+        }
+        final List<SerializableStorage> disks = new ArrayList<>();
+        blockEntity.appendPoolStorages(level, disks);
+        for (final SerializableStorage disk : disks) {
+            out.addAll(disk.getAll());
+        }
+        return out;
     }
 }

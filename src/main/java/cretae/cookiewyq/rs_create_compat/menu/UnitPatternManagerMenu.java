@@ -349,10 +349,10 @@ public class UnitPatternManagerMenu extends AbstractBaseContainerMenu implements
         if (manager == null || manager.getLevel() == null) {
             return true;
         }
-        // 与高级远程终端一致：位置为原点且世界中不存在该方块实体 = 虚拟方块实体（无线终端场景），恒有效
-        final boolean virtual = manager.getBlockPos().equals(BlockPos.ZERO)
-            && manager.getLevel().getBlockEntity(BlockPos.ZERO) != manager;
-        if (virtual) {
+        // 与高级远程终端一致：虚拟方块实体（无线终端场景）恒有效。
+        // 判据是唯一的哨兵坐标（见 RsccVirtualTerminalBe）：纯常量比较，不读世界、不查区块，
+        // 因此「界面能不能保持打开」与玩家是否移动结构上无关。
+        if (cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.isVirtual(manager)) {
             return true;
         }
         final BlockPos pos = manager.getBlockPos();

@@ -29,12 +29,24 @@ IDEAL_EN, HARD_EN = 95, 110
 
 # ---------------------------------------------------------------------------
 # 键 -> (中文新值, 英文新值)
+#
+# 两条硬约束（第 121 轮 ③，都是「谁再跑一次本脚本」时的坑）：
+#   1. 这里写的必须是**实际值**。本脚本会把 NEW 里的值**回写**语言文件，
+#      所以过时数字（例如把执行仓单元样板槽的容量写成 6 的旧文案）只要留在这里，
+#      下一次运行就会把错文案重新写回 zh_cn / en_us，覆盖掉已经修好的语言文件。
+#   2. 每个键必须真实存在于语言文件与源码。main() 里有
+#      `missing = sorted(set(NEW) - before_keys)` 的守卫，映射里只要混进一个
+#      已经删掉 / 改名的旧键，整个脚本会直接 SystemExit（一条都不写）——
+#      所以「清掉死键」和「改对文案」同等重要，别让脚本一跑就炸。
 # ---------------------------------------------------------------------------
 NEW = {
     # ===== 方块说明（.help）=====
+    # 执行仓的单元样板槽实际是 54 格 = 6 行 × 9 列（SequenceExecutionChamberBlockEntity.UNIT_SLOTS = 54，
+    # 与第 120 轮 F6 修正后的注释一致）。旧值误把容量写成 6 —— 本脚本会回写语言文件，
+    # 谁再跑一次就会把错文案写回去，所以这里必须写死实际值（54 格 / 6×9）。
     "block.rs_create_compat.sequence_execution_chamber.help": (
-        "紧贴 Create 机放置（朝向机器侧）。右键放入/取出单元样板（6 格）。自动为机器供料，产物回网。",
-        "Place touching a Create machine (facing it). Right-click to add/take unit patterns. Feeds it; products return.",
+        "紧贴机器放置，存取单元样板（54 格 = 6×9），自动供料并收回产物。",
+        "Place against a machine; stores unit patterns (54 slots = 6x9), feeds it and reclaims products.",
     ),
     "block.rs_create_compat.collection_cache.help": (
         "接入 RS 网络后吸取周围掉落物与流体/气体。匹配区用 ghost 标记指定收集对象，装不下的暂存并持续回流。",
@@ -73,6 +85,11 @@ NEW = {
         "Sequenced assembly for RS autocrafting: import a recipe; flow, results, scraps are read-only.",
     ),
     # ===== 界面提示 =====
+    # 第 121 轮 ③ 清掉的三条死键（不要凭记忆加回来）：step_detail.step.tip /
+    # sequence_assembly_executor.hint2 / sequence_execution_chamber.chain.tip.entry。
+    # 对应界面在后续轮次里改名 / 合并了，这三个键在 zh_cn、en_us 与源码里都查不到；
+    # 而 main() 的 `missing` 守卫会让整个脚本**一跑就 SystemExit**（一份语言文件都不会写），
+    # 比「文案过时」更隐蔽 —— 所以死键和错文案必须一起修。
     "gui.rs_create_compat.sequence_execution_chamber.hint": (
         "右键本仓打开界面，放入/取出单元样板。需先设定配方类型 + 名字，类型不符会被拒绝。",
         "Right-click to insert/take unit patterns. Set recipe type and name first; other types refused.",
@@ -105,25 +122,13 @@ NEW = {
         "过量销毁列：点某行的 ✓/✗ 切换该行超出目标的数量是否销毁。",
         "Destroy-overflow column: click a row's check/cross to destroy amounts beyond its target.",
     ),
-    "gui.rs_create_compat.step_detail.step.tip": (
-        "本次编辑作用于第几步（1..%s）。不在窗口内的步只写机器绑定。",
-        "Which step this edit applies to (1..%s). Off-screen steps write only the machine binding.",
-    ),
     "gui.rs_create_compat.sequence_pattern_terminal.summary.slot.tip": (
         "左键取出 / Shift+左键移动 / 拖拽放置（只收本仓配方类型的单元样板）",
         "Left-click take / Shift+click move / drag to place (unit patterns only; matching recipe type)",
     ),
-    "gui.rs_create_compat.sequence_assembly_executor.hint2": (
-        "从生成槽拿起总样板，放入上方格内（一格一张，破坏方块会掉落实物）",
-        "Take a generated master pattern into a grid slot above (one per slot, dropped when broken).",
-    ),
     "gui.rs_create_compat.sequence_execution_chamber.output.bus.tip": (
         "总线输出：忽略逐面配置，由紧贴或线缆相连的「输出总线」代劳。",
         "Bus output: per-face settings are ignored; an exporter bus next to the chamber does the work.",
-    ),
-    "gui.rs_create_compat.sequence_execution_chamber.chain.tip.entry": (
-        "设置链指向：点界面上方「配置」，在子界面底部「链指向」里选方向。",
-        "To set the link: press Config above, then pick a direction under Chain link at the bottom.",
     ),
     "gui.rs_create_compat.unit_pattern_config.requires_input.tip": (
         "切换该单元样板是否需要输入原料；选「是」时终端输入槽的物品即为输入物。",

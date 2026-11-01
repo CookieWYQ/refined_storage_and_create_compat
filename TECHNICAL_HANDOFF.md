@@ -16,7 +16,7 @@
 | MC 版本         | 1.21.1                                               |
 | NeoForge 版本   | 21.1.248                                             |
 | Gradle 守护 JVM | `D:/java21`（必须 Java 21，本机 `JAVA_HOME` 是 Java 8 不可用）  |
-| 模组版本          | `0.0.1-SNAPSHOT`                                     |
+| 模组版本          | `1.2.0-beta.29`（唯一权威来源是 `gradle.properties` 的 `mod_version`） |
 | 作者            | CallMeACookieWYQ                                     |
 
 ### 前置依赖版本（见 `gradle.properties`）
@@ -890,6 +890,7 @@ tools\manual_compile.ps1  →  关掉游戏重开  →  重复「补货 → 下�
 13. **总线类别 id 规则**：`input:<item>` / `intermediate:<step>`（带步序）/ `result:<item>` / `scrap:<item>` / `fluid:<fluid>`，**类别数量不设上限**（列表可任意长，界面靠滚动翻页）。
 14. **类别共享语义**：同一类别可被多台输出总线同时选中（`sharedCount > 1`），由执行仓按轮询在它们之间均分。
 15. **流量台账的世界收集与销毁必须单列**：归流缓存仓的资源来自世界（不是网络），若不记入「离开」一侧会平白多出无法解释的「留存」；销毁若伪装成回流会彻底丧失取证价值。
+16. **网格搜索的裸文本也搜 tooltip（2026-10-24）**：RS 2.0.9 本来就采了 tooltip 全文（`GridResourceAttributeKeys.TOOLTIP`，来源 `ItemStack#getTooltipLines(..., TooltipFlag.ADVANCED)`），只是裸文本叶子 `GridQueryParser#parseLiteral` 只比 `getSearchableNames()`，玩家必须写 `$水下呼吸`（`#` 标签、`@` 模组同理）。做法：`mixin/client/GridQueryParserTooltipSearchMixin` 在 `parseLiteral` 的 `RETURN` 处把「名字命中」与 `client/grid/RsccGridTooltipSearch#matches`（读同一个 TOOLTIP 属性）做**逻辑或**，名字先判、命中即短路 ⇒ 已命中的物品不生成 tooltip。不变量：① 注入点必须是**叶子**而不是 `parse`（否则 `&&`/`#` 会被当成搜索词，`!` 也会被整串 OR 破坏）；② `$`/`#`/`@` 走 `parseUnaryOp → attributeMatch`，与本次注入**不共用一条路**（`tools/selfcheck_round94_grid_tooltip_search.py` 用 RS 的 bin + sources 双证钉住）；③ 必须按「资源类型 + 资源键」做缓存（LRU 4096 条 + 200 万字符总量预算；语言码或 `Minecraft#level` 对象变化整表作废；超长文本不进缓存；**读取失败不缓存**）—— RS 的 tooltip 取值器是 per-`GridResource` 实例（物品 memoize、流体即时），实例在同一 repository 内被 `CachingResourceRepositoryMapper` 复用、但 repository 每个菜单重建 ⇒ 不缓存就是「每开一次界面把全网络 tooltip 重算一遍」。没有配置项（用户明确要求）。**两条语义后果**：① ADVANCED 的进阶行（物品 id / 耐久 / 组件数）也参与裸文本搜索（英文玩家可用 id 搜）；② `!foo` 变成「名字与 tooltip 都不含 foo」（`!minecraft` 在中文客户端会藏起全部原版物品）—— 这是口径的必然结果，CHANGELOG 已如实写给玩家。**已知代价**：首次搜索在主线程为名字未命中的物品生成 tooltip（与 `$` 同源），要再快只能做后台预热索引。
 
 ***
 
@@ -1100,6 +1101,292 @@ Select-String -Path run\logs\latest.log -Pattern 'push_stalled'
 
 ***
 
+## 11. 第 95 轮（2026-10-25）：用户实机反馈 15 条 —— 落地与验证
+
+> 任务清单与逐条口径见 `docs/ROUND95_USER_FEEDBACK.md`（本轮唯一任务清单）。
+> 基线：用户实机跑的是 `1.2.0-beta.1`（2026-10-24T11:18 构建，sources=420），所有抱怨都针对它；
+> 本轮交付 `1.2.0-beta.3`。证据源：`diag/pull_2310/latest.log`（20:53–23:10 服务器会话）与同目录 `snapshot.json`。
+
+### 11.1 15 条口径与落地位置
+
+| # | 用户反馈 | 落地（文件 / 自检） |
+|---|---|---|
+| 1 | 裸文本搜 tooltip 要可配置 | `Config.gridSearchMatchesTooltip`（默认 true），读点唯一在 `client/grid/RsccGridTooltipSearch#matches`；`selfcheck_round94_grid_tooltip_search.py` |
+| 2 | 接收器 / 请求器界面「没发生多大改变」 | 接收器 16 格只读缓存视图 + 流体条目 + 摘要（`NetworkResourceReceiverMenu/Screen`）；请求器 210×238 面板 + 订单 4×2 + 节拍 / 状态行（`NetworkResourceRequesterMenu/Screen`）；`selfcheck_round95_receiver_requester_ui.py`（44 断言 / 20 反例） |
+| 3 | 缓存里的东西取不出来 | `CacheSlot#remove` 是唯一扣减点（`extractItem`，`mayPlace=false`）、`takeAllCacheItems` 先扣再塞、放不下回填；流体左键换 1 桶（先模拟后执行） |
+| 4 | Jade 只需暴露接口，不要自己写 Shift 详情 | 接收器 Jade 载荷重写成**只写名字 / 未命名**，provider 不再判按键、不列内容；`selfcheck_round88_storage_inventory_exposure.py` ④b–④l（含新反例） |
+| 5 | 「显示范围」不管哪个都不工作 | `removed()` 改为按剩余 TTL 重新武装 + 棋盘面 + 1/16 线宽 + 直径口径重建；`selfcheck_round95_range_charger.py`（20 断言 / 7 反例）、`selfcheck_round73_screen_mode_layout.py` ⑧-e（已加固） |
+| 6 | 充电目标高亮（配置开关） | `Config.rangeChargerHighlightTargets`（默认 true）+ `network/ChargerHighlightPacket` + `client/ChargerTargetHighlight`；关闭时零发包、开界面只提示一句 |
+| 7 | 所有界面 tooltip 必须手动绘制 | `tools/selfcheck_round95_screen_tooltips.py`（9 断言 / 5 反例，扫全部容器界面） |
+| 8 | 容器代理器界面根本没画 tooltip | `InventoryProxyScreen#render` 覆写 + 无条件 `renderTooltip`；纳入 #7 的自检 |
+| 9 | 收纳袋放不进代理器 | `support/InventoryProxyHandlers.BundleContentsView`（读 `minecraft:bundle_contents`，插入走原版 `tryInsert`、部分取出写回、空袋给 1 虚位）；`selfcheck_round95_inventory_proxy_ui.py`（22 断言 / 12 反例） |
+| 10 | 代理器提示太长一坨 | 物品常显 help 不再传（语言键 `inventory_proxy.help` 已删）；界面警告压成一行短句（删 `font.split`） |
+| 11 | 背包在代理槽里打不开 | 反编译实证 SB 结构不支持（客户端硬判 `slot.container instanceof Inventory`，服务端只解析 main/offhand/armor）⇒ 本轮做 tooltip 说明 + 替代路径，真修复需加 SB 可选依赖，**留待后续** |
+| 12 | 归流缓存仓部分情况收不进网络 | `flushCacheToNetwork` 跨 tick 游标 + 失败不扣预算 + 单 tick 上限；流体独立预算 / 游标 / 快照遍历；诊断日志节流；`selfcheck_round95_collection_cache.py`（43 断言 / 8 组反例） |
+| 13 | Shift+左键应改为「写标记」 | `CollectionCacheMenu#quickMoveStack`（升级物品例外，其余写 ghost 标记并分原因提示）；高级版继承 + 区域槽提前截住 |
+| 14 | 连锁总线左键不能应用 | 左键事件构造器写死 MAIN_HAND（副手看不见）+ FTB 只有右键扩展点 ⇒ 改「主手→副手、有载荷优先」+ FTB public `cachedPositions()` 连锁 + 上游取消观测 + 四态诊断；`selfcheck_round95_clipboard_assembly.py`（82 断言 / 16 反例） |
+| 15 | 序列装配日志瑕疵 | exporter `no_chamber` 是**日志说谎**（短路未重算，现分 `force_normal` / `filter_non_empty` / `chamber_gone`）；守恒账本 +1 是工位回流**漏记 `fromMachine`**（已成对记账 + 路径拆解 + 判定）；`RECLAIM_ONLY` 是有意设计、日志本就状态翻转才打，不改 |
+
+### 11.2 本轮验证（Lead 串行执行，顺序不可颠倒）
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/_lead_compile.ps1   # 必须 LEAD_COMPILE_OK sources=N
+python tools/_run_all_selfchecks.py      # 全量；必须「失败 0」
+python tools/verify_mixin_shadows.py     # 两遍 CLIENT / DEDICATED_SERVER；问题总数必须 0
+powershell -File tools/verify_dedicated_server.ps1   # PID 锁，独占；不要与别人并发
+gradlew.bat build --offline --no-watch-fs -q         # 产出 build/libs/rs_create_compat-1.2.0-beta.3.jar
+```
+
+- `tools/_lead_compile.ps1` 的 argfile 已按 PID 隔离（`build/lead_javac_args.<pid>.txt`），多人并发不会再互相截断；
+  它仍会把「用了哪个缓存 / 哪份 MC / 排除了哪些同族版本」全部打印出来（`LEAD_COMPILE_CACHE/MC/CLASSPATH/EXCLUDED`）。
+- `tools/verify_mixin_shadows.py` 两遍各自计数：client 段 mixin 在专服视界里视为「目标不存在」，common 段引用
+  `net.minecraft.client.**` / `com.mojang.blaze3d.**` / `org.lwjgl.**` 一律判负（`net.neoforged.neoforge.client.**` 只告警）。
+- 本轮新增自检：`selfcheck_round95_screen_tooltips.py` / `_range_charger.py` / `_receiver_requester_ui.py` /
+  `_inventory_proxy_ui.py` / `_collection_cache.py` / `_clipboard_assembly.py`；另按新口径更新过锚点的旧自检：
+  round48 / round51-D7 / round66 / round73 / round74 / round88 / round89 / round93 / collection_delete_mode（每条都在文件里注明了新旧口径）。
+
+### 11.3 已知未验证 / 已知限制（交付时必须如实转述给用户）
+
+1. **全部改动都没有真机画面验证**：本轮执行者都跑不了 Minecraft，只有静态锚点 + 字节码证据 + 行为模型。
+   具体待玩家确认：范围框 / 高亮是否看得见（尤其光影下）、接收器 16 格与流体条目观感、请求器按钮宽度与 238 高在 GUI scale 3 下是否顶屏、Jade 面板实际内容、左键连锁粘贴的 `[rscc-chain]` 两行日志。
+2. **精妙背包快捷键**：结构上不支持（见 §11.1 #11），本轮只给 tooltip 说明；真修复要加 SB 可选依赖并实机验证。
+3. **Left-click 粘贴的根因未二选一**：修了两条可证明的缺口（副手不可见、FTB 只有右键扩展点）并加了能分辨四态的日志；
+   若玩家仍遇到「左键没反应」，先看 `[rscc-chain] 左键·…` 那一行是哪种情况。
+4. **账本 +1 不会追溯清零**：计数器是内存态，重启即归零；修好后新发生的搬运应当立刻对平。
+5. **`RECLAIM_ONLY / no_player_order_scrap_reclaim`** 是有意设计（自动模式无玩家订单时只回收成品 / 废料），
+   且日志只在状态翻转时打（用户 2 小时日志里只有 11 条）；若要让 `took=-` 更准确，需另开一条工作流。
+6. **专服 / 客户端行为差异**只在 `verify_dedicated_server.ps1` 与 `verify_mixin_shadows.py` 两处静态/探针级验证；
+   真正的多人（两个客户端、高延迟）竞态未测（例如「一边取缓存一边请求器投递」）。
+7. `ChargerTargetHighlight` 用客户端 `setGlowingTag`：只改视觉、不写存档，但**与别的模组也改发光时**的叠加行为未实测。
+
+***
+
+## 12. 第 96 轮（2026-10-25）：用户实机反馈 6 条 —— 落地与验证
+
+> 任务清单与逐条口径见 `docs/ROUND96_USER_FEEDBACK.md`（本轮唯一任务清单）。
+> 基线：用户实机跑的是 `1.2.0-beta.3`（2026-10-25T09:21 构建，sources=424），反馈时间 12:08；
+> 本轮交付 `1.2.0-beta.4`（sources=426）。
+
+### 12.1 6 条口径与落地位置
+
+| # | 用户反馈 | 落地（文件 / 自检） |
+|---|---|---|
+| 1 | 归流缓存仓「还是无法与任何物品交互」 | **两个真因**：①窗口分页越界（256/512 格的最后一页读到 287/527，`AbstractContainerMenu#clicked` 的 `try/catch` 把 `IndexOutOfBounds` 吞掉 ⇒ 点击像死了一样）⇒ `CollectionCacheMenu#cacheGlobalIndex` 越界返回 -1、`WindowSlot` 六个入口全判、页数/格数走 `getContainerSize()`；②Shift 写标记把「手持件数」写进 `MarkerEntry.amount`，而吸收侧把它当**硬门槛** ⇒ 逐件掉落永远收不进 ⇒ 界面写标记的默认需求数量改为 1。新增 `[rscc-collect]` 九路径诊断（状态变化才记）。`selfcheck_round96_cache_area.py`（22 断言 / 7 组反例） |
+| 2 | 区域选定器：重复区域 / 坐标被挡 / 界面难编辑 | `Area.sameGeometry`（名字不参与判等）+ ADD/REPLACE/COPY 三条写入路径拒收 + 三处描边用 `distinctAreas()`；`AreaSelectorScreen` 行高按 `font.width` 在 2/3 行切换消除截断、悬停给完整两角；点行回填六字段+名称、复制/重命名（500ms 防抖）/删除二次确认/维度/体积/尺寸/自绘滚动条/选中高亮/错误描红；`Area` 新增可选 `name`（空串编码，零迁移）。`selfcheck_round96_cache_area.py` B 组 |
+| 3 | 代理器接两个外部存储会翻倍 | 不是复制物品，是 RS 不给 storage 去重 ⇒ 同一份库存被求和两次。`ProxyFaceRole` 新增 `CONTENTS_INPUT`（备面：`getSlots()==1` / 读与取恒空 / `insert`+`fill` 真写同一底层），`normalizeFaces()` 归一（内容物面与**代理对象面**各自 ordinal 最小者保留、退化态升回、读档归一；对象面不唯一时同一件代理对象也会被数两遍）。`selfcheck_round96_proxy_dedup.py`（66 断言） |
+| 4 | 接收器不能与溜槽之类的交互 | 对外能力从只读改**可写**：`ViewOnlyHandlers.WritableItem/WritableFluid`（只进不出），写入只转交 `applyResource`（与请求器投递同一入口 ⇒ 容量/守恒一套账），`extract`/`drain` 恒空；`[rscc-receiver-input]` 三态状态化日志。`selfcheck_round96_receiver.py` + round88（11）按新口径更新 |
+| 5 | 请求器界面要「网格 + 清单」 | 右键请求器**直接开网格**；`ResourcePickerScreen` 重写为顶部工具条（目标/立即发送/清空/节流/设置）+ 右侧可搜索订单清单（图标+名称+数量+×、滚轮+滚动条、**无上限**、数量框回车/±步进、过滤态发权威下标）；小面板 4×2 订单格删除→摘要+大按钮；`RequesterOrderPacket.ACTION_OPEN_SETTINGS`（不新增 payload）、`SyncRequesterConfigPacket` 增节拍字段。`selfcheck_round96_requester_ui.py`（47 项）+ round86（147/0）+ round95（49/0）；另修 `openFor` 无条件返回 true（`openMenu` 失败也当成功 ⇒ 两处「界面没能打开」提示不可达）与 `openSettingsFor` 静默失败 |
+| 6 | 接收器：流体取不出 / 格子太少装不完整 | 16 固定镜像槽 → **分页资源列表**（**12 条/页 = 2 列 × 6 行**、行高 12px、图标缩放到 12px，滚轮/滚动条/`< >` 翻页，摘要显示种类与总量；`SyncReceiverConfigPacket` 带 page/pageCount/totalTypes/entries）；取出走新 C2S `ReceiverCacheActionPacket`（已注册进 `RS_Create_Compat.registerPayloads`）：物品左键一组/Shift 全部（放不下回填、再掉脚下），**流体 1000 mB/桶且必须有空桶（没有就不扣+提示）**。`selfcheck_round96_receiver.py`（19 断言 + 23 反例） |
+
+### 12.2 本轮验证（Lead 串行执行）
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/_lead_compile.ps1   # LEAD_COMPILE_OK sources=426
+python tools/_run_all_selfchecks.py      # 130 个脚本，失败 0
+python tools/verify_mixin_shadows.py     # 两遍 CLIENT / DEDICATED_SERVER；问题总数 0
+python tools/audit_lang_keys.py          # 问题 0 / 孤儿键 0（本轮 zh+en 各 +32 条）
+python tools/check_payload_registration.py  # 96 个自定义包全部已注册
+powershell -File tools/verify_dedicated_server.ps1   # PID 锁，独占；本轮拿 beta.4 jar 跑
+gradlew.bat build --offline --no-watch-fs -q         # 产出 build/libs/rs_create_compat-1.2.0-beta.4.jar
+```
+
+- 本轮新增自检：`selfcheck_round96_cache_area.py` / `_proxy_dedup.py` / `_receiver.py` / `_requester_ui.py`。
+  按新口径更新过锚点的旧自检（每条都在文件里注明了新旧口径，未削弱抓 bug 的能力）：
+  round69（登记 `AreaSelectorScreen` / `ResourcePickerScreen` 两个 tooltip 站点）、round86（5 条：①-7 收紧、
+  ⑦-2 改代码不改断言、⑦-5 补回 `openFor` 直调、⑨-6 灰按钮→提示、⑦-13 连带）、round88（接收器可写）、
+  round89 / round91 / round93（代理器四档枚举 + 区域新增 name 分量）、round90（区域界面双上限入口）、
+  round92（接收器可写）、round95（接收器 16 格→分页、请求器 4×2→摘要+大按钮）。
+
+### 12.3 已知未验证 / 已知限制（交付时必须如实转述给用户）
+
+1. **全部改动都没有真机画面验证**（执行环境跑不了 Minecraft）。待玩家确认：接收器分页列表与滚动条观感
+   （**12px 行高 + 0.75 缩放图标在 GUI scale 2/3/4 下是否够清楚，是本轮唯一的审美/可读性风险点**）、
+   请求器网格工具条在 GUI scale ≥4 下的位置、订单行 × 的热区（118px 面板下约 11px）、区域选定器两/三行坐标的可读性。
+2. **溜槽交互**只有源码证据链（Create 6.0.10 用**非空**侧别查询、先 SIMULATE 后 EXECUTE），没有在存档里摆过溜槽；
+   模组流体（无桶形态）与光标上整叠空桶的行为未验。
+3. **代理器备面「读空 ⇒ 不参与 RS 求和」** 是按 RS 读法反推的，需要玩家贴两个外部存储看一次终端数字；
+   备面写入后主面 RS 缓存最长约 40 tick（2 s，RS 自身 workRate）才同步，未计时。
+4. **归流缓存仓「点击恢复」** 的依据是原版 `clicked` 的 `try/catch` 契约 + 行为模型；`气体` 吸取开关**本来就没有世界来源**
+   （`collectGas` 空实现），不是本轮回归。
+5. **高延迟 / 双客户端**竞态（一边翻页取物一边请求器投递）未测；服务端每 10 tick 补发 + 动作后立即补发，理论上不错位。
+6. `[rscc-collect]` / `[rscc-receiver-input]` 两条新诊断的实际日志行没有在真机看到；玩家下次报「收不进去」时先看 `[rscc-collect]`
+   里「哪些路径没动过」。
+7. **订单「无上限」的代价**：`SyncRequesterConfigPacket` 每次增 / 删 / 改都**全量重发**整张订单（开屏 payload 也带整张）。
+   几百条没问题，上千条会明显占带宽 / 卡顿；没有分页与上限保护。若线上出现卡顿，第一件事是把这条改成增量同步。
+8. **代理对象面唯一化的迁移**：旧存档若有两个对象面，较大 ordinal 那个读档即变「禁用」（面配置被归一，代理槽里的物品不受影响）；
+   想换对象面位置要先切走现役对象面。未实机验证。
+
+***
+
+## 13. 第 97 轮（2026-10-25）：用户实机反馈 3 条（含 1 条 P0 回归）—— 落地与验证
+
+> 契约与逐条口径见 `docs/ROUND97_USER_FEEDBACK.md`。基线：用户实机仍是 1.1.0（他没跑过新构建）。
+> 本轮目标只有三件事：①恢复被删的输入总线原生侧边按钮（P0）；②容器代理器界面删掉那条「蚂蚁字」说明、
+> 背包上移、贴图重制；③不越界（用户对上一轮「顺手改」非常反感）。
+
+### 13.1 根因与落地
+
+| # | 用户反馈 | 根因（已复核） | 落地（文件 / 自检） |
+|---|---|---|---|
+| 1 | 「输入总线/输出总线……黑名单那些按钮全删了，只剩一个红石开关」（P0） | `mixin/client/AbstractBaseScreenMixin` 里的 `rscc$hideImporterFilterButtons` 在 `AbstractBaseScreen#addSideButton` 的 HEAD 处**无条件** `ci.cancel()` 掉 `FilterModeSideButtonWidget` + `FuzzyModeSideButtonWidget`（1.0.0 起就存在；RS 2.0.9 的 `ImporterScreen#init` 只挂这两颗，红石由基类挂）。输出总线（RS 原生：模糊 + 调度 + 红石）**从未**被本模组删除，本轮未动 | 整段注入与 4 个专用 import 删除；`AbstractBaseScreenMixin` / `ImporterScreenMixin` 的 javadoc 改成铁律「只追加、绝不删除 RS 原生控件」；新自检 `tools/selfcheck_round97_bus_side_buttons.py`（17 断言 + 6 反例；实测「把注入加回去 ⇒ 判负」） |
+| 2 | 容器代理器：红字太小且「不喜欢那行字」 | `renderWarning` 把 56 字中文单行等比缩到 ~0.4x | 删 `renderWarning` / `WARNING_*` / 语言键；信息改「悬停六面按钮」的 `face_tip.*`（`renderTooltip` 画在 `super.render` 之后）；`selfcheck_round97_proxy_layout.py` + round89/93/95/96 按新口径改写（未删结构断言） |
+| 3 | 「上面这么大空位、物品栏有点矮」 | 面板 224×248、按钮带止于 y=126、背包行 y=172/190/208、快捷栏 y=230（格子底边 = 面板底边） | 面板 224×**222**；背包行 y=136/154/172、快捷栏 196（底部留白 8px）；状态文字 (10,46) 折行 ≤4 行、右界 ≤108；贴图由 `tools/gen_inventory_proxy_gui.py` 重制（5 色、18×18 槽位格、四边闭合） |
+
+### 13.2 验证（Lead 串行）
+
+```text
+tools/_lead_compile.ps1                      # LEAD_COMPILE_OK sources=426
+python tools/_run_all_selfchecks.py          # 132 个脚本，失败 0
+python tools/verify_mixin_shadows.py         # CLIENT + DEDICATED_SERVER 两遍，问题 0
+python tools/audit_lang_keys.py              # 问题 0 / 孤儿 0
+```
+
+### 13.3 未验证（必须如实转述）
+
+1. 三颗原生按钮「肉眼回到界面上」只有源码链证据（注入已删 + RS 原生无条件挂），无实机。
+2. 代理器新布局（224×222）与 12px 行高工具提示在 GUI 缩放 2/3/4 下的观感未实机；`en` 的 `status.no_contents` 按 98px 窄列重写过（361px ≈ 4 行），中文未改。
+3. 输出总线没有任何改动；若玩家看到输出总线仍「只有红石」，那是另一次现象，需要截图/日志重新取证。
+
+***
+
+## 14. 第 98 轮（2026-10-25）：范围充电器「高亮按钮 + 充电过滤」—— 落地与验证
+
+> 契约见 `docs/ROUND98_CHARGER_FILTER.md`。用户定案：过滤只有 **3 类**（掉落物 / 玩家身上物品 / 玩家，**没有方块类**）；
+> 黑/白名单**全局一个开关**；玩家名单 = 本存档曾经进服过的所有玩家（落盘）+ 手动名称/UUID；
+> 高亮 = **每台充电器一个开关**（落盘，旧存档默认开），配置项 `rangeChargerHighlightTargets` 降级为总闸。
+
+### 14.1 落地
+
+| 层 | 内容 |
+|---|---|
+| 数据 | `support/ChargingFilter`（黑/白名单 + 三类名单 + NBT v1，**唯一判定出口**：`allowsDroppedItem` / `allowsCarriedItem` / `allowsPlayer`=小写名 OR UUID）；`support/ChargerKnownPlayers`（主世界 SavedData `rscc_charger_known_players`，登录事件记录 + 开界面补记） |
+| 方块实体 | `chargingFilter` + `highlightEnabled` 落盘；ContainerData 12→13（索引 12）；**三处门控**：`chargePlayer` 整名跳过 + 背包/饰品槽每 stack、`scanItems`、`scanItemsInfinite`；`syncHighlightTargets` 同时受总闸与本机开关；方块两档**不**过滤 |
+| 网络 | C2S `OpenChargerFilterPacket`（要快照）/ `SetChargerFilterPacket`（全量覆盖，均做 menu 归属 + `stillValid`）、S2C `SyncChargerFilterPacket`（含 `KnownPlayer(name,id,online)`）；S2C 只经 `ClientPayloadHooks` → `ChargerFilterScreen.openOrRefresh`（dist-safe） |
+| 界面 | `RangeChargerScreen` 新增 (150,37)/(150,54) 两颗 36×14 按钮（高亮 / 过滤）；新子界面 `ChargerFilterScreen`（252×262：模式按钮 + 3 页签 + 搜索 + 8 行/页列表 + 玩家添加行 + 完成/返回）；`ChargerFilterCandidates` 懒构建「可充电物品类型」池（`getCapability(EnergyStorage.ITEM)` → `canReceive() && max>0`，缓存 + 搜索上限 512） |
+| 自检 | `tools/selfcheck_round98_charger_filter.py`（46 断言 / 14 反例）；5 处旧锚点按新契约更新（round52/71 的 12→13、round95_range 收窄为「禁止落盘高亮集合」、round69 登记新 tooltip 站点） |
+
+### 14.2 验证（Lead 串行）
+
+```text
+tools/_lead_compile.ps1                      # LEAD_COMPILE_OK sources=433
+python tools/_run_all_selfchecks.py          # 133 个脚本，失败 0
+python tools/verify_mixin_shadows.py         # 两遍，问题 0
+python tools/audit_lang_keys.py              # 问题 0（本轮 zh+en 各 +40 条）
+python tools/check_payload_registration.py   # 全部自定义包已注册（+3）
+tools/verify_dedicated_server.ps1 -ModJar build\libs\rs_create_compat-1.2.0-beta.5.jar   # 真启动 PASS
+gradlew.bat build --offline --no-watch-fs -q  # 产出 1.2.0-beta.5 jar
+```
+
+### 14.3 未验证 / 已知限制
+
+1. **无实机**：过滤子界面的观感、8 行/页列表与搜索手感、候选池首次构建耗时（一次 O(物品数) 能力查询，
+   已在界面暴露 `lastBuildCount()`）、玩家「头像占位」是否够认、`en` 的 "Filter" 在 36px 按钮里是否走马灯 —— 全部待实机。
+2. **玩家过滤是「整名跳过」**（连饰品槽），这是契约语义不是 bug；黑名单勾了某玩家 ⇒ 他整台装备都不充。
+3. **方块不参与过滤**是用户定案；若将来要加第 4 类，先改契约与 `ChargingFilter` 的 NBT 版本。
+4. `ChargingFilter#load` 现在**真的读** NBT 版本（只接受 v1，其余 WARN + 回落默认）—— 此前只写不读。
+5. 高亮关闭后旧高亮多久消失：由「不再发心跳 ⇒ 客户端 20 tick 过期」推断，未实机计时。
+
+### 14.4 独立复核后的收尾（Lead，同日）
+
+独立只读复核（task-21）A–G 全 PASS，并提出三点，已处理：
+
+1. **死分支删除**：`RangeChargerMenu.BUTTON_OPEN_FILTER = 8` 与它的 `clickMenuButton` 分支全仓**没有发送点**
+   （「过滤」按钮实际走独立 C2S 包），已删除；`selfcheck_round98` ④-b/④-c 改为「反向锚定：该常量不许回来 +
+   菜单分支里不得再出现 `sendFilterSnapshot`」。
+2. **归因校正**：`ChargingFilter#load` 版本闸的 javadoc 原写「独立复核提出」，实际是第 98 轮自检方指出
+   「注释与代码不符」，已改；行为仍是只接受 `v == 1`，其余 WARN + 回落默认。
+3. **解码硬化**：`Sync/SetChargerFilterPacket` 解码不再按对端给的 `count` 预分配 `ArrayList`
+   （`count = 2^31-1` 的恶意 C2S 包会直接 OOM）；列表逐条追加，上限由「包里真有那么多字节」+ 网络帧兜住。
+
+复核报的家族性风险（C2S 列表长度无硬上限、32 位无横线 UUID 被当玩家名静默接收、`en_us` 旧成就键遗留中文）
+**本轮（第 98 轮）未修改**，已列入已知限制 —— 前两条已在**第 99 轮关闭**（见 §15），`en_us` 旧成就键的中文问题仍在。
+
+### 14.5 交付与部署记录（2026-10-25 16:0x）
+
+- 产物：`build/libs/rs_create_compat-1.2.0-beta.5.jar`，2,451,555 B，
+  `sha256=3f4b23ac73ea89a55dfa415f069b860d0234cf22d10e860380ab085d00ba431a`，`sources=433`，`builtAt=15:55:01`。
+- 专用服务端探针（拿该 jar 真跑）：**PASS**（`Done (1.689s)`，无 Mixin/dist 致命标记）。
+- 部署（用户新规矩：默认「禁用旧版 = 改名，再拷新版」）：
+  - 服务端 SFTP `/mods`：`beta.4` → `.disabled`，`beta.5` 启用；uploading → rename 后**回读 sha256** 一致。
+  - 客户端（本地实例）`D:\minecraft\.minecraft\versions\Create：Enjoy\mods`：`beta.4` → `.disabled`，`beta.5` 启用，sha256 一致。
+  - 另：SFTP `/client_files/mods` 里同时存在 `beta.1/beta.3/beta.4` 三个启用中的旧版（历史遗留），
+    已一并禁用，只留 `beta.5`；若该目录不是活动客户端目录，不影响游戏（真实客户端目录见上一条）。
+- 服务器重启由用户执行（我无法重启）。
+
+## 15. 第 99 轮：充电过滤「硬上限」+ 32 位裸 UUID（2026-10-25）
+
+> 来源：用户看完第 98 轮交付说明「五、必须如实说的未验证 / 需确认」后的回复 ——
+> 第 2 条（黑 / 白名单模式是**每台充电器各一份**、三类共用一个模式）**保持不变**（用户：「第二个就这样子」）；
+> 第 3 条（两条已知限制）**要改**（用户：「第三个改了他」）。
+
+### 15.1 落地
+
+| 层 | 内容 |
+|---|---|
+| 新增 | `support/ChargerFilterLimits`（**纯 JDK，不 import 任何 MC / NeoForge 类型**）：5 个上限常量 + `addBounded` / `toggleBounded` / `clamp` / `normalizeName` / `parsePlayerId` / `withDashes` / `isHex`。纯 JDK 是刻意的：自检可以 `javac` 单文件 + `java` 直跑，于是「解析 / 截断」是**真执行过**的 |
+| 网络 | `SyncChargerFilterPacket` 新增 `encodeNames / decodeNames / encodeUuids / decodeUuids / encodeKnownPlayers / decodeKnownPlayers`，`ResourceCodecList` 加封顶；`SetChargerFilterPacket` 改为**复用**这些辅助（两包不再各写一份循环）。**编码** = 先截断到上限再写条数；**解码** = 顺着声明条数把字节全读完、只保留前 N 条（既不 `new ArrayList<>(count)`，也不提前 `break` —— 后者会让后续字段错位） |
+| 存档 / 清洗 | `ChargingFilter.addIds / addName / addId / readIds` 全部走 `addBounded`（**最下游的闸**：绕过网络层的手改 NBT 也拦得住）；名字归一化改调 `ChargerFilterLimits.normalizeName`；超限 WARN **每进程只打一次** |
+| 界面 | `parseUuid` → `ChargerFilterLimits.parsePlayerId`（36 带横线 + 32 裸十六进制）；`onAdd` 用同一个 `normalizeName`；物品勾选走 `toggleBounded`；满员时 `addStatus` 提示「名单已满（最多 N 条）」；`addStatus` 由「语言键字符串」升级为 `Component`（支持 `%s` 参数）；新增语言键 `gui.rs_create_compat.charger_filter.list.full`（zh / en 各 1 条） |
+| 自检 | 新增 `tools/selfcheck_round99_charger_filter_hardening.py`（17 断言 / 14 反例 + **两组真代码 JVM 探针**）；`tools/selfcheck_round98_charger_filter.py` 两处锚点随实现搬家同步（见 15.3） |
+
+上限值：物品 **1024** / 玩家名 **256** / UUID **256** / 单条名字 **32** / 已知玩家候选 **1024**。
+依据：界面一次最多列 `ChargerFilterCandidates.MAX_SEARCH_RESULTS = 512` 条候选 ⇒ 1024 = 连续两次满页全勾；
+最坏一包几十 KB，远低于网络帧上限；玩家名 32 = 原版 16 的两倍余量。
+
+### 15.2 验证（Lead 串行）
+
+```text
+tools/_lead_compile.ps1                      # LEAD_COMPILE_OK sources=434
+python tools/_run_all_selfchecks.py          # 134 个脚本，失败 0
+python tools/verify_mixin_shadows.py         # 两遍（CLIENT + DEDICATED_SERVER），问题 0
+python tools/audit_lang_keys.py              # 问题 0，孤儿键 0（zh+en 各 +1 条）
+python tools/check_payload_registration.py   # 99 个自定义包全部已注册
+tools/verify_dedicated_server.ps1 -ModJar build\libs\rs_create_compat-1.2.0-beta.6.jar   # PASS
+gradlew.bat build --offline --no-watch-fs -q # 产出 beta.6（sources=434，builtAt=16:21:07）
+```
+
+> 第一次跑全量自检时有 **1 个失败**：round98 ⑤-c（UUID 编解码搬进共用辅助后，旧锚点找不到
+> `UUIDUtil.STREAM_CODEC`）。同步锚点后重跑 134/0。这不是「放宽」—— 见 15.3。
+
+### 15.3 自检锚点同步（都是「随实现搬家」，且仍能抓住它点名的 bug）
+
+1. round98 `packet_ok(..., "playToServer")`：原先要求 `SetChargerFilterPacket` 源码里出现
+   `UUIDUtil.STREAM_CODEC`；现在 UUID 编解码在 `SyncChargerFilterPacket.encodeUuids / decodeUuids` 里，
+   锚点改为「Set 包**必须调用**这两个共用辅助」，新增 ⑤-c2 判「辅助内部确实用 UUIDUtil 编 / 解码」，
+   并新增反例：把 `encodeUuids` 里的 UUIDUtil 换成 `STRING_UTF8`（线格式错位）⇒ **实测判负**。
+2. round98 `filter_source_ok`：原先要求 `ChargingFilter` 里内联 `rawName.trim().toLowerCase(Locale.ROOT)`；
+   现在委托 `ChargerFilterLimits.normalizeName`，锚点改为「内联 或（委托 + `normalizeName` 里真的有
+   `trim().toLowerCase`）」，并新增反例：把 `normalizeName` 的小写化删掉 ⇒ **实测判负**。
+3. round99 的两组 JVM 探针把两件事变成可执行证据：
+   `ChargerFilterLimits` 36 个用例（36/32 位 UUID、大写、非法串、名字归一化、`addBounded` / `toggleBounded` / `clamp`）；
+   `ChargingFilter.of / load` 带 MC classpath 实跑（1500 条物品 ×2、400 条名字、400 条 UUID、2000 条 NBT）
+   并断言集合**恰好**被截到上限。
+
+### 15.4 交付与部署记录（2026-10-25 16:2x）
+
+- 产物：`build/libs/rs_create_compat-1.2.0-beta.6.jar`，2,454,565 B，
+  `sha256=d053cffee7103bdace4499c1d0e229860009470e78521ed27f3b166e667dd8dd`，`sources=434`，`builtAt=16:21:07`。
+- 专用服务端探针（拿该 jar 真跑）：**PASS**（`Done (2.068s)`，无 Mixin / dist 致命标记；`run/` 只读自证 OK）。
+- 部署（禁用旧版 = 改名，再拷新版；上传后回读 sha256 一致 + rename 后复验）：
+  - SFTP `/mods`：`beta.5` → `.disabled`，`beta.6` 启用；
+  - 本地客户端实例 `D:\minecraft\.minecraft\versions\Create：Enjoy\mods`：`beta.5` → `.disabled`，`beta.6` 启用；
+  - SFTP `/client_files/mods`：`beta.5` → `.disabled`，`beta.6` 启用（`1.1.0` / `beta.1` / `beta.3` / `beta.4` 早已是 `.disabled`）。
+- 服务器重启由用户执行（我无法重启）。
+- 顺手：`tools/deploy_rscc.py` / `deploy_rscc_local.py` 的 jar 路径从写死改成「取 `build/libs` 里最新的
+  `rs_create_compat-*.jar`」，避免每轮手改文件名。
+
+### 15.5 本轮之后仍然存在的限制 / 未验证
+
+1. **无实机**（执行环境跑不了 MC）：「名单已满」提示的观感、32 位裸 UUID 的添加手感、勾选切换都要玩家确认。
+2. 超限一律「**保留前 N 条、丢尾部**」；WARN 每进程只打一次，所以日志里看不出「丢了哪几条」（有意为之：不刷屏）。
+3. 「已知玩家」候选 > 1024 条时界面只列前 1024 条（手动输入名字 / UUID 不受影响，不会「配置不到」）。
+4. 上限是编译期常量，**没有**做成配置项；将来要放开请先改 round99 自检的数量级判据
+   （物品上限必须 ≥ 候选搜索上限，且 ≤ 65536）。
+
+***
+
+***
+
 ## 附录 A：硬约束摘要（来自 `project_memory.md`）
 
 - 齿轮堵塞判定需添加等待豁免机制（W1-W5），仅在无正当等待理由且连续 200 tick 无推进时才判定为卡住并收回
@@ -1138,3 +1425,849 @@ Select-String -Path run\logs\latest.log -Pattern 'push_stalled'
 
 - 单元样板查重需纳入服务配方和步序信息，避免不同配方因操作类型相同被误判为重复
 
+## 16. 2026-10-30~31 交付批次（beta.7）：三台新机器 + 终端第 7 档 + 多条实机修复
+
+### 16.1 本轮新增的「机器」与数据源
+
+| 东西 | 注册名 / 类 | 关键数据 | 谁在管 |
+| --- | --- | --- | --- |
+| FE 能量立方 | `fe_energy_cube` / `block/entity/FEEnergyCubeBlockEntity` | 每块自身 FE（落盘）、集群 = 六向连通分量（`support/EnergyCubeCluster`）、网络登记（`support/EnergyCubeNetworkRegistry`，供门控「减掉所有立方」） | `client/screen/FEEnergyCubeScreen` 176×166 / 电量条凹槽 (14,18) 14×60 |
+| 电动飞行背包 | `electric_jetpack` / `item/ElectricJetpackItem` | 电量在物品组件（`CustomData`）、飞行状态机 `support/JetpackFlightHandler`、HUD `client/JetpackHudOverlay`、S2C `network/JetpackStatusPacket`（自注册 `TerminalPowerPayloads` 同款模式） | 生效槽位：胸甲 → Curios back → Curios chest |
+| 降解室发电机 | `decomposition_generator` / `block/entity/DecompositionGeneratorBlockEntity` | **第 123 轮重做**：20 格 `ItemStackHandler`（16 输入 + 4 副产物，输入 `isItemValid` 查可降解表、副产物只出不进）、6 格升级（`RsccSpeedStackUpgradeContainer`，只收速度/堆叠）、进度 + 当前槽落盘、内部 FE（只出）、旧 256 格存档自动迁移（塞不下的入 `pendingDump` 首个 tick 掉出）、`support/DecompositionTable` 数据包表 + 副产物 `results` | 数据包 `data/<ns>/decomposition/*.json`；`support/DecompositionDataLoader` 自注册 `AddReloadListenerEvent`（game bus）；全部几何/槽位常量在 `support/DecompositionGeneratorSpec`；设计契约 `docs/ROUND123_DECOMPOSITION_GENERATOR_REDESIGN.md` |
+| 终端能耗监视 | 终端第 7 档 `MODE_ENERGY` | 枚举走 RS 官方 `GraphNetworkComponent#getContainers()` + `InWorldNetworkNodeContainer#getPosition(): GlobalPos`（**不要**再自建容器表 / 不用 mixin）；`support/NetworkEnergyAudit` 服务端快照；`client/screen/EnergyAuditScreen` + `client/EnergyAuditHighlight` | payload 自注册 `network/EnergyAuditPayloads` |
+
+### 16.2 本轮修掉的「机制级」缺陷（都有 file:line 证据，别再改回去）
+
+1. **归流缓存仓吸不到地板上的掉落物**：`CollectionCacheBlockEntity` 旧代码用实体整数格判区域，且实体查询盒上界与实体 AABB 下界**相切**；修法 = 查询盒**向上**扩 1 格 + `containsEntity`（占用格 / 所站格 / 上方格）。**向下扩是错的**（不改上界，依旧不相交）。
+2. **旧存档标记的「凑够 N 件」门槛**：旧 Shift 标记把手持堆叠数当门槛；现在按存档版本键 `MarkerAmountV2` 只对旧档归一为 1。
+3. **每区域独立过滤器**（NBT `AreaFilters`，下标 = sanitize 后区域下标；空集 = 不吸）：解决「相邻机器重复吸放」。C2S `SetAreaFilterContextPacket` 在主类 `registerPayloads` 里注册（**漏注册不崩**：界面侧 try/catch 降级 WARN）。
+4. **接收器 × Create 溜槽**：Create 溜槽对上方容器**只抽不推**（`ChuteBlockEntity` 空槽 → `ItemHelper.extract`），第 96 轮把 `extractItem` 写死恒空才是真因。修法 = `ViewOnlyHandlers` 新增显式外抽落点（默认仍只进不出），接收器接上；`simulate` 零写入、`execute` 才写 + `setChanged()`。
+5. **范围充电器缓存 5000 万**：只改默认值对已装实例无效（NeoForge 语义）⇒ `Config.migrateLegacyRangeChargerCapacity()` 在 `commonSetup` 做一次性迁移（只迁「恰好等于历史默认 100 万 / 1000 万」的实例）；同时新增 `rangeChargerNetworkPullPerTick`（默认 10 万）闸住网络抽电。
+6. **`AbstractContainerScreen#render` 不会替子类调 `renderTooltip`**（javap 逐字节确认）：新界面若要 tooltip，必须覆写 `render()` 手动调（`FEEnergyCubeScreen` / `InventoryProxyScreen` 都是这么做的）。**7 参 `blit` 把纹理尺寸写死 256×256**，整图 = 界面尺寸的贴图必须用 9 参。
+7. **语言键实参契约**：`lang` 的 `%s` 个数必须 == Java 实参个数。两个方向都有硬断言：`tools/selfcheck_round99_energy_cube.py`（Java→lang，扫源码）与 `tools/gen_fe_energy_cube_assets.py#check_lang_contract`（lang→契约表）。**review 资源名拼接不算违规**（守卫已排除 .png/.json 等后缀）。
+8. **自动合成仓 → Create 机器**：接管点提到 `PatternProviderNetworkNode#accept`（`mixin/createcraft/AutocrafterCreateCraftMixin`，priority 1500、字段 `@Shadow` 拿 sink），**正对 Create 机器时绕过内部存储**、其它情况完全放行；Create 特化路径上非 NEVER 的锁模式等价 NEVER（已写进类注释与交付说明）。
+
+### 16.3 本轮验证（Lead 串行执行）
+
+1. `tools/_lead_compile.ps1` → `LEAD_COMPILE_OK sources=487`（第 104 轮新增 `RsccTextFit` / `RsccStationBadge` / `RsccBusStationSync` / `RsccStationProbe` 等）。
+2. 全量自检 `tools/_run_all_selfchecks.py` → **147 个，0 失败**（必须用带 Pillow 的 python：`C:\Users\70432\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe`；系统 `C:\Python315\python.exe` 缺 PIL 会在 `selfcheck_advancements.py` 假失败）。新增：`selfcheck_no_ellipsis.py`（109 checks，扫 100 个客户端源文件）与 `selfcheck_round104_station_distribution.py`（17 断言 + 10 反例）。
+3. `tools/verify_dedicated_server.ps1` → **PASS**（`Done (1.330s)`，无 Mixin / dist 致命标记；run/ 前后清单一致）。
+4. `gradlew build --offline --no-watch-fs` → `build/libs/rs_create_compat-1.2.0-beta.9.jar`（2,720,065 B，sha256 `1fa7d70a…2d5afd`）。
+5. 部署：SFTP `/mods` + `/client_files/mods` + 本地客户端实例；旧版 beta.8 一律改名 `.disabled`、新版 sha256 三方一致（部署后读回校验通过）。SFTP 部署必须用带 paramiko 的 `D:\mods\pyenv-staritem\scripts\python.exe`（bundled python 没有 paramiko）。
+
+### 16.4 本轮「未验证 / 已知限制」的权威清单
+
+见 `CHANGELOG.md` 的「已知限制」两节（中英各一份），交付说明必须原样转述，不许只挑好听的。要点：Create 特化路径的锁模式、能耗页只显示绑定网络、飞行背包身上无模型与 4 区块扫描、降解室发电机农夫乐事未实测 + 满仓存档体积与 `/reload` 未实测、区域过滤器下标不跟随重排。（1.2.0-beta.9 起：降解室发电机**正式贴图已交付**、不再有「占位美术」；能量立方第 4 行「absolute 模式文案截断」也已随「界面文本完整显示」改造消失 —— 见 `docs/TEXT_NO_ELLIPSIS_RULES.md`。）
+
+### 16.5 下一轮（若要继续）优先事项
+
+1. 序列装配「物品分配架构」B 方案：B-1..B-4 在第 104 轮落地（`task-36`）；B-5..B-8（流体 / 过渡件 / 落盘工位登记表 / machinePos 排序）仍是下一轮。
+2. 归流缓存仓：区域重排后过滤器跟随（把下标键改成「区域几何哈希 + 序号」双键）。
+3. 界面「缩字号」兜底路径的实机观感（0.6 倍下限、英文长行折行位置）需要客户端实机确认。
+4. 降解室发电机（第 123 轮重做后）：旧 256 格存档迁移**实机**走一遍（目前只有模型推演 + 守恒断言）、`/reload` 实机、农夫乐事标签实测、界面贴图 / 箭头 / 文字避让实机看一眼、插拔升级看进度与 FE/t。
+5. 第 124 轮（1.2.0-beta.25）三个界面**都没真机开过**：区域标记界面（文字避让 / 缩高后观感 / 24 字最坏宽）、区域选定器（改名四入口 / 焦点转移 / 拒绝回执可见性）、充电过滤器（候选池是否真的不再出现发电机 / 控制器、自家充电器是否出现）。另：能量立方「集群」语义经审计已正确，但「整簇缓慢上涨 / 挖下放回不翻倍 / 43+ 块 int 饱和现场」仍需实机；默认充电速率（500 FE/t/目标）下用户期待的「瞬间充满」需产品决策。详见 `docs/ROUND124_USER_FEEDBACK_LANDING.md`。
+
+## 17. 第 105 轮（1.2.0-beta.10）：电动飞行背包两项修复
+
+### 17.1 用户反馈（原话要点）
+
+1. 「更改电量不足喷气背包的提示只在那个玩家飞行的时候才提示；如果说玩家并没有处在飞行状态，那么即使电量低也不要提示」（指 title）。
+2. 「我把它扔出去，扔出去的时候它会掉一份在地上，手上还拿着一份，我手上拿着那一份如果我再扔出去它是扔不出去的，相当于有点像是幽灵物品」——**真因两条**（见 17.2），本模组能修的是第 1 条，第 2 条是包内前置 ItemPhysic 的 Q 丢重写。
+
+### 17.2 根因（`task-40` 只读审计，证据见任务回报）
+
+- **A（本模组，已修）**：`ElectricJetpackItem#use` 直接调原版 `Equipable#swapWithEquipmentSlot`；1.21.1 该方法在**创造模式**用 `held.copy()` 写胸甲槽、**手上保留原栈**（「创造模式穿甲不消耗」的原版语义）⇒ 创造模式右键穿一次 = **真复制**（手上 1 + 胸甲 1）；按 Q 只丢快捷栏选中格，胸甲那份永远丢不掉。修法：创造模式单独接管，按生存语义**移动**（`setItemSlot(slot, held.copy())` 后 `setItemInHand(hand, worn)`，后者覆盖手槽本体 ⇒ 净移动 1 件）。
+- **B（前置 mod，本模组无法根治）**：包内 `[物品物理掉落] ItemPhysic`（`config/itemphysic.json` → `"throw": {"enabled": true}`）用 `LocalPlayerMixin` 把原版 `LocalPlayer#drop` 短路，改由自己的蓄力 + `DropPacket` 投掷，而服务端 `ServerPlayer#drop` 里 `setRemoteSlot` 会**抑制冗余槽同步**（前提是「客户端真的自己扣了」）⇒ 两端任一次不一致就留下**永久客户端幽灵**（看得见、服务端已空、再按 Q 不发包）。规避：`itemphysic.json` 的 `throw.enabled = false`（或临时移除此 mod），并用「丢一组泥土」复现验证是否为全局现象。
+- 「低电 title 只在飞行中提示」：`JetpackFlightHandler` 第 ⑦ 步加 `player.getAbilities().flying` 前置条件；不在飞时不发送、也不写 `lowPowerNotified`（下次真的起飞仍低电会立刻补一条）；耗尽 title 原本就只在「飞行中被收回权限」时发。
+
+### 17.3 本轮验证（Lead 串行执行）
+
+1. `tools/_lead_compile.ps1` → `LEAD_COMPILE_OK sources=487`。
+2. 全量自检 `tools/_run_all_selfchecks.py` → **147 个，0 失败**（`selfcheck_round99_jetpack.py` 从 76 条扩到 85 条 / 41 反例，新增 ①-h/①-i 创造模式移动 vs 复制判据、⑤-d/⑤-e 在飞才提示）。
+3. `tools/verify_dedicated_server.ps1` → **PASS**（`Done (3.274s)`，无 Mixin / dist 致命标记）。
+4. `gradlew build --offline --no-watch-fs` → `build/libs/rs_create_compat-1.2.0-beta.10.jar`（2,720,580 B，sha256 `c65033bf…156deb0`）。
+5. 部署：SFTP `/mods` + `/client_files/mods` + 本地实例；beta.9 全部改名 `.disabled`，三方（构建 / 两处远端 / 本地）sha256 一致。
+
+### 17.4 未验证 / 待确认（诚实清单）
+
+1. **没有真机复现**：A/B 都是源码 + 字节码 + patched 原版源码推断；未确认用户游戏模式（A 只在创造模式成立）与具体动作（Q / 丢 GUI / 右键）。
+2. 未拿到用户端 ItemPhysic 是否被改过配置（已确认 `itemphysic.json` 当前 `throw.enabled=true`）。
+3. ItemPhysic 的客户端本地扣减与 `DropPacket` 的完整时序未逐 tick 复现（只有类/字节码层证据）。
+
+### 17.5 下一轮（第 106 轮，已开工）
+
+- `task-41`：高级归流缓存仓「区域列表真实化 + 过滤器直显 + 清无用红字 + 区域描边单显/全显」UX 重做（owner `proxy-cache-area`）。
+- `task-42`：FE 能量立方「传递介质/缓存」语义（相邻主动供能 + 被抽/被注不拦 + 最低优先级；`Config.feEnergyCubePushPerTick` 已加）(owner `rx-tx-chain`)。
+
+## 18. 第 112 轮（1.2.0-beta.14）：每区域过滤标记「随身带」+ 独立标记界面
+
+### 18.1 用户反馈（原话，语音转写）
+
+> 「而且现在貌似无法正常的单独给某一个区域标记嗯就非得把这个标记放在方块中进行吗这样子感觉很麻烦
+>  而奇幻的时候更麻烦感觉」
+
+（「奇幻」= 语音识别把**切换**听错；同一批的前一句是「你那个区域呢这个过滤器在这一个方块里面进行设置
+而且这样子有点不太直观」。）上一轮交付后用户没有新的实机反馈，本条是 beta.13 交付同一批里的最后一条，
+本轮把它当主任务。
+
+### 18.2 根因（第 101 轮遗留的设计债）
+
+每区域过滤存在**方块实体**（`AreaFilters`，键 = 区域序号）⇒ ①只能在机器界面里配（手持选定器无效）；
+②序号一变过滤器串位；③换机器 / 拆选定器即丢；④区域列表的「编辑过滤」只是切 48 格窗口上下文并退回机器界面；
+⑤快照过滤图标按**原始下标**查「按可用位次存」的表 ⇒ 有区域被排除时图标串位。
+
+另外：打开区域列表只有「潜行 + 右键空气」，而玩家在基地里几乎总对着方块 ⇒ 列表打不开，只能走机器。
+
+### 18.3 修法（一句话）
+
+过滤标记搬到**选定器物品**（`support/AreaMarks`，`CUSTOM_DATA` 的 `RsccAreaMarks`，键 = 六坐标几何，
+编码复用 `CollectionCacheBlockEntity#encodeMarkerTag/decodeMarkerTag`，旧档自动迁移）；新增
+`network/AreaMarkEditPacket`（服务端按「背包第 N 格」自己取物品）+ `support/AreaSelectorTargets`
+（两个写包共用落点判据）+ `client/screen/AreaMarkScreen`（左 = 区域标记、右 = 背包，点一下加 / 删）；
+区域列表「编辑过滤」直接开它；`AreaSelectorHandler` 补「不潜行右键空气也开列表」。
+
+### 18.4 本轮验证
+
+1. `tools/_lead_compile.ps1` → `LEAD_COMPILE_OK sources=499`。
+2. 全量自检（`D:\mods\pyenv-staritem\scripts\python.exe tools/_run_all_selfchecks.py`，**必须用这个
+   解释器**：`selfcheck_advancements.py` 依赖 PIL，系统 `python` 没有）→ **158 个，0 失败**。
+3. `tools/verify_dedicated_server.ps1` → **PASS**（`Done (1.674s)`）。
+4. `gradlew build` → `rs_create_compat-1.2.0-beta.14.jar`（2,784,982 B，
+   sha256 `8821d502007fa5f42275d255c67f58cdddef2e4fcf3e871736f0c2b049e7205c`）。
+5. 三处部署（本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）回读 sha256 一致
+   （`tools/_verify_deploy_round112.py` → `DEPLOY_VERIFY_OK`），beta.13 就地改名 `.disabled`。
+
+### 18.5 未验证 / 待确认（诚实清单）
+
+1. 双网格界面**实际观感**（间距 / 36 格够不够）没有截图复核。
+2. 「手持配标记 → 放进机器 → 吸到该物品」的**端到端**链路只有源码 + 行为模型，没有实机吸收。
+3. 旧档 `AreaFilters → 几何键` 迁移没有用真实旧存档跑过（代码路径：`loadAdditional` →
+   `migrateLegacyAreaFilters`；选定器不在槽里时会等待，放进来再迁）。
+4. 数量门槛 / NBT / 标签匹配这些细调仍只在机器界面的 48 格窗口里（两边同一份数据）。
+
+### 18.6 下一轮候选
+
+- 用户对 beta.14 的实机反馈（优先）。
+- 「区域标记」界面的 36 格上限是否要分页；是否把数量门槛 / 标签匹配也搬进这个界面。
+- 是否给「打开区域列表」加一个快捷键入口。
+
+---
+
+## 19. 第 113 轮（1.2.0-beta.15）：区域标记链路加固（独立复核 + 端到端模型）
+
+### 19.1 为什么做
+
+第 112 轮（beta.14）由单代理一轮写成，它的 96 条自检**全是源码锚点 + 孪生模型**。本工程已有两次
+「编译过 + 自检绿但真机出事」的先例，所以本轮在等用户实机反馈期间补两件事：
+① 只读**对抗复核**（不信任何既有结论，按「写 → 存 → 读 → 用」走完整链路）；② **端到端行为模型自检**
+（覆盖「手持配标记 → 放进机器 → 按标记吸收」与「旧档迁移」两条第 112 轮没覆盖的链）。
+
+复核报出 **3 高 + 3 中 + 6 低** 共 12 条缺陷（没有会崩 / 断线 / 丢真实物品的），全部修完。
+
+### 19.2 三条高危（都是「丢玩家配置」）
+
+1. **`ACTION_REPLACE` 改坐标会删掉该区域全部过滤标记**：标记以几何为键，REPLACE 换几何后
+   `AreaMarks.prune` 把旧几何当已删除区域剪掉（beta.13 键是序号 ⇒ 不丢，属回归）。
+   修法：REPLACE 前后搬运标记，新几何已有标记则按 `(id, fluid)` 去重合并、不覆盖。
+2. **旧档迁移「0 条映射上」仍清空旧表**：插一把空白 / 区域为空的选定器进旧机器 ⇒ 旧表被清并
+   写回存档 ⇒ 每区域过滤永久消失（只留「已迁 0 个区域」的 INFO）。
+   修法：只删已映射条目（`index < areaCount`），未映射的原样保留 + WARN（`legacyMigrationWarned` 节流，
+   读档重置），区域表恢复后自动重试。
+3. **迁移用 `sanitize` 后的区域表**：Config 调小 / 区域超限时对应标记被跳过、随后（2 的）清表毁掉。
+   修法随 2：未映射条目保留在 NBT 里，Config 调回即恢复。
+
+中危 3 条：`prune(null)` 会清空全部标记（改 null 早退 + 原始列表遍历）；单条标记无大小上限
+（`MAX_MARKER_BYTES = 2048` + `isOversized`，服务端 / 客户端两处拦）；主手路径被拒后不回同步
+（补 `inventoryMenu.broadcastFullState()`）。低危 6 条见 `docs/ROUND113_AREA_MARK_HARDENING.md` 第 2 节。
+
+### 19.3 本轮验收
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=499`**
+2. 全量自检（`tools/_run_all_selfchecks.py`）→ **159 个，0 失败**
+   （新增 `selfcheck_round113_area_mark_e2e.py`：**140 断言 / 38 反例**；
+   `selfcheck_round112_area_marks.py` 更新到 **100 断言 / 12 反例**）
+3. `tools/verify_dedicated_server.ps1` → **PASS**（`Done (2.024s)`）
+4. `gradlew build` → `rs_create_compat-1.2.0-beta.15.jar`（**2,788,186 B**，
+   sha256 `5311d7e3129a70637b2c0ea6a23fabd6d37f97d35a44a89e0da3b734e6d4cc91`）
+5. 三处部署（本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）回读 sha256 一致
+   （`tools/_verify_deploy_round113.py` → `DEPLOY_VERIFY_OK`），beta.14 就地改名 `.disabled`
+
+### 19.4 未验证 / 待确认（诚实清单）
+
+1. 本轮**没有实机验证**：REPLACE 携带标记、旧档「保留未映射条目」、单条上限提示都只有源码锚点 + 行为模型。
+2. `CustomData#update` 是否返回新实例未能 javap 证明（按契约推断）；`ItemStack.parseOptional(null, …)`
+   的 NPE 也是按契约推断（已用 `registries == null` 早退兜住）。
+3. beta.13 旧 `AreaFilters` 的 `Index` 是「sanitize 后可用位次」还是「原始下标」仍未拿到旧源码佐证。
+4. 机器侧 48 格 ghost 窗口仍可写入大 NBT 标记（第 101 轮旧路径，本轮按「不改旧语义」处理）。
+5. 重叠区域「先命中先算」（靠前的空标记区域挡住后面区域）是既有行为，未改，UI 也无提示。
+
+### 19.5 下一轮候选
+
+- **用户对 beta.14 / beta.15 的实机反馈（最高优先）**。
+- 36 格上限是否分页；数量门槛 / 标签匹配是否搬进「区域标记」界面。
+- 「打开区域列表」快捷键入口。
+- 拿到真实 beta.13 存档后跑一次真实迁移（含删过区域的老档），确认 WARN 与保留逻辑。
+
+---
+
+## 20. 第 114 轮（1.2.0-beta.16）：标记体积「整表预算」统一拦截 + 独立复核修复 8 条
+
+> 基线：用户实机跑的是 `1.2.0-beta.15`（第 113 轮，2026-10-31T15:30 构建，sources=499）。
+> 本轮**没有新的用户实机反馈**，做的是第 113 轮明确记账、当时按「不改旧语义」放掉的那类缺陷；
+> 同时跑了一次独立只读对抗复核（`cross-review`），报出的 **2 高 + 4 中 + 2 低全部修完**。
+
+### 20.1 为什么需要「整表」预算
+
+区域标记存在**选定器物品**的 `CUSTOM_DATA`（`RsccAreaMarks`）上，**随物品一起网络同步**
+（背包 / 菜单槽 / 手持 / 快捷栏）。第 113 轮只加了「单条 2 KB」上限，三条缺口：
+
+1. `MATCH_CAPACITY = 288` 条 × 每条接近上限 ⇒ 整表仍可到几百 KB；
+2. 机器侧 48 格 ghost 窗口（第 101 轮旧路径）**零拦截**，写的是同一份数据；
+3. `SetCollectionMarkerConfigPacket` 的 `nbt` / `tags` 是**客户端原样回传的不透明负载**，
+   服务端直接落库（改包可绕过所有界面拦截）。
+
+### 20.2 设计（`support/MarkerBudget.java`，新建）
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `MAX_ENTRY_BYTES` | `16384` | 单条 `sizeInBytes` 上限 ≈ **线上 2 KB** |
+| `MAX_TOTAL_BYTES` | `524288` | 整张表 `sizeInBytes` 上限 ≈ **线上 64 KB** |
+| `WIRE_RATIO` | `8` | 堆估算 → 线上字节的经验倍率（复核实测 648/79 ≈ 8.2，**取整偏保守**） |
+| `MAX_ENTRY_WIRE_BYTES` / `MAX_TOTAL_WIRE_BYTES` | `2048` / `65536` | 文案 / 日志用（界面显示 **64 KB**） |
+
+- **口径校准**：`CompoundTag#sizeInBytes()` 是 **JVM 堆估算**（48 基数；每键 `28+2·len+36`；
+  Int 12 / Long 16 / Byte 9 / String `36+2L` / List `37+4n`），约线上字节 × 8。
+  最初把「2 KB / 64 KB」当 `sizeInBytes` 阈值写 = 线上只有 256 B / 8 KB，
+  会把「默认 16 区域 × 平均 6 条」的正常配置判成超限（新一轮「加标记没反应」）。
+- **高级版算法**：`现有子树 sizeInBytes − 该区域旧记录 + 新记录编码（writeArea）`；
+  不逐条重编码（旧格式 `Item` 条目在 `registries == null` 下会被漏算，而这些恰恰可能是大 NBT）。
+  基础版（数据在 BE）用 `entryBytes` 逐条求和（`markerTableBytes`）。
+- **拦截入口**：新界面（客户端提示 + 服务端兜底）、`AreaMarkEditPacket`、`addAreaMarker`（48 格）、
+  `tryAddMarker` / `addMarkerForUi`（`TOO_COMPLEX`）、`setMarkerConfig`（客户端自带 nbt，WARN 拒绝）。
+- **不拦**：读档、旧档迁移、换区域搬运（纪律：不静默删玩家数据）；**删除永远允许**。
+
+### 20.3 独立复核报出的缺陷与修法
+
+| 级别 | 缺陷 | 修法 |
+|---|---|---|
+| 高 H1 | `SetCollectionMarkerConfigPacket` 解码 `new ArrayList<>(tagCount)` ⇒ 谎报计数即可在 menu 校验前 OOME | `TAG_CAP = 256`：按 count 消费字节、只暂存前 256 条 |
+| 高 H2 | 旧档迁移把超大标记搬进选定器；整表超预算后该选定器**永久不能再加标记** | `migrateByIndex` 逐条判：超单条 / 会超整表 ⇒ **冻结在旧表**；**谁消费谁删**；调用方不再 `removeIf(index < areaCount)` |
+| 中 M1 | 迁移用 sanitize 后区域表做序号映射 ⇒ 序号漂移、标记**套到别的区域** | `AreaMarks.isIndexPrefix`：usable 必须是 raw 的几何前缀，否则整体冻结 + WARN |
+| 中 M2 | 部分迁移成功时每 tick `setChanged` + `invalidateAreaSnapshot` ⇒ 每 tick 重发快照 | 只有 `changed`（有消费 / 有写入）才做三件副作用 |
+| 中 M3 | 高级仓区域标记的「数量 / NBT / 标签」配置写到**没人读的全局匹配区**（5 参包走基类 6 参覆写，高级菜单只覆写 3 参） | `AdvancedCollectionCacheMenu` 补 6 参覆写：有区域上下文且非流体 ⇒ `setAreaMarkerConfig`，否则 `super` |
+| 中 M4 | `isOverBudget` 删除分支返回「超预算 = true」，与「删除永远允许」相反 | 三分支：`next == null` 查询；`next` 空 ⇒ `false`；否则替换后比较 |
+| 低 L1 | REPLACE 合并后 `put` 截到 288 条且无日志 | 未改（只有「旧区域 >288 条」的手改 NBT 才可能触发），记入待办 |
+| 低 L2 | `prune` 每剪一个区域整树 copy ⇒ O(n²) | 先计数、0 直接返回、否则一次 `update` 批量重建 |
+
+复核同时**正面确认**：`CUSTOM_DATA` 确实随物品同步（`DataComponentType.Builder#build()` 未声明
+`networkSynchronized` 时回退 `fromCodecWithRegistries`）；`CustomData.update` 确实 `tag.copy()`。
+
+### 20.4 自检
+
+- 新增 `tools/selfcheck_round114_marker_budget.py`（1408 行，纯 stdlib）：**93 断言 / 19 反例**，
+  行为模型逐字复刻 1.21.1 `Tag#sizeInBytes` 公式 + `encodeMarkerTag`/`writeArea` + `isOverBudget`
+  三分支 + 迁移「消费 / 冻结」；反例自证：`/tmp` 副本上 **10 处打坏 ⇒ 10/10 判负**。
+- `selfcheck_round112` **100/12**、`selfcheck_round113` **140/38**：按新迁移语义诚实更新（判据加强）。
+- `selfcheck_round106`：`_has_invalidating()` 的「固定 2000 字符窗口」在方法变长后误报，
+  改成「从签名括号配平到真实结束」，判据不变。
+- 全量：**160 个脚本 / 0 失败**。
+  > ⚠ 跑全量自检要用**带 Pillow 的运行时 python**
+  > （`C:\Users\70432\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe`）：
+  > 系统 `python` 没有 PIL，`selfcheck_advancements.py` 会 `ModuleNotFoundError`（**不是本轮回归**，
+  > 是解释器环境差异；本轮复现过一次 160/1，换运行时 python 后 160/0）。
+
+### 20.5 本轮验收
+
+1. `tools/_lead_compile.ps1` → `LEAD_COMPILE_OK sources=500`
+2. 全量自检 → **160 / 0 失败**
+3. 专服探针 → **PASS**（`Done (1.939s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）
+4. `rs_create_compat-1.2.0-beta.16.jar`（**2,793,209 B**，
+   sha256 `29bc61c27f9c1ee4390cb8fef2320d48b8ea6da0ba378d66413bc792e43c6ed2`）
+5. 三处部署 sha256 一致（`tools/_verify_deploy_round114.py` → `DEPLOY_VERIFY_OK`），beta.15 就地 `.disabled`
+
+### 20.6 未验证 / 待确认（诚实清单）
+
+1. **没有实机点界面**：真实 `CUSTOM_DATA` 同步体积没有抓包实测；`WIRE_RATIO = 8` 是按 MC 堆公式估算，
+   内容里字符串占比不同会漂移（当上界估算用）。
+2. **旧数据可能「一出生就超限」**：迁移 / 搬运不拒；老存档若本就有超大标记，整表可能 > 线上 64 KB，
+   此时新增全被拒（删除仍允许），迁移会冻结那些区域并 WARN —— 没有实机验证过玩家的反应。
+3. `MergeResult.pinned` 目前恒为 `false`（**API 预留位**）：位次冻结由 BE 自己用 `isIndexPrefix`
+   判断后直接 return；字段与 `touched()` 里的 `|| pinned` 暂时是死代码，下一轮要么让
+   `migrateByIndex` 接收 raw/usable 自己置位，要么删字段。
+4. H1 仍按客户端 `count` 循环解码（不预分配，无 CPU 放大；count 极大时走到包尾抛异常，可接受）。
+5. 文档量级：普通标记堆估算 teammate 模型算 **658 B**（id `minecraft:iron_ingot`），
+   `MarkerBudget` javadoc 写「约 648 B（复核实测 648/79）」—— 同一量级，未统一（不影响判据）。
+6. 冻结条目会随 `saveAdditional` 长期留在存档里（符合「不删玩家数据」），每次加载 WARN 已节流。
+
+### 20.7 下一轮候选
+
+- **用户对 beta.15 / beta.16 的实机反馈（最高优先）**。
+- L1：REPLACE 合并后超 288 条补 WARN；`MergeResult.pinned` 收尾（见 20.6-3）。
+- 36 格上限是否分页；数量门槛 / 标签匹配是否搬进「区域标记」界面；「打开区域列表」快捷键。
+- 其他机器（数量守恒器 / 序列执行仓…）的标记表体积与同步路径未测（本轮范围外）。
+
+
+---
+
+## 21. 第 115 轮（1.2.0-beta.17）：跨机器「标记 / 导入」写入口的体积与计数上限
+
+> 基线：用户实机跑的是 `1.2.0-beta.16`（第 114 轮，2026-10-31T15:52 构建，sources=500）。
+> 本轮**没有新的用户实机反馈**，清的是第 114 轮 §20.6 / §20.7 自己记的账：**其他机器的标记表
+> 体积与同步路径未测**。由独立只读复核员 `cross-review` 盘完，按其报告修了三组缺陷。
+
+### 21.1 复核的总体结论（为什么值得单独一轮）
+
+> 除区域选定器标记外，**全仓没有任何第二处标记 / 过滤表接入体积预算**；且 C2S 侧还剩
+> **一处**「谎报计数 ⇒ 解码阶段 OOME」与第 114 轮 H1 完全同源（`SetSequenceImportPacket`）。
+
+盘点表（机器 / 负载 / 上限 / 任意大 NBT 写入口）见 `docs/ROUND115_CROSS_MACHINE_BUDGET.md` §2。
+PASS 且未动：序列执行仓、单元样板管理舱（仅 1 格旧档抢救槽、界面已移除）、装填器
+（字符串全由服务端写）、资源请求器（`orders` 无上限是刻意的，且键必须是已注册资源）。
+
+### 21.2 四项修法（对应复核 H1 / H2 / H3 / L1）
+
+1. **H1 `SetSequenceImportPacket` 解码不预分配**：`MAX_IMPORT_LIST = 4096` /
+   `MAX_IMPORT_STEPS = 1024`；仍按 `count` 逐个解码（流对齐），只暂存前 N 条；
+   `machines` 不再用 `buf.readList`（MC 实现同样按计数预分配）改手工循环；负计数 `Math.max(0, …)`。
+2. **H2 终端导入步数 clamp**：`SequencePatternTerminalBlockEntity.MAX_IMPORT_STEPS = 1024`，
+   菜单 `importSequencedRecipe` 在**生成单元样板之前** `Math.min(machines.size(), MAX)` + WARN。
+   **不裁在 `applyRecipeToArrangement`**（那里会连既有列一起丢）。
+3. **H3 两台定量保持器接同一把尺**：`MarkerBudget.isTagTooBig(CompoundTag)` /
+   `isStackTooBig(ItemStack, registries)`；四个服务端入口（两台机器 × `setFluidMarker` /
+   `setItemMarker`）**先判后写**，超限 `return`（旧标记原样保留、不清另一形态、不同步放大），
+   每台机器只 WARN 一次（`markerTooLargeWarned`）。`registries == null` ⇒ 判不了 ⇒ **不拒**。
+4. **L1 REPLACE 合并超 288 条补 WARN**：`AreaSelectorEditPacket` 合并后
+   `merged.size() > MATCH_CAPACITY` ⇒ WARN（说明保留新几何原有标记在前、被截掉的需手动重加）。
+
+### 21.3 `pinned` 收尾（第 114 轮 §20.6-3）
+
+- `AreaMarks#migrateByIndex` 现在**自己** `AreaSelection.get(stack)` 读原始区域表 → `isIndexPrefix`；
+  不成立 ⇒ `MergeResult(0,0,0,0,0,true)`（0 迁移 / 0 消费）。BE 的前置判断保留（能打带坐标的 WARN），
+  数据层这层是纵深防御。
+- `MergeResult#touched()` 改成 `migrated > 0 || skippedExisting > 0` —— **冻结不算「动过」**
+  （第 114 轮它恒 false 所以看不出问题；现在它是可达状态，算进去会让调用方对没变的表标脏 / 失效快照）。
+- 自检：`selfcheck_round114_marker_budget.py` 更新 `⑥-1` + 新增 `⑥-25`～`⑥-28`，现 **97 断言 / 20 反例**。
+
+### 21.4 自检
+
+- 新增 `tools/selfcheck_round115_cross_machine_budget.py`：**27 断言 / 6 反例**（纯 stdlib，
+  行为模型判边界：`> MAX_ENTRY_BYTES`、`steps` clamp、`min(count, 4096)`、拒收后状态不变）。
+- 全量：`tools/_run_all_selfchecks.py` → **161 个脚本 / 0 失败**。
+  > ⚠ 必须用**带 Pillow 的运行时 python**（`selfcheck_advancements.py` 需要 PIL）。
+
+### 21.5 本轮验收
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=500`**
+2. 全量自检 → **161 个脚本 / 0 失败**
+3. 专服探针 → **PASS**（`Done (1.928s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）
+4. `rs_create_compat-1.2.0-beta.17.jar`：**2,796,072 B**，
+   sha256 `034929faba518b2bac3d0163b734aefe24e92f5771537596adea77b9b1367917`
+   （`build_info`：`modVersion=1.2.0-beta.17` / `sources=500` / `builtAt=2026-10-31T16:39:56+0800`）
+5. 三处部署 sha256 一致（`tools/_verify_deploy_round115.py` → `DEPLOY_VERIFY_OK`：本地实例 /
+   SFTP `/mods` / SFTP `/client_files/mods`），beta.16 就地 `.disabled`
+   > ⚠ 部署脚本要用**带 paramiko 的 python**（本机 `D:\Python313\python.exe`）；
+   > 运行时 python（`.dsh/.../dependencies/python`）没有 paramiko，会 `ModuleNotFoundError`。
+
+### 21.6 未验证 / 待确认（诚实清单）
+
+1. **没有实机点界面，也没有真机改包**：判据是「源码锚点 + 行为模型 + 反例自证」；改包的真实放大倍率
+   与「被拒后玩家/攻击者看到什么」都没有在运行环境观测。
+2. **单包真实帧长上限没实测**：H2 的「约 2 MB 的包」按 MC 协议 VarInt 理论上界估算。
+3. **H3 只覆盖两台定量保持器**：序列终端的 4 个写入口只做了条数保护（H1/H2），没有逐条 ItemStack
+   体积预算；`UnitLibrary` 自动扩容仍无条数上限（复核 L3）。本轮有意收窄写域。
+4. **M1 未修**：`SetCollectionBlockedPacket.tags` 的四个阻塞标签名单无上限、不校验 tag 存在
+   （每件被收集物品线性扫 + 逐个 `TagKey.create`）。加 cap 前要定「要不要拒绝不存在的 tag」（产品口径）。
+5. **M2 未修**：`/rs_create_compat diag` 无权限，普通玩家可反复触发全量遍历世界 + 大 JSON 落盘；
+   改动会影响既有诊断工作流，需要拍板。
+6. `isStackTooBig` 在 `registries == null` 时**放行**（宁可放过不误拒）；目前所有 C2S 入口都有 level。
+
+### 21.7 下一轮候选
+
+- **用户对 beta.14～beta.17 的实机反馈（最高优先）**。
+- 用户三项待定：36 格上限是否分页；数量门槛 / 标签匹配是否搬进「区域标记」界面；「打开区域列表」快捷键。
+- M1（阻塞标签 cap + 是否存在 tag 校验口径）、M2（diag 权限）—— 需要用户拍板。
+- 序列终端 4 个写入口的逐条 ItemStack 体积预算 + `UnitLibrary` 条数上限。
+
+
+---
+
+## 22. 第 116 轮（1.2.0-beta.18）：序列装配终端家族的「物品 / 流体 / 字符串」写入面收口
+
+> 基线：用户实机跑的是 `1.2.0-beta.17`（第 115 轮，2026-10-31T16:40 构建，sources=500）。
+> 本轮**没有新的用户实机反馈**，清的是 §21.6-5 / §21.7 自己记的账：序列终端 4 个 C2S 写入面没接体积预算 + 复核 L3「单元样板库无条数上限」。
+
+### 22.1 为什么值得单独一轮
+
+第 114/115 轮把体积预算铺到了区域标记、两台定量保持器、导入包解码；但序列装配终端家族的 4 个 C2S 写入面一直直接吃客户端的 `ItemStack` / `FluidStack`，
+写进方块实体 NBT 与单元样板 `CustomData` 并**永久落盘**，随每次同步回发 —— 与「把物品设为标记」同一类风险。
+改完这一轮，全仓「客户端给的物品 / 流体 / NBT 会落盘」的 C2S 写入口**全部接入同一把尺**（`MarkerBudget`）。
+
+### 22.2 六个改动点
+
+| # | 位置 | 改法 |
+| --- | --- | --- |
+| 1 | `support/MarkerBudget.java` | 抽出 `stackBytes` / 新增 `fluidBytes`（`saveOptional`）；`isStackTooBig` 改为委托；新增 `isFluidTooBig`；判不了 ⇒ 0 ⇒ 不拒 |
+| 2 | `network/SetSequenceGhostPacket.java` | JEI ghost 拖拽→输入原料标记槽：单条尺（线上 ≈ 2 KB）先判后写，拒绝时旧标记不动 + 动作栏提示 |
+| 3 | `network/SetStepFluidPacket.java` | 步骤输入流体（FluidStack 带 `DataComponentPatch`）：同一把尺 |
+| 4 | `network/CreateUnitPatternPacket.java` | `input` 过尺；`name` / `recipeType` ≤ 256 字符（界面上限 64）；写库时 `targetSlot >= max(库容量, 硬上限)` 或首空位 = -1 ⇒ 拒绝 + 动作栏提示 |
+| 5 | `network/SetSequenceImportPacket.java` | 解码：整包暂存 8192（每列表仍 4096，字节仍全消费）；`handle`：`budgetViolation` 判单条 2 KB / 合计 256 KB / 字符串 256 与合计，超限**整包拒绝（原子）** |
+| 6 | `block/entity/SequencePatternTerminalBlockEntity.java` | `MAX_UNIT_LIBRARY_SLOTS=1024`；`firstEmptySlot()` 到上限返回 -1；`freeSlots/canAccept`；`putUnitIntoLibrary` 返回 boolean；`pullUnitsFrom` 到上限 break（留在执行仓）；生成前 `canAccept(unitsToStore)` 预检（在写总样板与扣 RS 样板之前）；`rscc$resize` 拆出 `rscc$resizeRaw`，**读档不判上限**、**任何增长不许越限** |
+
+另新增 3 条文案（`message.rs_create_compat.sequence.marker_too_large` / `.import_too_large` /
+`gui.rs_create_compat.sequence_pattern_terminal.generate.library_full`，zh_cn + en_us 各一份）。
+
+### 22.3 独立只读复核（只审库容量上限）与四条修正
+
+结论：**无高严重度缺陷**（不丢档 / 不崩溃 / 不会扣料后丢样板），但报出四条，全部已修：
+
+- **M1（中）** `rscc$resize` 守卫只在「从 ≤ 上限跨过」时拒绝 ⇒ 旧存档里已 > 1024 格的库每次 `ensureTrailingEmpty` 仍能 +1（形同没上限）。⇒ 改成**任何增长**不许越限（缩小仍允许）。
+- **M2（中偏低）** `canAccept` 对 > 1024 旧库只算空槽 ⇒ 常见旧库任何 ≥2 步生成被判「库已满」。M1 修正后这是**正确**语义（那种库确实不能再扩），文案 / 类注释已说明「取出一些即可」。
+- **L1（低）** packet 对旧库 ≥1024 槽的编辑写回被拒且只打日志 ⇒ 上限改成 `max(库容量, 硬上限)`，拒绝时补动作栏提示。
+- **L2（低，文档）** 类注释仍写「可增长、无上限」「不会因为库满而丢样板」 ⇒ 已重写。
+
+### 22.4 自检
+
+- **新增** `tools/selfcheck_round116_sequence_write_budget.py`：**32 断言 / 8 反例**（纯 stdlib）。
+  判据 = 行为模型（单条 / 合计 / 字符串 / 解码暂存 / 库容量与扩容上限 / `canAccept`）
+  + 源码锚点（「先判后写」顺序）+ 反例自证（删体积检查 / 删整包暂存上限 / 改回 `return getSlots();` /
+  把 resize 守卫改回「仅跨过时拒绝」/ 不调用 `budgetViolation`）。
+- **更新** `tools/selfcheck_round115_cross_machine_budget.py`：①-2 按「`isStackTooBig` 委托 `stackBytes`」心实更新；
+  ③-2 / ③-6 / ③-7 按 `readStacks` 初始容量 64 + 整包 8192 的新口径更新（判据加强：仍要求「不按对端计数预分配 + 仍按 count 消费字节」）。
+- **更新** `tools/selfcheck_candidate_pipeline.py`：`readStacks(buf, staged)` 新签名（判据不变）。
+- **全量**：`tools/_run_all_selfchecks.py` → **162 个脚本 / 0 失败**。
+
+### 22.5 本轮验收
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=500`**
+2. 全量自检 → **162 个脚本 / 0 失败**
+3. 专服探针 → **PASS**（`Done (1.805s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）
+4. `rs_create_compat-1.2.0-beta.18.jar`：**2,802,193 B**，
+   sha256 `aed7c5934af721ecb45564d5a57fb3e05c1d75a942aa1f8c91d4e2102829f08f`
+   （`build_info`：`modVersion=1.2.0-beta.18` / `sources=500` / `builtAt=2026-10-31T17:12:45+0800`）
+5. 三处部署回读 sha256 一致（`tools/_verify_deploy_round116.py` → **`DEPLOY_VERIFY_OK`**：
+   本地实例 / SFTP `/mods` / SFTP `/client_files/mods`），beta.17 就地改名 `.disabled`
+   > ⚠ 部署脚本要用**带 paramiko 的 python**（本机 `D:\Python313\python.exe`）。
+
+### 22.6 未验证 / 待确认（诚实清单）
+
+1. **没有实机点界面，也没有真机改包**：判据是「源码锚点 + 行为模型 + 反例自证」；
+   改包的真实放大倍率、被拒后玩家 / 攻击者看到什么，都没有在运行环境里观测。
+2. **数值口径**：`MAX_ENTRY_BYTES`（线上 ≈ 2 KB）与 256 KB 合计预算都是按「`sizeInBytes()` 堆估算 ≈ 8 倍线上字节」的经验换算；
+   256 KB 对应「≈ 3300 条普通物品」是估算，**没有拿真实大型 modpack 的标签型 ingredient 实测过**。
+3. **1024 格上限没有实机跑到**：初始 108 格、生成默认跳过重复，正常玩法远达不到。
+4. **旧存档 > 1024 格的库**：只在行为模型 / 源码上验证「读档不截断 + 增长被拒」，没有真实旧档实例。
+5. **仍开着（需产品拍板）**：M1 `SetCollectionBlockedPacket.tags` 阻塞标签名单无上限 / 不校验 tag 存在；
+   M2 `/rs_create_compat diag` 无权限；用户三项待定（36 格分页 / 数量门槛搬进区域标记界面 / 区域列表快捷键）。
+6. **剩下未接体积预算的写入口只剩「字符串列表」类**：`SetCollectionBlockedPacket.tags`、
+   `SetChargerFilterPacket` 的过滤名单 —— 与 M1 一起做更合适。
+
+### 22.7 下一轮候选
+
+- **用户对 beta.14～beta.18 的实机反馈（最高优先）**。
+- 用户三项待定 + M1 / M2（需产品拍板）。
+- 字符串列表类写入口（阻塞标签 / 充电器过滤名单）的整表体积与 tag 存在性校验。
+
+
+---
+
+## 23. 第 117 轮（1.2.0-beta.19）：归流缓存仓阻塞名单收口 + 上一轮复核的 H1 / M2
+
+> 基线：用户实机跑的是 `1.2.0-beta.18`（第 116 轮）。本轮**没有新的用户实机反馈**。
+> 两件事：① 清 §22.6-6 自记的账 —— 全仓最后一类「名单 / 字符串列表」C2S 写入口；
+> ② 独立只读复核第 116 轮的四个写入面（1 高 / 3 中 / 5 低），高 + 两个中在本轮修掉。
+
+### 23.1 为什么值得单独一轮
+
+「阻塞」自「按标签阻塞」上线后是**四个集合**（物品 id / 流体 id / 物品标签 / 流体标签），
+增长完全由客户端驱动，而两条口子都是前几轮反复修过的同一类：
+
+1. **条数无上限**：每包换一个新 id / 新标签就能无限撑大 —— 会进 `writeBlocked` 落盘，
+   并随每次开界面的 `SyncCollectionMarkersPacket` 全量回发；
+2. **标签包解码无上限**：`ResourceLocation.STREAM_CODEC.apply(ByteBufCodecs.list())` 的条数由对端给。
+
+### 23.2 四个改动点
+
+| # | 位置 | 改法 |
+| --- | --- | --- |
+| 1 | `support/CollectionBlockedLimits.java`（新） | 上限唯一出处：`MAX_BLOCKED_IDS=1024` / `MAX_BLOCKED_TAGS=256` / `MAX_TAGS_PER_PACKET=128` / `MAX_TAG_NAME_LENGTH=128`；`fits()` 有界加入（幂等：已存在不占名额）；`clamp()` 委托 `ChargerFilterLimits.clamp`；纯 JDK ⇒ 自检可 javac 真跑 |
+| 2 | `block/entity/CollectionCacheBlockEntity.java` | 新增唯一写入口 `applyBlockedEdit` + `BlockEditResult{CHANGED,UNCHANGED,REJECTED_IDS_FULL,REJECTED_TAGS_FULL}`：**先判后写、原子拒绝**；`sanitizeBlockedTags` 丢 null / 超长 / 重复；旧 `setBlocked` / `setBlockedTags` 委托它；**读档不判上限**（超限旧档原样读回） |
+| 3 | `menu/CollectionCacheMenu.java` | `setBlocked` 返回 `BlockEditResult`（不再 void），无论结果都 `syncMarkers()` 回传权威名单 |
+| 4 | `network/SetCollectionBlockedPacket.java` | 手写 `TAGS_CODEC`：按声明条数**消费全部字节**但**只暂存前 128 条**、不按对端计数预分配；`handle` 区分两种拒绝 → 动作栏提示（带真实上限值）+ 每进程一条 WARN |
+
+新增 2 条文案（`message.rs_create_compat.collection_cache.blocked_ids_full` / `.blocked_tags_full`，zh/en 各一份）。
+
+### 23.3 独立只读复核（第 116 轮四个写入面）与本轮修复
+
+- **HIGH（已修）** `SetSequenceImportPacket` 的 `recipeId` 完全没进预算，而它被 `SequencePatternData#TAG_RECIPE`
+  **逐张复制进每一步的单元样板** ⇒ 32 KB recipeId × 1024 步 ≈ **33 MB 落盘**（客户端单包仅约 30 KB）。
+  修法：单条限长 256 字符 **+** 按步数计入字符串合计（两道闸各自独立可挡，自检 ⑧-1 / ⑧-2 分别验证）。
+- **中（已修）** 解码暂存上限触发时各列表**互相错位**却仍成功导入（玩家收到 `import.done` 得到半张配方）。
+  修法：`truncated` 分量（**不上线格式**：`encode` 不写、客户端构造传 false）→ `handle` 在写入前整包拒绝。
+- **中（已修）** `> MAX_ENTRY_BYTES` 比较四处各写一遍 ⇒ 统一 `MarkerBudget#isEntryBytesTooBig`。
+- **低（已修）** 覆盖输出槽不返还旧样板 ⇒ 先交给玩家（背包满则掉脚下）；非法负 `targetSlot` 拒绝 + WARN；
+  三处日志「≈2 KB 线上」改成「堆估算阈值 + ≈2 KB 线上意图」；六处「陈述≠代码」逐条改正
+  （Ghost 无「普通槽直接放入」分支且当前无发送方 / CreateUnit 越界是拒绝不是收敛 /
+  `TARGET_FIRST_EMPTY_LIBRARY` 不再自动扩容 / 库容量注释（1024 格 ≈150–300 KB、读档走 `rscc$resizeRaw`、
+  `serializeNBT` 按最后非空槽 + 1 落盘 ⇒ 槽位数会压缩）/ `MarkerBudget.WIRE_RATIO` 在字符串主导负载下是**下界**）。
+- **未修**：M1 库只有条数限、没有体积限（1024 格理论 ≈2.5 MB 线上）；`ArrangementSize` 读档无上限（旧有）。
+
+### 23.4 自检
+
+- **新增** `tools/selfcheck_round117_blocked_limits.py`：**34 断言 / 13 反例**。
+  四条腿：源码锚点 + **真代码 JVM 探针**（javac 编译纯 JDK 的 `CollectionBlockedLimits` 后真跑 17 条）
+  + 行为模型（`applyBlockedEdit` 8 条语义）+ 反例自证（含 H1 两道闸、M2 截断标记、读档截断、半写等）。
+- **更新**（只改锚点、判据没放水）：`selfcheck_round115_cross_machine_budget.py`（①-1 / ①-2）、
+  `selfcheck_round116_sequence_write_budget.py`（①-1 / ①-3 / ①-5，并要求「比较只有一份实现」）、
+  `selfcheck_round9_feedback.py`（阻塞名单写入入口锚点改成 `applyBlockedEdit`，并断言旧入口仍委托它）。
+- **全量**：`tools/_run_all_selfchecks.py` → **163 个脚本 / 0 失败**。
+
+### 23.5 本轮验收
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=501`**
+2. 全量自检 → **163 个脚本 / 0 失败**
+3. 专服探针 → **PASS**（`Done (1.901s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）
+4. `rs_create_compat-1.2.0-beta.19.jar`：**2,808,433 B**，
+   sha256 `021d39cef65a38a5dae5f8b408601bb7586a0bd0ee3a6327ee518ca3b629dcd1`
+   （`build_info`：`modVersion=1.2.0-beta.19` / `sources=501` / `builtAt=2026-10-31T17:53:03+0800`）
+5. 三处部署回读 sha256 一致（`tools/_verify_deploy_round117.py` → **`DEPLOY_VERIFY_OK`**），beta.18 就地 `.disabled`
+   > ⚠ 部署脚本要用**带 paramiko 的 python**（`D:\Python313\python.exe`）。
+
+### 23.6 未验证 / 待确认（诚实清单）
+
+1. **没有实机点界面，也没有真机改包**：判据 = 源码锚点 + 行为模型 + JVM 探针 + 反例自证。
+2. **上限数值是估算**（1024 / 256 / 128 / 128 字符）：按正常玩法用量级 × 余量定，没有真实整合包统计。
+3. **超限旧存档**：只在行为模型 / 源码上验证「读档不截断 + 只拒增长 + 删除永远允许」，没有真实旧档实例。
+4. **NeoForge 对已注册 payload 是否仍限 32767 字符**未核实 ⇒ H1 的放大倍率是**下限**。
+5. **M1 未修**：单元样板库只有条数上限、没有体积上限；`/rs_create_compat diag` 无权限（需产品拍板）。
+
+### 23.7 下一轮候选
+
+- **用户对 beta.14～beta.19 的实机反馈（最高优先）**。
+- M1：单元样板库的「合计体积预算」（条数已有 1024，体积还没有）。
+- 用户三项待定（36 格分页 / 数量门槛搬进区域标记界面 / 区域列表快捷键）+ `diag` 权限。
+
+---
+
+## 24. 第 118 轮（1.2.0-beta.20）：单元样板库体积预算 + 两路独立只读复核（装填器 / 保持器）
+
+> 本轮**没有新的用户实机反馈**。三件事：① 清第 117 轮 §23.6-5 的账（单元样板库只有条数没有体积）；
+> ② 请一位只读复核员**对抗式**复核此前没专项审过的**蓝图加农炮装填器**家族（2 高 / 4 中 / 3 低）；
+> ③ 请另一位只读复核员复核**中间缓存仓 + 定量保持器**家族（2 高 / 3 中 / 4 低）。
+
+### 24.1 单元样板库：合计体积预算（遗留 M1）
+
+| 改动点 | 说明 |
+| --- | --- |
+| `support/UnitLibraryLimits.java`（新，纯 JDK） | `MAX_LIBRARY_WIRE_BYTES = 1 MiB` / `MAX_LIBRARY_HEAP_BYTES = ×8` / `MAX_LIBRARY_WIRE_KB = 1024`；判据只有一份 `fits(used, add)`，**减法形式**（加法在 `Long.MAX_VALUE` 下回绕成负数 ⇒ 误放行）；`remaining` / `usedWireKb` |
+| `GrowingUnitLibrary#trySetStackInSlot`（唯一写入口） | 先判后写：`delta > 0` 且 `fits` 不过 ⇒ **返回 false、一格不动**；`setStackInSlot` 只委托它（整个类 `super.setStackInSlot` 只剩一处）；`ensureSlot` 后仍越界 ⇒ 返回 false（**不继续索引**，避免 `IndexOutOfBoundsException` 崩服）；`extractItem` 只维护缓存、不判上限；`insertItem` 空格插入先判预算、不过整张退回 |
+| 体积缓存 `rscc$usedHeapBytes` | `-1` = 失效（读档 / 缩小 / 注入注册表上下文），否则增量维护。**自检随机模型抓到真 bug**：旧写法「失效时也做增量」会把 `-1 + delta` 钳成 0 = 把「不知道」当成「已用 0」⇒ 整条预算被废；现改为缓存失效时保持失效 |
+| 四条写入路径 | 生成 `canAcceptUnits`（格数 + 体积，在写总样板 / 扣 RS 样板之前）／`putUnitIntoLibrary`／`pullUnitsFrom`（不过就 break，样板留在执行仓）／`CreateUnitPatternPacket`（被拒有动作栏提示）／菜单格 `mayPlace` |
+| 新增文案 | `gui.…generate.library_full_bytes`（zh/en，带 KB 上限，数字随常量走） |
+
+### 24.2 装填器：修 H1（丢蓝图）/ H2（每 tick 全量刷新 + 20 包/秒）/ M1（队列空转 + 卡死）/ M3（全服刷屏）
+
+- **H1**：队列掌管共享蓝图槽时，`BlueprintView#setStackInSlot` 静默 return = 丢蓝图（原版 SWAP / Shift 点击先摘物）。
+  修法两层：菜单 `mayPlace` 加 `isSharedBlueprintSlotQueueLocked()`（原版不 detach）；视图拒收时 `dropIntoWorld`。
+- **H2**：`cannon.updateChecklist()` 从「每 tick」改成「蓝图真的换了 / 队列部署下一张」两处；
+  它是 Create 最重的操作（遍历蓝图全部坐标 + 重扫邻块容器）且内部置 `sendUpdate` ⇒ 旧行为 = 20 包/秒 + 大量世界查询。
+- **M1**：`takeFromQueue()` 移到「刚打完 / 队列刚启动」门控内（取出即部署）；删除死代码 `returnToQueue()`；
+  新增「中途取空 ⇒ 自动退回开始 + 64 格行动栏提示」分支（队列原样保留；新语言键 `…queue_paused_empty`）。
+- **M3**：「网络无火药」从全服广播改为 `notifyNearby`（64 格，与完成横幅同口径）。
+- **未修（记录）**：M2 `attachRoundBlueprint` 不入档 ⇒ 读档 / 区块重载后把已拉材料全部推回网络再重拉；
+  M4 每 tick 现做集群 BFS；L1–L3 文档不符（横幅兜底 / `isCannonAdjacent` 恒假分支 / 升级上限口径）。
+
+### 24.3 保持器：修 H1（目标数量 short 截断）/ H2 的重入崩溃部分
+
+- **H1**：MC 1.21.1 `ClientboundContainerSetDataPacket` 线上是 **short**，目标 int > 32767 被截断 ——
+  流体按 mB，**> 32.7 桶（33b）就中招**：界面回填 0，点 ± 把服务端目标静默改小（开注销时按错目标销毁资源）。
+  修法：目标拆「低 16 位（原 index）+ 高 16 位（**追加在末尾**的新 index）」，
+  基础（`DATA_TARGET_HIGH = 9` / `DATA_COUNT = 10`）与高级（`DATA_TARGET_HIGH_BASE` 整块，后续下标顺延）都改；
+  两端按无符号 16 位掩码拼回。客户端占位 `SimpleContainerData` 长度跟常量走。
+- **H2（部分）**：保持器故意把网络镜像暴露给相邻方块（设计功能），RS 外部存储会把它注册成网络存储源 ⇒ 无限递归。
+  新增纯 JDK `support/KeeperNetworkReadGuard`（同线程重入闸），四个网络抽取入口内层返回 0。
+  **存量虚高（双计）未修**：属产品口径（是否继续暴露网络镜像），见 `docs/ROUND118_KEEPER_TARGET_SYNC.md` §4。
+- **未修（记录）**：目标无服务端上限；基础版「注销默认开 + 目标 64 mB」；未标记仍认领资源；
+  `QUANTITY_KEEPER_MULTI_MARK_DESIGN.md` 过期（max 口径 vs 单权威）；死代码与假注释；`drain/fill` 编码不对称；`poolFreeSpace` 溢出。
+
+### 24.4 自检与验收
+
+- 新增 `selfcheck_round118_unit_library_bytes.py`（**50 断言 / 6 反例**，含 `UnitLibraryLimits` 的 **22 条 JVM 探针**）；
+  `selfcheck_round118_schematic_loader_fixes.py`（**30 / 12**）；
+  `selfcheck_round118_keeper_target_sync.py`（**25 / 9**，含 `KeeperNetworkReadGuard` 的 **8 条 JVM 探针**）。
+- 更新 `selfcheck_round116_sequence_write_budget.py` ④-10 的预检锚点（格数 → 格数 + 体积，判据没放水）。
+- **全量自检：166 个脚本 / 0 失败**（用带 Pillow 的 bundled python 跑；宿主 `python` 缺 PIL 会让
+  `selfcheck_advancements.py` 在 import 处报错，那是环境问题不是代码问题）。
+
+### 24.5 未验证 / 待确认
+
+1. **没有实机点界面、没有真机改包**：判据 = 源码锚点 + 行为模型 + JVM 探针 + 反例自证。
+2. **1 MiB 体积预算、1024 格、2 KB 单条**都是估算 + 余量，没有真实整合包统计。
+3. **short 截断**的依据是 MC 源码（`writeShort/readShort`），没有真机复现「33 桶 → 界面回填 0」。
+4. **保持器递归 / 双计**：组合是按 RS 2.0.9 源码推导，没有实机摆外存验证；双计需用户拍板。
+5. **装填器 H1 触发摆法**（基础 + 高级同时贴一台炮、彼此不相邻）是按判据推导，没有实机复现。
+
+### 24.6 下一轮候选
+
+- **用户对 beta.14～beta.20 的实机反馈（最高优先）**。
+- 装填器 M2（`attachRoundBlueprint` 入档）/ M4（集群 BFS 缓存）/ L1–L3 文档清理。
+- 保持器：目标上限口径、基础版注销默认值 + 流体目标初始化（64 mB 危险）、`claimedResources` 与 `isMarked` 同源、
+  文档重写与死代码删除、`drain/fill` 编码统一、`poolFreeSpace` 饱和加法。
+- `diag` 权限口径（用户此前明确要求该指令不要权限 ⇒ 更适合做冷却 / 轮转，而不是加权限）。
+- 用户三项待定（36 格分页 / 数量门槛搬进区域标记界面 / 区域列表快捷键）。
+
+---
+
+## 25. 第 119 轮（1.2.0-beta.21）：装填器读档「假换图」+ 单元样板整叠丢张 + 两路只读复核
+
+> 本轮**没有新的用户实机反馈**。三件事：① 清第 118 轮 §24.6 自己记的账（装填器 M2 / M4、L1–L3）；
+> ② 只读复核**区域标记 / 区域选定器**家族（顺带回答「用户那句『无法单独给某一个区域标记』可能已不成立」）；
+> ③ 只读复核**序列执行仓**家族运行时链路（1 高 / 3 中 / 4 低），高危在本轮修掉。
+
+### 25.1 装填器 M2：本轮蓝图身份落盘（读档不再白跑「回流 + 重拉」）
+
+| 改动点 | 说明 |
+| --- | --- |
+| 新 NBT key `AttachRoundBlueprint` | `attachRoundBlueprint.save(registries)`（ItemStack 全量含 data components；只在该身份非空时写）。选全量而不是「只存文件名 / 只存物品 id」：判据是 `isSameItemSameComponents`，存少了会在「同名但锚点/部署标记不同」的蓝图间误判同一张 |
+| `loadAdditional` | `ItemStack.parseOptional(registries, tag.getCompound(...))`（仓库既有写法，非法 id 只得到 EMPTY、不抛异常）；只有 `isValidBlueprintStack` 通过才认身份，否则 `attachRoundIdentityUnknown = true` |
+| `doLoaderWork` 四路判定（`:681-712`） | 槽空 ⇒ 清身份 + reset（旧行为）；身份未知（旧档/非法 key）⇒ 以槽里那张 **接管**身份、**不回流不复位**、`attachRoundComplete` 沿用存档；同图 ⇒ 什么都不做；真换图 ⇒ 回流 + reset + updateChecklist（旧行为） |
+| 安全性 | 身份缓存只做比较；赋值只有 EMPTY / `parseOptional` 新对象 / `currentCannonBlueprint.copy()`，**任何 insert / setStack 都不用它**（自检 M2-5 + 反例 M2-C6 拦住复制物品的写法） |
+
+### 25.2 装填器 M4：同 tick 只做一次集群 BFS
+
+- 新实例字段 `clusterCache` / `clusterCacheTick`，key = `level.getGameTime()`；命中条件要求「非空 + 同 tick」，
+  **跨 tick 一律不复用**（区块加载/卸载边界上邻块可能整 tick 查不到，缓存久了会把错误拓扑固化）。
+- 未命中才 BFS，存 `List.copyOf(finalizeCluster(all))` —— **不可变副本**，调用方改不到缓存内部。
+- 失效：`invalidateClusterCaches()` 一次清 BFS + GUI 两级缓存，调用点 `rscc$clusterChanged` / `setRemoved` / `loadAdditional`。
+- `level == null`（构造期 / 客户端占位）返回 `List.of(this)` 且**不写缓存**（避免 `Long.MIN_VALUE` 哨兵撞 tick）。
+- 缓存只存**成员引用**，不存库存/队列实例（集群重建换的是 `inventory` 对象，成员列表仍有效）。
+
+### 25.3 打印完成哨兵落盘 + GUI 顺序缓存不可变（复核的顺手发现，本轮修）
+
+- 新增落盘 `LastEmptySchematicCount`（int）/ `LastPrintingDone`（boolean）；新增瞬态 `printBaselinePrimed`：
+  新档（有 key）基线可信；**旧档（无 key）首个 work tick 用当时输出槽数量重建基线、该 tick 不判「刚完成」**。
+  `printJustFinished` 判据改为 `printBaselineKnown && count > lastCount`。效果：读档不再补播完成横幅，
+  但**真实的**下一次打印仍正常播报。
+- `guiOrderCache` 赋值改成 `java.util.List.copyOf(computeClusterInGuiOrder())`：**写入时**即不可变；
+  **不在读取时拷贝**（`getClusterInGuiOrder()` 每帧按槽位反复调用，逐次拷贝会变成新热点）。
+
+### 25.4 第 118 轮 L1 / L2 清理与 **L3 勘误**
+
+- **L2（真死代码，已删）**：`isCannonAdjacent` 里的 `level.getBlockEntity(worldPosition) == cannon` ——
+  `worldPosition` 是本机坐标，那里的方块实体恒为本装填器 ⇒ 恒假。删掉后只剩「曼哈顿距离 == 1」，行为等价。
+- **L1（注释不符，已按实现改写）**：完成横幅注释原写「绝不回退到 `cannon.checklist`」，但
+  `cacheRequirementsFromBlueprint` 在「解析不出材料清单」时确实会**临时**兜底成 checklist 拷贝
+  （`cachedRequirementsFull == false`），之后每个 work tick 重试全量统计并在成功后升级。
+- **L3（复核误报，本轮勘误）**：第 118 轮写「注释称速度 / 堆叠升级各最多 6 个，实现按槽保留 1 个」。
+  实测 `menu/UpgradeSlot.MAX_PER_UPGRADE = 6`，`dropBeyondKindCap` 是 `kept >= max` 才弹出、否则 `kept++`
+  ⇒ **保留前 6 个，注释是对的**。已补自检 ⑤-6 / ⑤-7 钉住「常量 6 + 保留前 max 个」，避免再被误报。
+
+### 25.5 序列执行仓 F1（高）：单元样板「一叠」搬运静默丢 N−1 张
+
+| 路径 | 修前 | 修后 |
+| --- | --- | --- |
+| 取回（`pullUnitsFrom`） | 把**整叠**写进单元样板库**一格** | 逐张：`firstEmptySlot()`（格数上限）→ `canAcceptMore`（体积预算）→ `trySetStackInSlot(empty, 单张)` → 成功才 `shrink(1)`；任一闸拒绝就 break，剩余**原样留在执行仓** |
+| 存入（`pushUnitsTo`） | `copyWithCount(1)` 后把整格 `setStackInSlot(i, EMPTY)` ⇒ 丢 N−1 张 | 逐张 `extractItem(i, 1)`；**先写执行仓、再扣库**；仓满（无空格）就停在库里 |
+| 可见性 | 无提示，界面按「格」计数显示 1 | 新增瞬态 `unitTransferBlockedByLibrary` + 动作栏提示 `summary.pull.blocked`；汇总界面「张数」改按 `sum(getCount())` |
+| 旧档 | 同格多张无法取出 | 逐张取出（旧档不会丢） |
+
+不进档的瞬态标志（`unitTransferBlockedByLibrary`）只用于「本 tick 是否提示」，不参与任何数量判定。
+
+### 25.6 区域选定器 C-1 / C-2 / C-3 + 区域扫描 C-6
+
+- **C-1（中）** 菜单路径被拒绝时补 `menu.broadcastFullState()`（**不放进** `AreaSelectorTargets#sync`，
+  成功写入不跟着全量发）。修前：拒绝后一个包都不发 ⇒ 客户端乐观副本残留 ⇒ 之后配标记被静默丢包却弹「已加入」。
+- **C-2（中）** `AreaSelectorScreen.targetStack()` 在 `menu != null` 时**只认专用槽、不回退主手**（与
+  `AreaMarkScreen` 的 D10-f 口径一致）；`selectionStack()` 改为委托；无目标时不发注定被丢的包；
+  槽空提示 `status.no_slot`（zh/en）。`AreaMarkScreen` 的加/删/清三处同样先拦。
+- **C-3（低）** 手持 ADD 发包前补「维度 + 去重」预检、`resizeSelected`（Ctrl+滚轮）同源预检；
+  「已提交」只在全部预检通过、真正发包之后出现；新增 `duplicate` / `dimension` 语言键（zh/en 成对）。
+- **C-6（中·性能）** `CollectionCacheBlockEntity#fluidSourceIdAt` 开头加 `if (!level.isLoaded(pos)) return null;`。
+  区域扫描每 tick 上千次查询、`Level#getBlockState` 对未加载区块会**同步加载** ⇒ 玩家离开后反复拉区块。
+  只读探测，未加载当「没有流体」，不丢资源。同类调用点（充电器看邻块 / 执行仓看自身或邻块）**有意不动**。
+
+### 25.7 缓存池读数求和改为饱和加法（`support/SaturatingMath`）
+
+- `poolFreeSpace` / `poolStored` / `poolContents` / `describe` 旧实现是裸 `+=` / `Long::sum`；
+  「无限容量盘」每块报 `UNLIMITED_REMAINING = Long.MAX_VALUE / 4` ⇒ **5 块以上**和变负 ⇒
+  闸门 A 把「几乎无限空位」读成「池子满了」⇒ 中间产物一件都不搬（无异常、无日志）。
+- 新增纯 JDK `SaturatingMath#add`：**减法判溢出**（`left > MAX - right`，加法形式会先自己回绕），
+  非负输入永不回绕、负输入按 0。四处求和全部改走它；`UNLIMITED_REMAINING` 的错误注释一并改正。
+- 全仓 `Long::sum` 扫描结论：其余合并的都是真实件数 / mB（不可能到 2⁶³），**不需要改**；
+  唯一把哨兵大数放进求和的只有这一处。
+
+### 25.8 两路只读复核的完整清单
+
+**区域标记 / 区域选定器**（`docs/ROUND119_AUDIT_AREA_MARKS.md`）
+- 关键事实：区域 = 物品数据组件里的 6 个绝对坐标（`support/Area.java:37-38` + 组件注册）；
+  每区域过滤标记自 beta.14（第 112 轮）起已在**选定器物品**的 `CUSTOM_DATA` 上，方块实体里只剩旧档迁移缓冲。
+  ⇒ 用户那句「无法单独给某一个区域标记、非得把标记放在方块里」**在这个版本上已经不成立**，
+  第一件事应是确认用户跑的是哪个版本；若是「只想高亮某一个区域」，则需要 per-area 显示开关（动 `Area` 契约）。
+- 已修：C-1 / C-2 / C-3 / C-6。**未修（记录）**：C-4（`AREA_LIST_SLOT_MAX=16` 与 Config 64 不一致，
+  区域 17+ 的「只吸 N 种」恒显示 0 —— 界面说谎，修法要拍板分页还是抬上限）、C-5（旧格式标记按索引删除
+  可能删错一条）、C-7（区域远离时并集 AABB 巨大，未 profile）。
+
+**序列执行仓**（`docs/ROUND119_AUDIT_SEQUENCE_CHAMBER.md`）
+- 已修：F1。**未修（记录）**：F2（`accept()` 的 SIMULATE 不动状态 ⇒ 一批多资源时各自模拟都过，
+  EXECUTE 后半批插不进却只返回 REJECTED，而 RS 在 EXECUTE 阶段只打 warn 就当成功 ⇒ 网络近满时半批材料被销毁；
+  最小修 = 同批内累计占用做模拟，彻底修 = 给样板库加缓冲，属产品行为变更）、
+  F3（汇总窗口每 20 tick 自动前移，只在「手里拿着东西」时暂停）、F4（`inFlightUnits` 不落盘 ⇒
+  重启后工位残留失去回收凭据，机器被占死只能手动挖）、F5（`SetStepMachinePacket.name` 无长度上限直接落盘）、
+  F6–F8（`putUnit`/`takeUnit` 死代码、"容量 6"/"3×2" 注释错、`dropOutputContents` 无人调用、`writeCandidates` 连写两遍）。
+- 已证伪（不要再查）：集群落盘边界不会写两份翻倍、各 C2S 下标/枚举都夹住了、
+  `RsccChamberItemStorage` 不会错位抽到别的物品、各容器 `clearContent` 空实现。
+
+### 25.9 自检与验收
+
+- 新增 5 个脚本：`selfcheck_round119_loader_round_state.py`（**71 断言 / 17 反例**）、
+  `selfcheck_round119_unit_stack_preserve.py`（**40 / 9**）、`selfcheck_round119_area_selector_sync.py`（**49 / 21**）、
+  `selfcheck_round119_pool_saturate.py`（**30 / 3**，含 `SaturatingMath` 的 **17 条真代码 JVM 探针**）、
+  `selfcheck_round119_area_scan_isloaded.py`（**17 / 3**）。
+- **全量自检：171 个脚本 / 0 失败**（带 Pillow 的 bundled python；宿主 python 缺 paramiko 不影响自检，
+  但 **SFTP 部署要用 `D:\Python313\python.exe`**，bundled python 没有 paramiko —— 本轮踩过一次）。
+- `LEAD_COMPILE_OK sources=504`；专服探针 **PASS**（`Done (2.083s)`）；jar 三处 sha256 一致
+  （`D:\Python313\python.exe tools\_verify_deploy_round119.py` ⇒ `DEPLOY_VERIFY_OK`）。
+
+### 25.10 未验证
+
+1. **没有实机点界面、没有真机读档往返**：M2 / 打印哨兵 / 区域选定器三条的行为判据都是源码锚点 + 行为模型 + 反例。
+2. **没有真机摆 5 块无限盘**：饱和加法的触发面按 `Long` 溢出推导，普通整合包大概率摸不到
+   （对普通盘是零风险）。
+3. **没有实机复现「一叠样板丢张」与「区域跨未加载区块」**：前者按界面/容器槽的实际可堆叠数推导，
+   后者依赖 `Level#getBlockState` 对未加载区块会同步加载这一（工程内已有注释支持的）事实。
+4. **没有 profiler 数据**量化 M4 / C-6 的收益；「12 次 → 1 次」是模型口径，不代表真实调用数恒为 12。
+5. 没有做故障注入（`extractItem` 异常回滚、写库中途失败）与多人同菜单 / 改包 / 旧客户端场景。
+
+### 25.11 下一轮候选
+
+- **用户对 beta.14～beta.21 的实机反馈（最高优先）**。
+- 序列执行仓：F2（SIMULATE 累计占用，先做「一条都插不进去就整批不插」的最小修）/ F4（`inFlightUnits` 落盘）/
+  F3 / F5 / F6–F8；以及 F1 子代理顺手报的 `pullUnitsFrom` 不筛 `isUnitPattern`（旧档总样板会被搬进单元库）。
+- 保持器：目标上限口径、基础版注销默认值 + 流体目标初始化（64 mB 危险）、`claimedResources` 与 `isMarked` 同源、
+  文档重写与死代码、`drain/fill` 编码统一（`poolFreeSpace` 饱和加法**本轮已修**）。
+- 区域标记：C-4（分页 vs 抬上限，需拍板）、C-5（按内容删除而不是按下标）、per-area 显示开关（若用户确认是「只想高亮一个」）。
+- `diag` 权限口径（用户此前明确要求该指令不要权限 ⇒ 更适合做冷却 / 轮转）。
+- 用户三项待定（36 格分页 / 数量门槛搬进区域标记界面 / 区域列表快捷键）。
+
+## 26. 第 120 轮（1.2.0-beta.22）：清第 119 轮两路只读复核的账（F2 / F3 / F5–F8 / C-5）
+
+> 本轮**没有新的实机反馈**。第 119 轮两路只读复核（`docs/ROUND119_AUDIT_SEQUENCE_CHAMBER.md`、
+> `docs/ROUND119_AUDIT_AREA_MARKS.md`）把 1 高 / 2 中 / 4 低（序列家族）与 2 中 / 5 低（区域家族）记成账，
+> 其中高危与两条中已在上轮修掉，本轮把「留到下一轮」的 7 条清完，并顺带修掉 3 条同源小偏差。
+> **不改产品行为、不改玩法语义**。逐条细节见 `docs/ROUND120_SEQ_AUDIT_DEBT.md` /
+> `docs/ROUND120_SUMMARY_WINDOW.md` / `docs/ROUND120_AREA_MARK_REGISTRY.md`。
+
+### 26.1 F2：外部样板 sink 的「整批原子性」（中）
+
+- 位置：`block/entity/SequenceAssemblyExecutorBlockEntity#accept`（`:194-240`）。
+- **RS 2.0.9 的真实语义**（`ExternalTaskPattern#acceptsIterationInputs`，源码在
+  `local_src/rs_src/.../ExternalTaskPattern.java:184-215`）：先对 sinks 调 `accept(..., SIMULATE)` 选 sink；
+  选中后先 `extractAll(iterationInputs, internalStorage, EXECUTE)` **把输入从任务内部暂存扣掉**，
+  再调 `accept(..., EXECUTE)`；后者非 ACCEPTED **只打一条 warn 就当成功**（源码原话
+  *"we lie, do as if the insertion was successful, and potentially void the extracted resources"*）。
+  ⇒ **`REJECTED` 不会让任务重试**，旧 javadoc 的「让任务稍后再试」是错的。
+- 旧实现：逐条 `insert`，一条放不下就 REJECTED ⇒ 前面已插进去的不回滚、后面的被 RS 吞掉。
+- 新实现：① 按 `ResourceKey` **聚合**总量（同一批里同一种资源出现多次时，逐条 SIMULATE 各自都看到
+  「未变的网络状态」而全过 —— 这是旧实现放行的根因）；② 按聚合总量**全量 SIMULATE**，任何一条不满
+  ⇒ **一条都不插** + REJECTED；③ 全过才 EXECUTE（写不满**不 break**，继续抢救后续资源、诚实 REJECTED）；
+  ④ `amount <= 0` 直接跳过（旧 `Math.max(1, …)` 会凭空插 1 件）。
+- **如实边界（本轮没修，别当已修）**：(b) 同一类存储里**多种不同资源合计**超容（各自模拟都能过）；
+  (c) SIMULATE 与 EXECUTE 之间空间被抢。`StorageNetworkComponent` 没有「预留容量 / 事务」API，
+  这两种只能「不劣于旧实现」。真正「绝不丢」需要执行仓自建上游缓冲（`accept` 只写缓冲、由 tick 慢慢
+  转进网络，缓冲要落盘 + 破坏掉落）—— **产品行为变更，等用户拍板**。
+- **勘误**：`docs/ROUND119_AUDIT_SEQUENCE_CHAMBER.md` §F2 的示例推理有误 ——
+  「64 件空间 + 64 物品 + 500 mB 流体 ⇒ 两次模拟都通过」只在物品/流体**各自都有空间**时成立
+  （RS 的物品存储与流体存储是两套独立存储）。真实损失形状是上面的 (a)(b)(c)；
+  (a) 本轮彻底堵死。**下轮不要按那个错误示例推理**。
+
+### 26.2 F3：汇总窗口「看着 A 点到 B」（中·界面）
+
+- 位置：`menu/ChamberUnitsSummaryMenu.java`（513 → 774 行）；`client/screen/ChamberUnitsSummaryScreen.java` **零改动**。
+- 旧行为：窗口每 20 tick 把 `rowStart[row]++`，**只在 `getCarried()` 非空时暂停** ⇒ 盯住某格看一秒再点，
+  点到的是轮转后的相邻样板；`WindowContainer#setItem` 还会先 `rebuildWindow()` 再按新映射写，
+  取用/写回各用一份映射 ⇒「取出来又放回去」落到另一个单元槽。
+- 新行为（方案 A + 安全窗，**不做**手动翻页 B/C）：
+  1. `INTERACT_QUIET_TICKS = 8`：玩家最近 8 tick 内点过本行 ⇒ 该行暂停轮转（`shouldAdvanceRow` 纯函数）；
+  2. `ROTATE_SETTLE_TICKS = 4`：本行刚轮转完 4 tick 内，该行窗口格上的点击**不执行**并
+     `broadcastFullState()` 全量重同步（`clicked` 里，QUICK_CRAFT 额外 `resetQuickCraft()`）——
+     **宁可不响应一次点击，也绝不换给玩家另一张样板**；不选「按轮转前映射执行」，
+     因为服务端无法区分玩家看到的是轮转前还是轮转后（原版 1.21.1 对 `stateId` 落后的点击
+     **只纠正不拒绝**，`ServerGamePacketListenerImpl#handleContainerClick` 反编译确认）；
+  3. 一次点击一份**映射快照**（`beginClickSnapshot` / `endClickSnapshot`，`clickDepth` 处理
+     `clicked → quickMoveStack` 嵌套，逐行 `arraycopy` 深拷贝）；
+  4. 取走一格留「洞」（`rowHoles`），放回去落回**原槽**；轮转 / 换页 / 换行时清洞。
+- 顺带修的同源偏差：`windowIndex` 旧 `floorMod` 在样板 < 4 张时「一张显示四遍 / 两张两两重复」；
+  轮转判据旧为 `rowSlotCount > 1`，与 `DESIGN_DECISIONS_ROUND4 §7.3`「多于 4 张才轮询」不符。
+- **残余风险**：单程延迟 > 2 tick（RTT > 200 ms）时安全窗仍可能不够长（理论上 `2×单程 − 4 tick` 的
+  错样板窗口）；彻底消除要协议层回执（方案 B 强化版），本轮未做。
+- 既有偏差（未改）：`pollCounter` 按 `broadcastChanges()` **调用次数**计，原版每次点击后会再调一次
+  ⇒ 频繁点击时轮转周期略短于 1 秒；要严格 1 s 得改用游戏时间。
+
+### 26.3 C-5：客户端读标记不带注册表 ⇒ 下标错位 ⇒ REMOVE 删错条（低）
+
+- 位置：`client/screen/AreaMarkScreen.java`（新增 `clientRegistries()` / `clientMarks(...)`，`marks()` 成唯一入口）、
+  `support/AreaMarks.java`（两参 `get` 的 javadoc 警告）、`network/AreaMarkEditPacket.java`（下标契约记录）。
+- 旧行为：旧档里还有「整份 `ItemStack`」编码的标记，`decodeMarkerTag` 在 `registries == null` 时
+  **读不出 → 丢弃**；服务端带 `player.registryAccess()`、客户端走两参重载 ⇒ 两边列表长度/顺序不同，
+  而移除发的是**下标** ⇒ 删到服务端列表里同下标的**另一条**。在 288 条上限处还可能
+  「长度相同、内容整体前移」，比「列表变短」更难肉眼发现。
+- 新行为：客户端统一带 `ClientLevel#registryAccess()` 读；**拿不到注册表时返回空表、绝不回退**
+  （不可点 ⇒ 不可能删错）。辅助方法放在 **client 类**而不是 `AreaMarks`（工程约定：support 通用类
+  出现 `net.minecraft.client.*` 会让专用服务端在链接期崩溃，见 `support/JetpackHudState.java:8`）。
+- 放弃「按内容指纹删除」：需给 record 加字段 ⇒ 改 `StreamCodec` 线格式（旧客户端连新服务端整包错位）；
+  根因已消，写成后续建议。未改的两处客户端读取：`client/screen/AreaSelectorScreen.java:826`
+  （只画行图标、不发下标）、`item/AreaSelectorItem.java:59`（tooltip 计数走两参 `all`，只影响显示）。
+
+### 26.4 F5–F8：名字信任边界与注释/死代码（低）
+
+- **F5** `network/SetStepMachinePacket.java` + `SequencePatternTerminalBlockEntity#setStepMachine`：
+  服务端按 `pos` 找到执行仓、**直接用它的显示名**，客户端 name 只作兜底；落盘统一按码点夹到 256
+  （复用 `MAX_IMPORT_STRING_LENGTH`）。解绑 / 空名语义与诚实客户端可见文本零变化。
+- **F6** 删死代码 `putUnit` / `takeUnit`（全仓零调用、非覆写、无反射/mixin 引用）；三处错注释改成实际值
+  （**54 格 = 6×9**；类型限制只在菜单 / 容器包装层；右键**无条件**开 GUI）。
+- **F7** `dropOutputContents()` → `rscc$legacyDropOutputContents` + `@Deprecated` + 「已被
+  `BlockContentReleaser.release` 取代、禁止调用（接回 = 双重结算 / 绕过集群移交）」。
+- **F8** 终端 `saveAdditional` 里重复写的 `writeCandidates` 删掉一处，只留唯一写入点。
+
+### 26.5 本轮新发现（只记录，未改）
+
+1. `SetChamberBindingPacket.name`（执行仓自定义名）同样**无长度上限**直接落盘，且它正是 F5 里
+   服务端显示名的来源 ⇒ 执行仓自己的 NBT 仍可存超长名字（下轮按 `MAX_IMPORT_STRING_LENGTH` 收口）。
+2. `tools/simplify_lang_texts.py:36` 的硬编码文案仍写「右键放入/取出单元样板（6 格）」
+   （当前语言文件已是「存取单元样板（54 格）」）—— 谁再跑那个脚本会把错误文案写回 lang。
+3. 原版 1.21.1 对 `stateId` 落后的容器点击**只纠正不拒绝**（反编译确认）⇒ 任何「滑动窗口 + 点击」
+   界面都必须服务端自己设闸（同一范式若出现在别的界面，可套本轮「交互时间戳 + 安全窗 + 快照」）。
+4. 旧档同格多张单元样板（`stacksTo(64)`）在窗口格点击仍是「一格一张」的 Slot 语义，
+   `removeItem` 可能只拿走一部分 ⇒ 该槽不会变空 ⇒ 不留洞（行为正确，观感未验证）。
+
+### 26.6 自检与验收
+
+- 新增 3 个脚本：`selfcheck_round120_seq_audit_debt.py`（**53 断言 / 16 反例**）、
+  `selfcheck_round120_summary_window.py`（**58 / 15**）、`selfcheck_round120_area_mark_registry.py`（**42 / 12**）。
+- 更新 2 处**字面量锚点**（实现形态变了，判据原意未放宽）：`tools/selfcheck_round37_pattern_kind_gates.py`
+  （`ChamberUnitsSummaryMenu` 的 `isUnitPattern` 分支写法）、`tools/selfcheck_round112_area_marks.py` ⑥-4
+  （`AreaMarks.get` 两参 → 三参）。
+- **全量自检：174 个脚本 / 0 失败**（带 Pillow 的 bundled python 跑 `tools/_run_all_selfchecks.py`；
+  **SFTP 部署要用 `D:\Python313\python.exe`**，bundled python 没有 paramiko）。
+- `LEAD_COMPILE_OK sources=504`；专服探针 **PASS**（`Done (1.681s)`）；jar 三处 sha256 一致
+  （`D:\Python313\python.exe tools\_verify_deploy_round120.py` ⇒ `DEPLOY_VERIFY_OK`）。
+
+### 26.7 未验证
+
+1. **没有进游戏点过界面**：汇总窗口的「安全窗内点击无反应」「洞留下的空位」观感、区域标记列表
+   在旧档下的实际一致性，都只有源码锚点 + 行为模型 + 反例自证。
+2. **没有真机把网络填到快满再让产线迭代**：F2 的 (a) 形状是模型推演（自检 ②-7b 显式断言了 (b)(c)
+   仍可能发生），触发频率没有数据。
+3. **没有改包伪造 `SetStepMachinePacket`**，也没有旧客户端 / 旧存档兼容性实机验证
+   （C-5 的旧格式条目在真实存档里是否还存在**未知** ⇒ 该 bug 可能本就不在现有档上可达）。
+4. **没有多人 / 高延迟**：F3 的残余窗口按 RTT > 200 ms 推导，未测。
+
+### 26.8 下一轮候选
+
+- **用户对 beta.14～beta.22 的实机反馈（最高优先）**；以及「实机跑的是哪个版本」这一澄清。
+- 序列执行仓：**F4**（`inFlightUnits` 落盘；或至少读档后对「工位压着本仓类别内物品且无在制件」
+  做一次性可见播报，而不是静默不管）；F2 真修法（上游缓冲，需拍板）；`SetChamberBindingPacket.name` 收口。
+- 区域标记：**C-4**（分页 vs 抬上限，需拍板）/ **C-7**（实体查询并集盒聚类）/ C-5 后续（按内容删除、
+  `AreaSelectorItem` tooltip 计数）；以及用户长期未澄清的「只高亮某一个区域」（需 per-area 显示开关，
+  动 `Area` 数据契约，必须先确认）。
+- 汇总窗口：`pollCounter` 改游戏时间；方案 B 强化版（协议层回执）消除高延迟残余窗口。
+- 保持器三项产品口径、`/rs_create_compat diag` 权限口径、`tools/simplify_lang_texts.py` 过时文案。

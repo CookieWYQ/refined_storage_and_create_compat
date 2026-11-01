@@ -4,15 +4,20 @@ import cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers;
 import cretae.cookiewyq.rs_create_compat.client.widget.ExporterExecutorRowWidget;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccStationBadge;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
 import cretae.cookiewyq.rs_create_compat.support.RsccBusCategory;
+import cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync;
 import cretae.cookiewyq.rs_create_compat.support.SequencedRecipeProbe;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -158,8 +163,10 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
      * （一键整选）就<b>没必要</b>，但<b>全部清空</b>之类的<b>还是有必要的</b>」——
      * 三个「一类整选」按钮本轮<b>删除</b>；「全部清空」保留；另加一个折叠开关，
      * 让「一页一页」的目录视图一键可达。</p>
+     * <p><b>第 104 轮 B-4</b>：控制带从 y=26 下移到 {@link #STATION_Y} 下方（26→46），
+     * 给页顶新增的两行「工位归属」只读徽标让位；标签页行与列表随之下移 20px（见下）。</p>
      */
-    private static final int BAND_Y = 26;
+    private static final int BAND_Y = 46;
     private static final int BAND_H = 14;
     private static final int CLEAR_X = 8;
     private static final int CLEAR_W = 57;
@@ -167,24 +174,39 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
     private static final int FOLD_X = CLEAR_X + CLEAR_W + 4;
     private static final int FOLD_W = 71;
     /**
-     * <b>配方标签页行</b>：(8, 44) 236×15（Menu 坐标）—— 第一级组织维度。
+     * <b>页顶「工位归属」只读徽标</b>的两行起点（Menu 坐标）。
      *
-     * <p><b>为什么它独立占一行、而不是塞进控制带</b>：用户要求「上面有个标签页可以选」，
-     * 标签页必须<b>常驻可见</b>（不随列表滚动）；控制带里「全部清空 57 + 全部折叠 71」之后
-     * 只剩 104px，放不下 3 个及以上可读标签，因此新开一行并把列表整体下移 18。</p>
-     * <p><b>放不下怎么办</b>：标签总宽超过可用宽度时右端出现 ◀ / ▶ 两个 10px 箭头，
-     * 行内滚轮也能左右滚（{@link #TAB_ARROW_W} / {@link #mouseScrolled}）—— <b>绝不溢出</b>，
-     * 当前页切过去时自动滚到可见处（{@link #ensureActiveTabVisible()}）。</p>
+     * <p><b>它回答什么</b>：这条总线朝向哪一格、那台机器在本链里负责哪些步（推导集）。数据来自
+     * {@code RsccBusStationSync}（服务端权威快照，只读），与「自动（工位推导）」默认集同源；
+     * 玩家显式勾选与推导集不一致时<b>只黄字提示、绝不拦</b>（跨用途是合法用法）。</p>
+     * <p><b>为什么要新开两行</b>：用户要求「不要省略号、文本完整显示」；这两句（方块名 + 坐标 /
+     * 工序名 + 步号）在 236px 内一行放不下，折成两行（9 + 2 + 9 = 20px），控制带整体下移 20，
+     * 列表相应缩短（9 行 → 7 行，滚动模型不变）。</p>
+     */
+    private static final int STATION_Y = 20;
+    /**
+     * <b>配方标签页行</b>：(8, 64) 236×15（Menu 坐标）—— 第一级组织维度。
+     * <p>第 104 轮：由 44 下移到 64（给页顶只读徽标让 20px），行内几何 / 命中 / 溢出一律不变。</p>
      */
     private static final int TABS_X = 8;
-    private static final int TABS_Y = 44;
+    private static final int TABS_Y = 64;
     private static final int TABS_W = 236;
     private static final int TABS_H = 15;
     /** 标签之间的缝隙 / 标签内左右留白。 */
     private static final int TAB_GAP = 2;
     private static final int TAB_PAD_X = 5;
-    /** 单个标签的最大宽度（再长就截断加省略号；名字本身是配方产物名，一般很短）。 */
-    private static final int TAB_MAX_W = 76;
+    /**
+     * 标签<b>文字</b>的宽度上限（标签矩形宽 = 它 + {@code TAB_PAD_X × 2}）。
+     * <p><b>第 104 轮（用户口径：不要省略号，改排列 / 完整显示）</b>：原先上限是 66px 且超宽就
+     * 截断补 {@code ...}；配方产物名（英文居多，如 {@code Large Cogwheel}）本来就有 80~110px，
+     * 硬压到 66px 只能截断。现在放宽到 110px：这些名字 1.0 倍字号就放得下，
+     * 极长的第三方模组名字用 {@link RsccTextFit#drawFitLine} 整体缩字号（下限
+     * {@link RsccTextFit#MIN_SCALE}）完整显示，<b>一个字都不省</b>。
+     * <p>标签行本来就带 ◀ / ▶ 横向滚动（{@link #tabsOverflow()}），单个标签变宽只会让一次可见的
+     * 标签数量少一个，<b>不会溢出、也不会改变任何静态矩形</b>；{@code tabWidth()} 仍是
+     * 「画 / 命中 / 溢出判断」共用的唯一口径，与实际绘制宽度严格同源。</p>
+     */
+    private static final int TAB_TEXT_MAX_W = 110;
     /** 溢出时右端两个翻页箭头的尺寸（◀ / ▶ 各占一个）。 */
     private static final int TAB_ARROW_W = 10;
     /**
@@ -209,11 +231,11 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
      * <p>用户原话：<i>「输入输出总线那多个配方点击展开之后的搜索框你还是没有加」</i>。</p>
      */
     private static final int PICK_SEARCH_H = 14;
-    /** 可滚动列表：(8, 62) 236×162（9 行 × 18px）—— 由 44 下移 18，给标签页行让位，高度不变。 */
+    /** 可滚动列表：(8, 82) 236×142（7 行 × 18px）—— 由 62 下移 20（页顶只读徽标），底端仍在 224。 */
     private static final int LIST_X = 8;
-    private static final int LIST_Y = 62;
+    private static final int LIST_Y = 82;
     private static final int LIST_W = 236;
-    private static final int LIST_H = 162;
+    private static final int LIST_H = 142;
     private static final int ROW_H = 18;
     private static final int VISIBLE_ROWS = LIST_H / ROW_H;
     /** 滚动条：贴在列表内右侧（列表本体不含它，两者几何互不重叠）。 */
@@ -1725,9 +1747,15 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
 
     // ==================== 标签页行（绘制 / 命中 / 滚动共用的唯一几何口径） ====================
 
-    /** 单个标签的宽度（= 文字宽 + 两侧留白，上限 {@link #TAB_MAX_W}）。 */
+    /**
+     * 单个标签的宽度（= <b>完整显示时</b>文字宽 + 两侧留白，文字宽上限 {@link #TAB_TEXT_MAX_W}）。
+     * <p>第 104 轮起这里<b>不再截断文字</b>：超过上限时只记上限宽度，实际绘制由
+     * {@link #drawTab} 用 {@link RsccTextFit#drawFitLine} 缩字号铺满这块宽度 ——
+     * 因此「画的宽度」与「命中的宽度」永远是同一个数。</p>
+     */
     private int tabWidth(final String tabKey) {
-        final int text = font.width(trim(tabDisplayName(tabKey), TAB_MAX_W - TAB_PAD_X * 2));
+        final Component name = Component.literal(tabDisplayName(tabKey));
+        final int text = Math.min(font.width(name), TAB_TEXT_MAX_W);
         return text + TAB_PAD_X * 2;
     }
 
@@ -2008,6 +2036,8 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         refreshScrollbar();
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         guiGraphics.drawString(font, title, px + TITLE_X, py + TITLE_Y, COLOR_TITLE, false);
+        // 第 104 轮 B-4：页顶两行「工位归属」只读徽标（朝向方块 + 该工位推导出的步；不一致黄字、不拦）
+        drawStationBadge(guiGraphics);
         // 第一级：配方标签页（常驻、不随列表滚动）；第二级：页内六节（在下面的列表里）
         drawTabs(guiGraphics, mouseX, mouseY);
         drawList(guiGraphics, mouseX, mouseY);
@@ -2064,9 +2094,12 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         final int bg = pickerOpen ? COLOR_TAB_ACTIVE_BG : (hover ? COLOR_TAB_HOVER_BG : COLOR_TAB_BG);
         guiGraphics.fill(x, top, x + PICK_W, top + TABS_H, COLOR_TAB_BORDER);
         guiGraphics.fill(x + 1, top + 1, x + PICK_W - 1, top + TABS_H - 1, bg);
-        final String text = trim(Component.translatable(LANG + "tab.pick").getString(), PICK_W - 4);
-        guiGraphics.drawString(font, text, x + (PICK_W - font.width(text)) / 2, top + 4,
-            pickerOpen ? COLOR_TAB_ACTIVE_TEXT : COLOR_TAB_TEXT, false);
+        final String text = Component.translatable(LANG + "tab.pick").getString();
+        final Component label = Component.literal(text);
+        // 第 104 轮：完整显示（放不下整体缩字号），居中按「实际绘制宽度」算，绝不截断补省略号
+        final int drawn = Math.min(font.width(label), PICK_W - 4);
+        RsccTextFit.drawFitLine(guiGraphics, font, label, x + (PICK_W - drawn) / 2, top + 4,
+            PICK_W - 4, pickerOpen ? COLOR_TAB_ACTIVE_TEXT : COLOR_TAB_TEXT);
     }
 
     /** 弹出选择器的矩形（右对齐到标签页行右缘、对齐在其正下方；覆盖层，不登记几何）。 */
@@ -2128,8 +2161,9 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
                 guiGraphics.fill(x, ry, x + 2, ry + PICK_ROW_H, COLOR_CHECK_ON);
             }
             final boolean active = tabKey.equals(activeTab);
-            guiGraphics.drawString(font, trim(tabDisplayName(tabKey), PICK_POP_W - 8),
-                x + 4, ry + 2, active ? COLOR_CHECK_ON : COLOR_TEXT, false);
+            // 第 104 轮：配方名完整显示（放不下整体缩字号），不再截断到弹层宽度里
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(tabDisplayName(tabKey)),
+                x + 4, ry + 2, PICK_POP_W - 8, active ? COLOR_CHECK_ON : COLOR_TEXT);
         }
         if (rows.size() > PICK_VISIBLE) {
             final int barX = x + PICK_POP_W - PICK_BAR_W;
@@ -2154,9 +2188,10 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
             guiGraphics.fill(x + 1, top + TABS_H - 1, x + w - 1, top + TABS_H, COLOR_TAB_ACTIVE_BG);
             guiGraphics.fill(x + 1, top + 1, x + w - 1, top + 3, COLOR_CHECK_ON);
         }
-        final String text = trim(tabDisplayName(tabKey), w - TAB_PAD_X * 2);
-        guiGraphics.drawString(font, text, x + TAB_PAD_X, top + 4,
-            active ? COLOR_TAB_ACTIVE_TEXT : COLOR_TAB_TEXT, false);
+        // 第 104 轮：标签文字完整显示（放不下整体缩字号铺满矩形），不截断补省略号
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(tabDisplayName(tabKey)),
+            x + TAB_PAD_X, top + 4, w - TAB_PAD_X * 2,
+            active ? COLOR_TAB_ACTIVE_TEXT : COLOR_TAB_TEXT);
     }
 
     /** 翻页箭头（◀ / ▶ 用 4 列 fill 现画，不依赖字形、不新增贴图；不可用时画成灰）。 */
@@ -2257,8 +2292,9 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
             collapsed.contains(line.groupKey()));
         drawCheckbox(guiGraphics, left + ROW_CHECK_X, y + (ROW_H - ROW_CHECK_SIZE) / 2,
             groupState(line.members()));
-        guiGraphics.drawString(font, trim(line.text(), LIST_W - ROW_TEXT_X - 12),
-            left + ROW_TEXT_X, y + 5, COLOR_TEXT, false);
+        // 节标题（节点名 + 「已选 N/M」）：完整显示，放不下整体缩字号，不截断
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(line.text()),
+            left + ROW_TEXT_X, y + 5, LIST_W - ROW_TEXT_X - 12, COLOR_TEXT);
     }
 
     /**
@@ -2271,8 +2307,9 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         guiGraphics.fill(left, y, left + LIST_W, y + ROW_H, hover ? 0xFFC2D4EA : COLOR_JUMP_BG);
         guiGraphics.fill(left, y, left + 3, y + ROW_H, sectionColorOf(line.groupKey()));
         drawJumpArrow(guiGraphics, left, y);
-        guiGraphics.drawString(font, trim(line.text(), LIST_W - ROW_TEXT_X - 12),
-            left + ROW_TEXT_X, y + 5, COLOR_JUMP_TEXT, false);
+        // 跳转行：「跳到「X」」这类文案完整显示（放不下整体缩字号），不截断
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(line.text()),
+            left + ROW_TEXT_X, y + 5, LIST_W - ROW_TEXT_X - 12, COLOR_JUMP_TEXT);
     }
 
     /**
@@ -2286,8 +2323,8 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         guiGraphics.fill(left, y, left + LIST_W, y + ROW_H, hover ? 0xFFD6E7D8 : 0xFFE4F0E6);
         guiGraphics.fill(left, y, left + 3, y + ROW_H, COLOR_CHECK_ON);
         drawJumpArrow(guiGraphics, left, y);
-        guiGraphics.drawString(font, trim(line.text(), LIST_W - ROW_TEXT_X - 12),
-            left + ROW_TEXT_X, y + 5, COLOR_JUMP_TEXT, false);
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(line.text()),
+            left + ROW_TEXT_X, y + 5, LIST_W - ROW_TEXT_X - 12, COLOR_JUMP_TEXT);
     }
 
     /** 跳转行左端的 ➤ 标记（4 列 fill 现画，不依赖字体字形、不新增贴图）。 */
@@ -2358,10 +2395,16 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         // 原因：图标早就按候选轮播了，但<b>名字取的是静态的 {@code line.text()}</b>（= 类别代表物），
         // 于是「图在换、字不换」，看起来像坏了。
         // 现在名字与图标<b>同源同相位</b>：多候选类别显示当前轮播到的那一件的名称。
+        final List<String> parts = rowSuffixParts(category);
+        final String suffix = String.join(" · ", parts);
+        final int suffixW = suffix.isEmpty() ? 0 : font.width(suffix);
+        // 排列（第 104 轮）：名字在左、后缀右对齐到行右缘；名字的可用宽度先让出后缀 + 4px 间隙，
+        // 于是「名字完整显示（放不下整体缩字号）」与「后缀右对齐」在几何上互不重叠 —— 不截断任何一个。
+        final int nameMax = Math.max(24, ROW_TEXT_W - (suffixW > 0 ? suffixW + 4 : 0));
         final String rowText = rowTextFor(category, line.text());
-        guiGraphics.drawString(font, trim(rowText, ROW_TEXT_W),
-            left + ROW_NAME_X, y + 5, on ? COLOR_TEXT : COLOR_DIM, false);
-        drawRowSuffix(guiGraphics, category, rowText, y);
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(rowText),
+            left + ROW_NAME_X, y + 5, nameMax, on ? COLOR_TEXT : COLOR_DIM);
+        drawRowSuffix(guiGraphics, suffix, suffixW, y);
     }
 
     /**
@@ -2491,18 +2534,10 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
     }
 
     /**
-     * 条目行右侧的暗色后缀（用 {@code " · "} 拼接，只画放得下的部分）：
-     * <ol>
-     *     <li><b>「第 N 步」</b>（仅中间产物；步序未知时不画）；</li>
-     *     <li><b>「可复用」</b>（用户第 2 条：与其它配方的同类型步骤语义相同）；</li>
-     *     <li><b>「多配方共用」</b>（第 44 轮起：只有<b>流体 / 成品 / 废料</b>可能跨页 ——
-     *     同一件产出物被两条及以上配方用到时它同时出现在各页里，勾选是同一份；
-     *     物品输入类别按配方分开、各自成页，因此不会再带这个标记）。</li>
-     * </ol>
-     * <p>全是<b>行内标注</b>：不构成分组、不进物品 tooltip（物品 tooltip 必须与背包逐行一致）。</p>
+     * 条目行右侧后缀的各段（「第 N 步」/「可复用」/「多配方共用」）。
+     * <p>第 104 轮把它抽出来：画名字前要先知道后缀宽度，才能给名字留出「不与后缀重叠」的完整宽度。</p>
      */
-    private void drawRowSuffix(final GuiGraphics guiGraphics, final RsccBusCategory category,
-                               final String name, final int y) {
+    private List<String> rowSuffixParts(final RsccBusCategory category) {
         final List<String> parts = new ArrayList<>(3);
         if (category.isIntermediate() && category.intermediateStep() >= 0) {
             parts.add(Component.translatable(LANG + "row.step",
@@ -2514,16 +2549,30 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
         if (isSharedAcrossRecipes(category)) {
             parts.add(Component.translatable(LANG + "row.shared").getString());
         }
-        if (parts.isEmpty()) {
+        return parts;
+    }
+
+    /**
+     * 条目行右侧的暗色后缀（用 {@code " · "} 拼接，只画放得下的部分）：
+     * <ol>
+     *     <li><b>「第 N 步」</b>（仅中间产物；步序未知时不画）；</li>
+     *     <li><b>「可复用」</b>（用户第 2 条：与其它配方的同类型步骤语义相同）；</li>
+     *     <li><b>「多配方共用」</b>（第 44 轮起：只有<b>流体 / 成品 / 废料</b>可能跨页 ——
+     *     同一件产出物被两条及以上配方用到时它同时出现在各页里，勾选是同一份；
+     *     物品输入类别按配方分开、各自成页，因此不会再带这个标记）。</li>
+     * </ol>
+     * <p><b>第 104 轮</b>：后缀改成<b>右对齐到行右缘</b>（原来是「跟在名字结束处 +3px」），
+     * 名字的可用宽度在 {@link #drawItem} 里先让出「后缀宽 + 4px」，两者因此几何上不可能重叠；
+     * 后缀本身也是完整画出来的（不截断、不省略）。</p>
+     * <p>全是<b>行内标注</b>：不构成分组、不进物品 tooltip（物品 tooltip 必须与背包逐行一致）。</p>
+     */
+    private void drawRowSuffix(final GuiGraphics guiGraphics, final String suffix,
+                               final int suffixW, final int y) {
+        if (suffix.isEmpty() || suffixW <= 0) {
             return;
         }
-        final String suffix = String.join(" · ", parts);
         final int right = px + LIST_X + LIST_W - ROW_SUFFIX_PAD;
-        final int nameEnd = px + LIST_X + ROW_NAME_X + font.width(trim(name, ROW_TEXT_W));
-        final int x = Math.max(nameEnd + 3, right - font.width(suffix));
-        if (x + font.width(suffix) <= right) {
-            guiGraphics.drawString(font, suffix, x, y + 5, COLOR_STEP_TEXT, false);
-        }
+        guiGraphics.drawString(font, suffix, right - suffixW, y + 5, COLOR_STEP_TEXT, false);
     }
 
     /**
@@ -2535,32 +2584,112 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
      *     <li><b>文案缩短</b>（{@code auto.locked} / {@code mode.auto} / {@code mode.manual} 三个键，
      *     中英同步改短）—— 两段合起来在 236px 的行宽里放得下，<b>根本不会被截</b>；</li>
      *     <li><b>几何兜底</b>（任意语言 / 任意字体都成立，不靠「文案够短」这一条假设）：
-     *     右段先按「半行宽 − 间隙」截断，再<b>右对齐到列表右缘</b>；左段的可用宽度 =
-     *     右段实际起点 − {@value #HINT_GAP}px − 左端。于是
-     *     左段右界 ≤ 右段左界 − 间隙（<b>不可能重叠</b>），右段右界 = 列表右缘（<b>不可能越出面板</b>），
-     *     超长文案（其它语言）最多变成省略号，绝不会溢出或压到另一段上。</li>
+     *     右段的可用宽度 = 「半行宽 − 间隙」，<b>完整显示</b>后按实际绘制宽度<b>右对齐到列表右缘</b>；
+     *     左段的可用宽度 = 右段实际起点 − {@value #HINT_GAP}px − 左端。于是
+     *     左段右界 ≤ 右段左界 − 间隙（<b>不可能重叠</b>），右段右界 = 列表右缘（<b>不可能越出面板</b>）。
+     *     <b>第 104 轮</b>：两段都不再截断补省略号 —— 超长文案改为整体缩字号
+     *     （{@link RsccTextFit#drawFitLine}，下限 {@link RsccTextFit#MIN_SCALE}）完整显示。</li>
      * </ol>
      * <p>整行仍是<b>一行</b>：面板高度（{@value #PANEL_H}）刻意不动，因此既有布局校验
      * （{@code tmp_textures/verify_gui_layout.py} 的 {@code hint} 轨道）与上下两个按钮一个像素都不动。</p>
      */
+    /**
+     * 第 104 轮 B-4：页顶两行「工位归属」只读徽标。
+     *
+     * <p><b>数据来源</b>：{@link RsccBusStationSync} 的客户端镜像（服务端变化才推、只发给
+     * 「打开的正是这条总线界面」的玩家）；服务端还没推到时返回 {@code null} ⇒ 什么都不画
+     * （最多 1 秒后自然出现，不占位、不画假数据）。</p>
+     * <p><b>只展示、不拦</b>：推导集与玩家手动勾选不一致时只是黄字提示；判定层仍按数据说话，
+     * 因为「一条总线故意跨用途」是合法布局（见 {@link RsccStationBadge} 类注释）。</p>
+     * <p><b>宽度</b>：可用宽度 = 标签页行宽去掉左缩进（{@code TABS_W - TABS_X}）；
+     * 第三方方块名 / 长工序名超宽时由 {@link RsccStationBadge#renderFit} 整体缩字号
+     * （下限 {@link RsccTextFit#MIN_SCALE}）完整显示，<b>绝不截断</b>。</p>
+     */
+    private void drawStationBadge(final GuiGraphics guiGraphics) {
+        if (!(parent instanceof AbstractContainerScreen<?> parentScreen)) {
+            return;
+        }
+        final RsccBusStationSync view = RsccBusStationSync.forContainer(parentScreen.getMenu().containerId);
+        if (view == null) {
+            return;
+        }
+        final int x = px + TABS_X;
+        final int y = py + STATION_Y;
+        final int maxWidth = TABS_W - TABS_X;
+        if (!view.known()) {
+            // 判不出（朝向格没有机器 / 非标准几何 / 玩家用 Config 关掉了推导）⇒ 一句话说清「按旧版全选」
+            RsccStationBadge.renderFit(guiGraphics, font, x, y, maxWidth,
+                stationFacing(view), Component.translatable(LANG + "station.unknown"), false);
+            return;
+        }
+        RsccStationBadge.renderFit(guiGraphics, font, x, y, maxWidth,
+            stationFacing(view),
+            Component.translatable(LANG + "station.derived",
+                RecipeTypeNames.display(view.stepTypeId()), stationSteps(view.steps())),
+            view.mismatch());
+    }
+
+    /** 徽标第 1 行：朝向的方块名 + 坐标（方块 id 解析不出时退回原始 id，绝不画空）。 */
+    private static Component stationFacing(final RsccBusStationSync view) {
+        final ResourceLocation id = ResourceLocation.tryParse(view.blockId());
+        final var block = id == null ? null : BuiltInRegistries.BLOCK.get(id);
+        final Component name = block == null || block == net.minecraft.world.level.block.Blocks.AIR
+            ? Component.literal(view.blockId())
+            : Component.translatable(block.getDescriptionId());
+        final BlockPos pos = BlockPos.of(view.targetPos());
+        return Component.translatable(LANG + "station.facing", name,
+            "(" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ")");
+    }
+
+    /** 徽标第 2 行的步号：服务端给 0-based，玩家口径是「第 N 步」（1-based），逗号分隔。 */
+    private static String stationSteps(final List<Integer> steps) {
+        final StringBuilder sb = new StringBuilder();
+        for (final Integer step : steps) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(step + 1);
+        }
+        return sb.toString();
+    }
+
     private void drawHint(final GuiGraphics guiGraphics) {
         // 提示行的硬边界：左端 = 清空按钮那一列，右端 = 列表右缘（越出它就等于越出面板）
         final int left = px + CLEAR_X;
         final int right = px + LIST_X + LIST_W;
-        // 右段：「怎么改」——先截断到「半行宽 − 间隙」，再右对齐（右界恒 = right）
+        // 右段：「怎么改」——可用宽度 = 半行宽 − 间隙；第 104 轮起完整显示（放不下整体缩字号），
+        // 右对齐按「实际绘制宽度」算，因此右界恒 = right，且一个字都不省
         final int tailMax = Math.max(0, (right - left) / 2 - HINT_GAP);
-        final String tailText = trim(Component.translatable(
-            autoMode ? LANG + "mode.auto" : LANG + "mode.manual").getString(), tailMax);
-        final int tailX = right - font.width(tailText);
-        // 左段：状态 —— 可用宽度由右段实际起点决定，尾部补省略号，绝不压到右段上
+        final Component tail = Component.translatable(
+            autoMode ? LANG + "mode.auto" : LANG + "mode.manual");
+        final int tailW = fittedWidth(tail, tailMax);
+        final int tailX = right - tailW;
+        // 左段：状态 —— 可用宽度由右段实际起点决定；同样完整显示，绝不压到右段上
         final Component head = locked()
             ? Component.translatable(LANG + "auto.locked")
             : Component.translatable(LANG + "summary", selected.size(), categoryOrder.size());
-        final String headText = trim(head.getString(), Math.max(0, tailX - HINT_GAP - left));
-        guiGraphics.drawString(font, headText, left, py + HINT_Y,
-            locked() ? 0xFF3F6FB5 : COLOR_TEXT, false);
-        guiGraphics.drawString(font, tailText, tailX, py + HINT_Y, autoMode ? 0xFF3F6FB5 : COLOR_DIM,
-            false);
+        RsccTextFit.drawFitLine(guiGraphics, font, head, left, py + HINT_Y,
+            Math.max(0, tailX - HINT_GAP - left), locked() ? 0xFF3F6FB5 : COLOR_TEXT);
+        RsccTextFit.drawFitLine(guiGraphics, font, tail, tailX, py + HINT_Y, tailMax,
+            autoMode ? 0xFF3F6FB5 : COLOR_DIM);
+    }
+
+    /**
+     * 完整显示该文本时实际占用的像素宽（= 缩放后的宽度）。
+     * <p>与 {@link RsccTextFit#drawFitLine} 完全同一套算法：放得下就是原宽；放不下按
+     * {@code maxWidth / 原宽} 整体缩小，下限 {@link RsccTextFit#MIN_SCALE}。
+     * 供「先量宽、再居中 / 右对齐」的地方使用（{@code drawFitLine} 只管左端起点，
+     * 居中 / 右对齐必须先知道占多宽）。</p>
+     */
+    private int fittedWidth(final Component text, final int maxWidth) {
+        if (maxWidth <= 0) {
+            return 0;
+        }
+        final int full = font.width(text);
+        if (full <= maxWidth) {
+            return full;
+        }
+        return Math.round(full * Math.max(RsccTextFit.MIN_SCALE, (float) maxWidth / (float) full));
     }
 
     /** 9×9 三态勾选框：0 = 未选 / 1 = 部分选中 / 2 = 全选。 */
@@ -2573,21 +2702,6 @@ public class BusCategoryConfigScreen extends ChildConfigScreen {
             default -> COLOR_CHECK_OFF;
         };
         guiGraphics.fill(x + 1, y + 1, x + ROW_CHECK_SIZE - 1, y + ROW_CHECK_SIZE - 1, fill);
-    }
-
-    /** 按像素宽截断（尾部补省略号）。 */
-    private String trim(final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     // ==================== tooltip（必须手动渲染） ====================

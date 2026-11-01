@@ -55,6 +55,13 @@ import java.util.Map;
  * <p><b>必要日志不受本开关控制</b>：{@link #warn}（需要玩家干预的 WARN）即使关闭开发日志也照常输出
  * （仍按 key 只报一次）；{@link #changed} 也因此在关闭时继续维护状态表，否则「同一问题只报一次」的
  * 判定会随开关一起失效。</p>
+ *
+ * <p><b>{@code /rs_create_compat diag run} 只是「临时」打开本开关</b>（第 122 轮修）：
+ * 它走 {@link #withEnabledTemporarily}，导出结束立刻恢复原状。此前它直接 {@link #setEnabled setEnabled(true)}
+ * 且从不恢复 —— 用户日志里能逐字看到后果（锚点 {@code devLogs=off}，随后 {@code devLogs=on (source=command)}，
+ * 再之后接收器诊断行连刷十几分钟直到重启），这正是用户说的「关闭了那个开发日志的那个选项之后还在一直输出」。
+ * 因此本类现在是<b>唯一</b>判据入口：任何打印点只能读 {@link #isEnabled()}（或走本类的 {@code event/...} 通道），
+ * 不允许再出现第二套「开发日志开关」。</p>
  */
 public final class RsccAssemblyDebug {
     /** 统一前缀：所有诊断行都以它开头（便于 grep）。 */
@@ -141,6 +148,43 @@ public final class RsccAssemblyDebug {
         }
         enabled = value;
         LOGGER.info("{} devLogs={} (source=command)", PREFIX, value ? "on" : "off");
+    }
+
+    /**
+     * 在「<b>一段有限代码</b>」内临时把开发日志切到 {@code value}，返回时<b>必定</b>恢复调用前的开关状态。
+     *
+     * <h2>为什么必须存在这个方法（第 122 轮根因）</h2>
+     * <p>用户实机反馈：「现在服务端一直在那个日志中……关闭了那个开发日志的那个选项之后应该是不会再
+     * 这样子一直输出了」。从用户服务器日志可以逐字对上原因：会话锚点那行是
+     * {@code [rscc] diag logging ON (default) ... devLogs=off}（配置项确实是关的），
+     * 但 08:55:16 出现了一条 {@code [rscc-assembly] devLogs=on (source=command)} ——
+     * 那是 {@code /rs_create_compat diag run} 把运行时开关强行打开了；紧接着
+     * {@code [rscc-receiver-output]} 以每秒数条的速度连刷了 12 分钟（单会话 2956 行），
+     * 直到服务器重启才安静。也就是说：<b>配置项一直关着，但 {@code diag run} 把它悄悄翻开之后没有人翻回去</b>，
+     * 于是「关掉那个选项」这件事对当次会话完全无效。</p>
+     *
+     * <p>契约（由自检 {@code tools/selfcheck_round122_devlog_gate.py} 守着）：</p>
+     * <ol>
+     *     <li>只有「本次导出」这一小段在开关打开的状态下运行，导出结束（<b>含抛异常</b>）立刻恢复；</li>
+     *     <li>恢复是 {@link #setEnabled(boolean)}，因此日志里一定会留下「开」和「关」两条可核对的回执；</li>
+     *     <li>调用方<b>不得</b>自己写 {@code setEnabled(true)} —— 否则「忘了翻回去」会再次出现，
+     *     而这正是本轮要根除的缺陷。</li>
+     * </ol>
+     *
+     * @param value  这一段代码期间想要的开关值
+     * @param action 要执行的有限代码（返回值原样透传）
+     * @return {@code action} 的返回值
+     */
+    public static <T> T withEnabledTemporarily(final boolean value,
+                                               final java.util.function.Supplier<T> action) {
+        final boolean previous = enabled;
+        try {
+            setEnabled(value);
+            return action.get();
+        } finally {
+            // 无论正常返回还是抛异常都恢复：这是「diag run 之后日志关不掉」的唯一修法。
+            setEnabled(previous);
+        }
     }
 
     // ==================== 字段格式化 ====================

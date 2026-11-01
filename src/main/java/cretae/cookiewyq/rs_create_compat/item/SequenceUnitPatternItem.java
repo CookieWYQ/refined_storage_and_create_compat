@@ -59,10 +59,13 @@ public class SequenceUnitPatternItem extends Item {
             tooltip.add(Component.translatable(LANG + "empty").withStyle(ChatFormatting.DARK_GRAY));
             return;
         }
-        // 本模组附加信息<b>默认收起</b>，按住修饰键才展开（唯一实现 RsccTooltipLayers，物品级与屏幕级同一套）：
+        // 本模组附加<b>文字</b>信息默认收起，按住修饰键才展开（唯一实现 RsccTooltipLayers，物品级与屏幕级同一套）：
         //   Shift = 这是什么（配方类型的本地化名）；
         //   Alt   = 内部标识（配方类型 id、输入物 id）；
         //   数量维度由 tooltip 图标区的「输入流体」行承担（按 Ctrl 显示，见 UnitPatternTooltipComponent）。
+        // <b>注意（2026-10-17 用户要求）</b>：「机器」与「输入池原料」两行<b>不在</b>这里分层 ——
+        // 它们由 getTooltipImage 的图标组件渲染，并且是<b>常显</b>的（单元样板没有代表性物品图标，
+        // 这两行是它唯一可读的内容，藏进 Shift 就等于不按键时什么都没有）。分层只作用于下面的文字行。
         final List<RsccTooltipLayers.Line> layered = new java.util.ArrayList<>(4);
         layered.add(RsccTooltipLayers.shift(Component.translatable(LANG + "recipe_type",
             unit.recipeType() == null || unit.recipeType().isEmpty()
@@ -89,6 +92,8 @@ public class SequenceUnitPatternItem extends Item {
      * tooltip 的「代表物品」图标轮播（JEI 风格）：由配方类型 id + 本单元输入物 + 本单元的输入流体决定，
      * 客户端工厂（{@code ClientInit#onRegisterTooltipFactories}）把它映射为
      * {@code UnitPatternTooltipComponent}。三者都为空时不显示图标行。
+     * <p><b>机器行 / 输入池原料行常显</b>（2026-10-17 用户要求，不再按 Shift）：单元样板不可能像总样板
+     * 那样拿某个物品当图标，机器与输入原料就是它唯一的可读内容；输入流体行仍按 Ctrl（含 mB 数量）。</p>
      * <p><b>输入原料组的全部候选</b>（标签型 ingredient，如列车轨道机械手步的「铁粒 或 锌粒」）一并带出去：
      * 候选组随单元样板 NBT 落盘（见 {@code SequencePatternData#TAG_INPUT_CANDIDATES}），
      * 因此单元样板一旦脱离终端 / 配方，tooltip 依旧能把整组候选轮播出来（老样板只有代表物一件）。</p>

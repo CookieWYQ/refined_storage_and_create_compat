@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QMQ",
+    "DCD",
+    "QRQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "D": {
+      "item": "refinedstorage:destruction_core"
+    },
+    "C": {
+      "item": "rs_create_compat:collection_cache"
+    },
+    "R": {
+      "item": "refinedstorage:range_upgrade"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:advanced_collection_cache"
+  }
+}

@@ -7,30 +7,49 @@ import com.refinedmods.refinedstorage.common.api.RefinedStorageApi;
 import io.netty.buffer.ByteBuf;
 import com.refinedmods.refinedstorage.common.content.BlockEntities;
 import cretae.cookiewyq.rs_create_compat.block.AdvancedSchematicLoaderBlock;
+import cretae.cookiewyq.rs_create_compat.block.AdvancedCollectionCacheBlock;
 import cretae.cookiewyq.rs_create_compat.block.CollectionCacheBlock;
+import cretae.cookiewyq.rs_create_compat.block.InventoryProxyBlock;
+import cretae.cookiewyq.rs_create_compat.block.NetworkResourceReceiverBlock;
+import cretae.cookiewyq.rs_create_compat.block.NetworkResourceRequesterBlock;
 import cretae.cookiewyq.rs_create_compat.block.QuantityKeeperBlock;
 import cretae.cookiewyq.rs_create_compat.block.RangeChargerBlock;
 import cretae.cookiewyq.rs_create_compat.block.SchematicLoaderBlock;
 import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedSchematicLoaderBlockEntity;
+import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedCollectionCacheBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedQuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity;
+import cretae.cookiewyq.rs_create_compat.block.entity.InventoryProxyBlockEntity;
+import cretae.cookiewyq.rs_create_compat.block.entity.NetworkResourceReceiverBlockEntity;
+import cretae.cookiewyq.rs_create_compat.block.entity.NetworkResourceRequesterBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.QuantityKeeperBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.RangeChargerBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.SchematicLoaderBlockEntity;
 import cretae.cookiewyq.rs_create_compat.item.AdvancedRemoteTerminalItem;
 import cretae.cookiewyq.rs_create_compat.item.UniversalStorageDiskItem;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedSchematicLoaderMenu;
+import cretae.cookiewyq.rs_create_compat.menu.AdvancedCollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedQuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.CollectionCacheMenu;
+import cretae.cookiewyq.rs_create_compat.menu.InventoryProxyMenu;
+import cretae.cookiewyq.rs_create_compat.menu.NetworkResourceReceiverMenu;
+import cretae.cookiewyq.rs_create_compat.menu.NetworkResourceRequesterMenu;
 import cretae.cookiewyq.rs_create_compat.menu.QuantityKeeperMenu;
 import cretae.cookiewyq.rs_create_compat.menu.RangeChargerMenu;
 import cretae.cookiewyq.rs_create_compat.menu.SchematicLoaderMenu;
 import cretae.cookiewyq.rs_create_compat.support.RsccAutocrafterStorage;
+import cretae.cookiewyq.rs_create_compat.support.RsccDiskItemCapabilities;
+import cretae.cookiewyq.rs_create_compat.support.AreaSelection;
 import cretae.cookiewyq.rs_create_compat.support.SequenceMaterialGuard.RawMaterialMark;
 import cretae.cookiewyq.rs_create_compat.network.SetClusterRowPacket;
 import cretae.cookiewyq.rs_create_compat.network.RestoreCursorPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetQuantityTargetPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetRangePacket;
+import cretae.cookiewyq.rs_create_compat.network.ShowChargerRangePacket;
+import cretae.cookiewyq.rs_create_compat.network.ChargerHighlightPacket;
+import cretae.cookiewyq.rs_create_compat.network.OpenChargerFilterPacket;
+import cretae.cookiewyq.rs_create_compat.network.SetChargerFilterPacket;
+import cretae.cookiewyq.rs_create_compat.network.SyncChargerFilterPacket;
 import cretae.cookiewyq.rs_create_compat.network.SwitchTerminalModePacket;
 import cretae.cookiewyq.rs_create_compat.storage.UniversalStorageType;
 import net.minecraft.core.component.DataComponentType;
@@ -104,6 +123,20 @@ public class RS_Create_Compat {
             builder -> builder.persistent(RawMaterialMark.CODEC)
                 .networkSynchronized(RawMaterialMark.STREAM_CODEC));
 
+    /**
+     * 「区域选定器」的区域数据（{@code List<Area> + 绑定维度 + 选中下标}）。
+     * <p>照 {@link #RAW_MATERIAL} 的同一套先例：注册版数据组件 + record 双 Codec
+     * （{@code persistent} 管存档 / 掉落物，{@code networkSynchronized} 管客户端画框与界面列表）。
+     * 上限不写死在这里：<b>消费侧</b>（扫描 / 界面计数 / 高级仓解析区域）一律过
+     * {@code AreaSelection.sanitize}（Config 两个 int）；<b>写入侧刻意不 sanitize</b> ——
+     * ADD / REPLACE 时按 Config 校验新几何（超限即拒绝），但绝不对物品上已有的区域做截断，
+     * 于是「配置调小」不会把旧存档里超限的区域永久删掉（放回大值即恢复）。</p>
+     */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<AreaSelection>> AREA_SELECTION =
+        DATA_COMPONENTS.registerComponentType("area_selection",
+            builder -> builder.persistent(AreaSelection.CODEC)
+                .networkSynchronized(AreaSelection.STREAM_CODEC));
+
     // ========== 物品 ==========
     // 通用储存磁盘：可同时存入物品、流体、气体任意类型。
     // 容量口径 = 物品位（1 bucket = 1 物品位），生存可得最大一档为 64M = 64 × 1024 × 1024 = 67108864（65536k），另有无限档（创造）。
@@ -129,6 +162,17 @@ public class RS_Create_Compat {
     public static final DeferredItem<UniversalStorageDiskItem> UNIVERSAL_STORAGE_DISK_CREATIVE =
         ITEMS.register("universal_storage_disk_creative", () -> new UniversalStorageDiskItem(0L));
 
+    /**
+     * <b>区域选定器</b>（{@code rs_create_compat:area_selector}）。
+     * <p>数据放注册版数据组件 {@link #AREA_SELECTION}（{@code List<Area> + 绑定维度 + 选中下标}）；
+     * 一个选定器 = 一份区域集合，区域不同就是不同物品实例 ⇒ 强制不可堆叠（{@code stacksTo(1)}）。
+     * 世界里的框选手势见 {@code client/AreaSelectorHandler}，列表界面见 {@code client/screen/AreaSelectorScreen}。</p>
+     */
+    public static final DeferredItem<cretae.cookiewyq.rs_create_compat.item.AreaSelectorItem> AREA_SELECTOR =
+        ITEMS.register("area_selector",
+            () -> new cretae.cookiewyq.rs_create_compat.item.AreaSelectorItem(
+                new net.minecraft.world.item.Item.Properties().stacksTo(1)));
+
     // 序列装配单元样板 / 序列装配样板（无合成配方，由序列装配样板终端生成）
     public static final DeferredItem<cretae.cookiewyq.rs_create_compat.item.SequenceUnitPatternItem> SEQUENCE_UNIT_PATTERN =
         ITEMS.register("sequence_unit_pattern",
@@ -149,6 +193,17 @@ public class RS_Create_Compat {
     public static final DeferredItem<AdvancedRemoteTerminalItem> CREATIVE_ADVANCED_REMOTE_TERMINAL =
         ITEMS.register("creative_advanced_remote_terminal",
             () -> new AdvancedRemoteTerminalItem(AdvancedRemoteTerminalItem.Type.CREATIVE));
+
+    /**
+     * <b>电动飞行背包</b>（{@code rs_create_compat:electric_jetpack}，第 99 轮新增）。
+     * <p>无耐久、无护甲值；电量 5000 万 FE（见 {@code Config.electricJetpackCapacity}）。
+     * 可装备在 Curios 的 back / chest 槽（物品标签在 {@code data/curios/tags/item/}）或原版胸甲槽
+     * （{@code DataComponents.EQUIPPABLE} 由物品类自己写进 components，这里只给基础属性）。
+     * 飞行、耗电、HUD、低电提示都在 {@code item/ElectricJetpackItem} 与 {@code support/Jetpack*} 里。</p>
+     */
+    public static final DeferredItem<cretae.cookiewyq.rs_create_compat.item.ElectricJetpackItem> ELECTRIC_JETPACK =
+        ITEMS.register("electric_jetpack", () -> new cretae.cookiewyq.rs_create_compat.item.ElectricJetpackItem(
+            new net.minecraft.world.item.Item.Properties().stacksTo(1)));
 
     // 关于「终端的 Curios 饰品槽」：本模组**不再**注册自己的饰品槽（用户最终要求：「前置本身已经有了，
     // 我们没必要再搞一个」）。槽位本体、槽位背景精灵与语言键全部由前置模组
@@ -177,6 +232,55 @@ public class RS_Create_Compat {
     public static final DeferredHolder<MenuType<?>, MenuType<RangeChargerMenu>> RANGE_CHARGER_MENU =
         MENUS.register("range_charger",
             () -> new MenuType<>((id, inventory) -> new RangeChargerMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
+    // ========== FE 能量立方（第 99 轮新增） ==========
+    // 定位：优先级极低的能量缓存方块（备用电池）。单块 5000 万 FE，相邻六面容量共享，
+    // 作为 RS 网络节点进入网络能量池但排在控制器之后（天然低优先级）。
+    // 方块本身只做「存电 + 六个面的 FE 输入输出 + 一个电量条界面」，不提供任何物流操作。
+    public static final DeferredBlock<cretae.cookiewyq.rs_create_compat.block.FEEnergyCubeBlock> FE_ENERGY_CUBE_BLOCK =
+        BLOCKS.register("fe_energy_cube", () -> new cretae.cookiewyq.rs_create_compat.block.FEEnergyCubeBlock(
+            BlockBehaviour.Properties.of().strength(2.0F, 6.0F).sound(net.minecraft.world.level.block.SoundType.STONE)
+        ));
+    // 物品形态（第 110 轮）：换成专用类 FEEnergyCubeItem —— 它在方块物品的基础上多三件事：
+    //   ① 物品级 FE 能力（Capabilities.EnergyStorage.ITEM，拿在手上能被范围充电器充 / 被别的机器抽）；
+    //   ② 物品栏「耐久样式」电量条（未满才显示）；
+    //   ③ tooltip 常显精确电量（不按 Shift 也显示）。
+    // 电量键与方块共用 FEEnergyCubeBlockEntity#TAG_ENERGY，所以「手上充的电 = 放下后的方块的电」。
+    public static final DeferredItem<cretae.cookiewyq.rs_create_compat.item.FEEnergyCubeItem> FE_ENERGY_CUBE_ITEM =
+        ITEMS.register("fe_energy_cube", () -> new cretae.cookiewyq.rs_create_compat.item.FEEnergyCubeItem(
+            FE_ENERGY_CUBE_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.fe_energy_cube.help")
+        ));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<cretae.cookiewyq.rs_create_compat.block.entity.FEEnergyCubeBlockEntity>> FE_ENERGY_CUBE_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("fe_energy_cube",
+            () -> BlockEntityType.Builder.of(cretae.cookiewyq.rs_create_compat.block.entity.FEEnergyCubeBlockEntity::new,
+                FE_ENERGY_CUBE_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<cretae.cookiewyq.rs_create_compat.menu.FEEnergyCubeMenu>> FE_ENERGY_CUBE_MENU =
+        MENUS.register("fe_energy_cube",
+            () -> new MenuType<>((id, inventory) -> new cretae.cookiewyq.rs_create_compat.menu.FEEnergyCubeMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
+    // ========== 降解室发电机（第 101 轮新增） ==========
+    // 植物降解发电：16×16 物品槽只接受「可降解表」里的植物（数据包可扩展，木头/原木显式排除）；
+    // 像熔炉一样走进度条，降解完成发一次电；内部缓存只输出、不接受输入；
+    // 既是 RS 网络节点（为网络供能），也能直接给相邻方块供电。
+    public static final DeferredBlock<cretae.cookiewyq.rs_create_compat.block.DecompositionGeneratorBlock> DECOMPOSITION_GENERATOR_BLOCK =
+        BLOCKS.register("decomposition_generator", () -> new cretae.cookiewyq.rs_create_compat.block.DecompositionGeneratorBlock(
+            BlockBehaviour.Properties.of().strength(2.0F, 6.0F).sound(net.minecraft.world.level.block.SoundType.STONE)
+        ));
+    public static final DeferredItem<com.refinedmods.refinedstorage.common.support.BaseBlockItem> DECOMPOSITION_GENERATOR_ITEM =
+        ITEMS.register("decomposition_generator", () -> new cretae.cookiewyq.rs_create_compat.item.RsccHelpBlockItem(
+            DECOMPOSITION_GENERATOR_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.decomposition_generator.help")
+        ));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<cretae.cookiewyq.rs_create_compat.block.entity.DecompositionGeneratorBlockEntity>> DECOMPOSITION_GENERATOR_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("decomposition_generator",
+            () -> BlockEntityType.Builder.of(cretae.cookiewyq.rs_create_compat.block.entity.DecompositionGeneratorBlockEntity::new,
+                DECOMPOSITION_GENERATOR_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<cretae.cookiewyq.rs_create_compat.menu.DecompositionGeneratorMenu>> DECOMPOSITION_GENERATOR_MENU =
+        MENUS.register("decomposition_generator",
+            () -> new MenuType<>((id, inventory) -> new cretae.cookiewyq.rs_create_compat.menu.DecompositionGeneratorMenu(id, inventory),
                 FeatureFlags.DEFAULT_FLAGS));
 
     // 定量保持器
@@ -362,6 +466,28 @@ public class RS_Create_Compat {
             () -> new MenuType<>((id, inventory) -> new CollectionCacheMenu(id, inventory),
                 FeatureFlags.DEFAULT_FLAGS));
 
+    // ========== 高级归流缓存仓（advanced_collection_cache） ==========
+    // 用户拍板：「硅流缓存器」= 归流缓存仓 ⇒ 高级版 = 它的高级版；缓存容量更大、吞吐不变；
+    // 吸收范围 = 只按「区域选定器」里的区域（取代 XYZ 半径，而不是交集）。
+    // blockstate 属性名与基础版逐字一致（active），模型 / 贴图基于基础版改色加深（见 tools/gen_advanced_collection_cache_assets.py）。
+    public static final DeferredBlock<AdvancedCollectionCacheBlock> ADVANCED_COLLECTION_CACHE_BLOCK =
+        BLOCKS.register("advanced_collection_cache",
+            () -> new AdvancedCollectionCacheBlock(
+                BlockBehaviour.Properties.of().strength(2.0F, 6.0F).sound(net.minecraft.world.level.block.SoundType.STONE)));
+    public static final DeferredItem<com.refinedmods.refinedstorage.common.support.BaseBlockItem> ADVANCED_COLLECTION_CACHE_ITEM =
+        ITEMS.register("advanced_collection_cache",
+            () -> new cretae.cookiewyq.rs_create_compat.item.RsccHelpBlockItem(
+                ADVANCED_COLLECTION_CACHE_BLOCK.get(),
+                Component.translatable("block.rs_create_compat.advanced_collection_cache.help")));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<AdvancedCollectionCacheBlockEntity>> ADVANCED_COLLECTION_CACHE_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("advanced_collection_cache",
+            () -> BlockEntityType.Builder.of(AdvancedCollectionCacheBlockEntity::new,
+                ADVANCED_COLLECTION_CACHE_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<AdvancedCollectionCacheMenu>> ADVANCED_COLLECTION_CACHE_MENU =
+        MENUS.register("advanced_collection_cache",
+            () -> new MenuType<>((id, inventory) -> new AdvancedCollectionCacheMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
     // 中间产物缓存仓（网络内所有序列装配执行舱共享的中间产物临时储存点）
     // 用户决定：「那个缓存的磁盘应该是通用的，他只做一个所有这种的临时储存点而已」——
     // 磁盘从执行舱搬到本仓，网络内所有执行舱共用本仓的盘（见 support/RsccSharedCache）。
@@ -387,6 +513,103 @@ public class RS_Create_Compat {
             () -> new MenuType<>((id, inventory) ->
                 new cretae.cookiewyq.rs_create_compat.menu.IntermediateCacheMenu(id, inventory),
                 FeatureFlags.DEFAULT_FLAGS));
+
+    // ========== 网络资源接收器 / 请求器（已实现：注册 + 能力 + 投递 + 名字唯一性 + Jade + 界面） ==========
+    // 用户拍板的设计（docs/NETWORK_RESOURCE_RECEIVER_DESIGN.md / docs/REQUESTER_ORDER_AND_PACER_DESIGN.md）：
+    //   接收器 = 「带名字的落地点 + 缓存」：6 向 facing、必须有名字才可用、同网络唯一、6 个升级槽（只收速度 + 叠加）；
+    //            facing 只用于成链（缓存 → 朝向的相邻容器）与气体/其它第三类资源的直通，与「谁能在哪一面
+    //            看见这份 inventory」无关 —— 用户原话「作为 inventory 提供者时不应该有方向限制」；
+    //   请求器 = 「按名字投递的搬运工」：无朝向（不输出到相邻容器）、配置存自己 NBT、同样 6 个升级槽（只收速度 + 叠加），
+    //            红石上升沿 / 界面按钮触发一次投递：把订单量排进计划并按「每 tick 批数」逐步投进接收器缓存。
+    // blockstate 的属性名必须与 Java 逐字一致，见各自方块类的类注释（接收器 12 变体 / 请求器 2 变体）。
+    public static final DeferredBlock<NetworkResourceReceiverBlock> NETWORK_RESOURCE_RECEIVER_BLOCK =
+        BLOCKS.register("network_resource_receiver", () -> new NetworkResourceReceiverBlock(
+            BlockBehaviour.Properties.of().strength(2.0F, 6.0F).sound(net.minecraft.world.level.block.SoundType.STONE)
+        ));
+    public static final DeferredItem<com.refinedmods.refinedstorage.common.support.BaseBlockItem> NETWORK_RESOURCE_RECEIVER_ITEM =
+        ITEMS.register("network_resource_receiver", () -> new cretae.cookiewyq.rs_create_compat.item.RsccHelpBlockItem(
+            NETWORK_RESOURCE_RECEIVER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.network_resource_receiver.help")
+        ));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<NetworkResourceReceiverBlockEntity>> NETWORK_RESOURCE_RECEIVER_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("network_resource_receiver",
+            () -> BlockEntityType.Builder.of(NetworkResourceReceiverBlockEntity::new,
+                NETWORK_RESOURCE_RECEIVER_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<NetworkResourceReceiverMenu>> NETWORK_RESOURCE_RECEIVER_MENU =
+        MENUS.register("network_resource_receiver",
+            () -> new MenuType<>((id, inventory) -> new NetworkResourceReceiverMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
+    public static final DeferredBlock<NetworkResourceRequesterBlock> NETWORK_RESOURCE_REQUESTER_BLOCK =
+        BLOCKS.register("network_resource_requester", () -> new NetworkResourceRequesterBlock(
+            BlockBehaviour.Properties.of().strength(2.0F, 6.0F).sound(net.minecraft.world.level.block.SoundType.STONE)
+        ));
+    public static final DeferredItem<com.refinedmods.refinedstorage.common.support.BaseBlockItem> NETWORK_RESOURCE_REQUESTER_ITEM =
+        ITEMS.register("network_resource_requester", () -> new cretae.cookiewyq.rs_create_compat.item.RsccHelpBlockItem(
+            NETWORK_RESOURCE_REQUESTER_BLOCK.get(),
+            Component.translatable("block.rs_create_compat.network_resource_requester.help")
+        ));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<NetworkResourceRequesterBlockEntity>> NETWORK_RESOURCE_REQUESTER_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("network_resource_requester",
+            () -> BlockEntityType.Builder.of(NetworkResourceRequesterBlockEntity::new,
+                NETWORK_RESOURCE_REQUESTER_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<NetworkResourceRequesterMenu>> NETWORK_RESOURCE_REQUESTER_MENU =
+        MENUS.register("network_resource_requester",
+            () -> new MenuType<>((id, inventory) -> new NetworkResourceRequesterMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
+    // ========== 容器代理器（inventory_proxy） ==========
+    // 用户已定（docs/CONTAINER_PROXY_DESIGN.md + docs/RS_DISK_ADAPTER_DESIGN.md）：
+    //   单个代理对象槽；六面各一个角色（代理对象 / 内容物 / 禁用），逐面存 NBT（扳手右键 / 界面切换）；
+    //   **不做 RS 网络节点**（capability-only）：若同时是网络节点且又暴露内容物能力，
+    //   同一批物品会被「节点存储」与「外部存储」各计一次 = 真正的自指环（设计文档 §4.4.4 / R7）；
+    //   内容物面把被代理物品自己的 ItemHandler / FluidHandler 暴露出去；RS 磁盘由
+    //   support/RsccDiskItemCapabilities 统一补注册物品能力 ⇒ 代理器里没有按物品类型的特例。
+    public static final DeferredBlock<InventoryProxyBlock> INVENTORY_PROXY_BLOCK =
+        BLOCKS.register("inventory_proxy", () -> new InventoryProxyBlock(
+            BlockBehaviour.Properties.of().strength(2.0F, 6.0F)
+                .sound(net.minecraft.world.level.block.SoundType.STONE)
+        ));
+    // 物品的悬停 help 文本：**刻意不传**（第 95 轮用户要求「这个提示还是这么长一坨……你就把它去除不行吗」）。
+    // 之前传的是 block.rs_create_compat.inventory_proxy.help（三句话，RS 的 BaseBlockItem 会常显），
+    // 用户明确要求去掉；六面角色与「别贴两个外部存储」的信息现在只在界面里用一行短句表达，不再进 tooltip。
+    // 语言键 inventory_proxy.help 也一并删除（第 95 轮）：没有任何引用点，留着只会变成孤儿键
+    //（tools/selfcheck_round74_localization.py 会因此判负）。
+    public static final DeferredItem<com.refinedmods.refinedstorage.common.support.BaseBlockItem> INVENTORY_PROXY_ITEM =
+        ITEMS.register("inventory_proxy", () -> new cretae.cookiewyq.rs_create_compat.item.RsccHelpBlockItem(
+            INVENTORY_PROXY_BLOCK.get(),
+            null
+        ));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<InventoryProxyBlockEntity>> INVENTORY_PROXY_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("inventory_proxy",
+            () -> BlockEntityType.Builder.of(InventoryProxyBlockEntity::new,
+                INVENTORY_PROXY_BLOCK.get()).build(null));
+    public static final DeferredHolder<MenuType<?>, MenuType<InventoryProxyMenu>> INVENTORY_PROXY_MENU =
+        MENUS.register("inventory_proxy",
+            () -> new MenuType<>((id, inventory) -> new InventoryProxyMenu(id, inventory),
+                FeatureFlags.DEFAULT_FLAGS));
+
+    /**
+     * 「网格选资源」菜单（{@code client/grid/ResourcePickerMenu}，继承 RS 的 {@code AbstractGridContainerMenu}）。
+     *
+     * <h2>为什么是我们自己的 {@code MenuType}</h2>
+     * <p>客户端开哪个界面<b>只由包里带的 {@code MenuType} 决定</b>（{@code ClientboundOpenScreenPacket} /
+     * {@code AdvancedOpenScreenPayload} → {@code MenuScreens.getScreenFactory(menuType)}）；
+     * 而 RS 的 {@code GridContainerMenu} 构造器把类型硬编码成 {@code Menus.INSTANCE.getGrid()}
+     * ⇒ 必须自建子类 + 自建类型。<b>不需要 RS 的任何许可</b>：注册走 NeoForge 的
+     * {@code RegisterMenuScreensEvent}（RS 自己也用它，见 {@code client/ClientInit}）。</p>
+     *
+     * <h2>为什么用 {@code IMenuTypeExtension}</h2>
+     * <p>网格数据（{@code GridData}）与「已选清单镜像」必须随开屏一起下发，客户端据此重建同内容的网格 ——
+     * 这正是 {@code IMenuTypeExtension.create(...)}（带额外数据的菜单类型）的用途，与本工程
+     * {@code UNIT_PATTERN_MANAGER_MENU} 同一写法。</p>
+     */
+    public static final DeferredHolder<MenuType<?>, MenuType<cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerMenu>>
+        RESOURCE_PICKER_MENU =
+        MENUS.register("resource_picker",
+            () -> net.neoforged.neoforge.common.extensions.IMenuTypeExtension.create(
+                (id, inventory, data) -> cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerMenu
+                    .read(id, inventory, data)));
 
     // ========== 分隔框架（批 4a 起，批 4b 改为「套壳」语义） ==========
     // 用户要求「不要做一个单独的方块存在，而是真正的套在线缆 / 管道那一格上」：
@@ -487,6 +710,9 @@ public class RS_Create_Compat {
                 output.accept(ADVANCED_REMOTE_TERMINAL_CHARGED.get().createAtEnergyCapacity());
                 output.accept(CREATIVE_ADVANCED_REMOTE_TERMINAL.get()); // 创造版：无视电量
                 output.accept(RANGE_CHARGER_ITEM.get());
+                output.accept(FE_ENERGY_CUBE_ITEM.get()); // FE 能量立方（5000 万 FE / 相邻容量共享 / 网络备用电池）
+                output.accept(ELECTRIC_JETPACK.get()); // 电动飞行背包（创造式飞行，按 FE 耗电）
+                output.accept(DECOMPOSITION_GENERATOR_ITEM.get()); // 降解室发电机（植物降解发电 / 数据包可扩展）
                 output.accept(QUANTITY_KEEPER_ITEM.get());
                 output.accept(ADVANCED_QUANTITY_KEEPER_ITEM.get());
                 output.accept(SCHEMATIC_LOADER_ITEM.get());
@@ -497,8 +723,13 @@ public class RS_Create_Compat {
                 output.accept(SEQUENCE_ASSEMBLY_EXECUTOR_ITEM.get()); // 序列装配执行器
                 output.accept(SEQUENCE_EXECUTION_CHAMBER_ITEM.get()); // 序列执行仓
                 output.accept(COLLECTION_CACHE_ITEM.get()); // 归流缓存仓
+                output.accept(ADVANCED_COLLECTION_CACHE_ITEM.get()); // 高级归流缓存仓（区域取代 XYZ 半径）
+                output.accept(AREA_SELECTOR.get()); // 区域选定器（高级仓的专用槽物品）
                 output.accept(INTERMEDIATE_CACHE_ITEM.get()); // 中间产物缓存仓（执行舱共享）
                 output.accept(UNIT_PATTERN_MANAGER_ITEM.get()); // 单元样板管理舱
+                output.accept(NETWORK_RESOURCE_RECEIVER_ITEM.get()); // 网络资源接收器
+                output.accept(NETWORK_RESOURCE_REQUESTER_ITEM.get()); // 网络资源请求器
+                output.accept(INVENTORY_PROXY_ITEM.get()); // 容器代理器（内容物面 / 代理对象面按面暴露）
                 output.accept(SEPARATION_FRAME_ITEM.get()); // 分隔框架（可消耗 / 可回收）
                 output.accept(INFINITE_SEPARATION_FRAME_ITEM.get()); // 无限分隔框架（不消耗 / 不回收 / 带光泽）
                 output.accept(CAMOUFLAGE_FRAME_ITEM.get()); // 伪装框架
@@ -524,6 +755,15 @@ public class RS_Create_Compat {
 
         // 注册方块能力（能量输出 / 物品处理器 / 网络节点容器）
         modEventBus.addListener(RangeChargerBlockEntity::registerCapabilities);
+        // FE 能量立方：六面 FE（Capabilities.EnergyStorage.BLOCK）+ RS 网络节点（在 BE 里注册网络节点容器）
+        modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.FEEnergyCubeBlockEntity::registerCapabilities);
+        // 电动飞行背包：物品级 FE 存储（Capabilities.EnergyStorage.ITEM）
+        modEventBus.addListener(cretae.cookiewyq.rs_create_compat.item.ElectricJetpackItem::registerCapabilities);
+        // FE 能量立方（物品形态）：物品级 FE 存储（Capabilities.EnergyStorage.ITEM）—— 第 110 轮
+        // 与方块能力（上面那行 EnergyStorage.BLOCK）是两回事，注册项不同、互不覆盖，各自只注册一次。
+        modEventBus.addListener(cretae.cookiewyq.rs_create_compat.item.FEEnergyCubeItem::registerCapabilities);
+        // 降解室发电机：物品 handler（可进可出）+ FE（只出）+ RS 网络节点容器
+        modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.DecompositionGeneratorBlockEntity::registerCapabilities);
         modEventBus.addListener(QuantityKeeperBlockEntity::registerCapabilities);
         modEventBus.addListener(AdvancedQuantityKeeperBlockEntity::registerCapabilities);
         modEventBus.addListener(SchematicLoaderBlockEntity::registerCapabilities);
@@ -532,8 +772,16 @@ public class RS_Create_Compat {
         modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.SequenceAssemblyExecutorBlockEntity::registerCapabilities);
         modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.SequenceExecutionChamberBlockEntity::registerCapabilities);
         modEventBus.addListener(CollectionCacheBlockEntity::registerCapabilities);
+        modEventBus.addListener(AdvancedCollectionCacheBlockEntity::registerCapabilities);
         modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.IntermediateCacheBlockEntity::registerCapabilities);
         modEventBus.addListener(cretae.cookiewyq.rs_create_compat.block.entity.UnitPatternManagerBlockEntity::registerCapabilities);
+        // 网络资源接收器 / 请求器：接进 RS 网络图（「必须插线缆」与「同网络唯一」都建立在网络图之上）
+        modEventBus.addListener(NetworkResourceReceiverBlockEntity::registerCapabilities);
+        modEventBus.addListener(NetworkResourceRequesterBlockEntity::registerCapabilities);
+        // 容器代理器：只注册方块能力（按面），**不**注册网络节点容器能力
+        modEventBus.addListener(InventoryProxyBlockEntity::registerCapabilities);
+        // RS 存储磁盘（含本模组通用盘）：补注册物品物品能力，供代理器零特例代理
+        modEventBus.addListener(RsccDiskItemCapabilities::register);
         // 调整一：自动合成仓内部输出存储（物品 + 流体能力）
         modEventBus.addListener(RS_Create_Compat::registerAutocrafterCapabilities);
         // 终端物品能量能力（普通/满电/创造）
@@ -579,6 +827,9 @@ public class RS_Create_Compat {
         cretae.cookiewyq.rs_create_compat.support.RsccCamouflageInteraction.register();
         cretae.cookiewyq.rs_create_compat.support.RsccSheathInteraction.register();
         cretae.cookiewyq.rs_create_compat.support.RsccWrenchCableInteraction.register();
+        // 容器代理器的「扳手右键切换命中面」：同一条挂点链、同优先级里排在快速拆卸之后
+        //（潜行+扳手仍归快速拆卸：它先取消，本类在 isCanceled 处直接返回）。
+        cretae.cookiewyq.rs_create_compat.support.RsccInventoryProxyWrench.register();
 
         // 两种框架的「连锁套壳」：挂 FTB Ultimine 的右键连锁 API（可选依赖，全程反射；
         // 没装 FTB Ultimine 时 register() 内部第一句就返回，行为 = 默认的单格套壳）。
@@ -590,6 +841,12 @@ public class RS_Create_Compat {
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
+        // 第 99 轮：老存档 / 老配置文件的「范围充电器缓存」迁移。
+        // NeoForge 的 ModConfigSpec 只在「键不存在」时写默认值，已有键原样保留 —— 于是把默认值从
+        // 1000 万改成 5000 万，对一个已经装着本模组的实例完全不起作用（本机 run/config 里甚至还是
+        // 更早的 100 万）。用户明确要求「范围充电器的缓存也改到 5000 万」，所以这里做一次性迁移：
+        // 只改「恰好等于历史默认值」的实例，玩家自己调过的数值一律不动（绝不覆盖玩家配置）。
+        Config.migrateLegacyRangeChargerCapacity();
         // 注册通用存储类型（必须在任何磁盘数据序列化之前注册，供 RS 存档编解码使用）
         RefinedStorageApi.INSTANCE.getStorageTypeRegistry().register(
             ResourceLocation.fromNamespaceAndPath(MODID, "universal"),
@@ -740,6 +997,76 @@ public class RS_Create_Compat {
             SetRangePacket.STREAM_CODEC,
             (packet, ctx) -> SetRangePacket.handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
+        // 范围充电器：「查看充电范围」的服务端响应（S2C 坐标 + 三轴范围；C2S 请求走原版菜单按钮通道）
+        registrar.playToClient(
+            ShowChargerRangePacket.TYPE,
+            ShowChargerRangePacket.STREAM_CODEC,
+            ShowChargerRangePacket::handle
+        );
+        // 归流缓存仓（基础 + 高级）：「查看吸取范围」的服务端权威几何快照（S2C）。
+        // 几何以「方块区域」下发（半径口径 = 一个扫描盒；区域口径 = 选定器里去重后的若干区域），
+        // 客户端只做 Area#toAabb() 一个转换，不读方块实体 / 不读半径（客户端菜单里 BE 恒为 null）。
+        // C2S 请求走原版菜单按钮通道：CollectionCacheMenu.BUTTON_SHOW_RANGE。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.ShowCollectionRangePacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.ShowCollectionRangePacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.ShowCollectionRangePacket::handle
+        );
+        // 第 106 轮 高级归流缓存仓：区域列表权威快照（S2C）。
+        // 服务端算「哪些区域真的可用 + 每区域的过滤图标 + 当前编辑上下文 + 拒绝原因」，客户端只画；
+        // 无 C2S 请求包（菜单在 broadcastChanges 里按版本号变化补发），无新增数据槽（round91 钉死 54 个不改）。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket::handle
+        );
+        // 电动飞行背包（第 99 轮）：HUD 权威快照（服务端每 5 tick 一条；装备状态变化时立即补一条）。
+        // 只写双端安全的 JetpackHudState，客户端据此画电量条与「范围内 / 充电中」，客户端自己不算电量。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.JetpackStatusPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.JetpackStatusPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.JetpackStatusPacket::handle
+        );
+        // 范围充电器：充电目标高亮（S2C「本 tick 真充了谁」；Config.rangeChargerHighlightTargets=false 时
+        // 服务端一个包都不发 —— 客户端因此天然不会残留旧高亮，不需要「关闭时再发一次清空包」）
+        registrar.playToClient(
+            ChargerHighlightPacket.TYPE,
+            ChargerHighlightPacket.STREAM_CODEC,
+            ChargerHighlightPacket::handle
+        );
+        // 降解室发电机（第 129 轮）：JEI「降解发电」分类页的数据源（S2C 整表快照）。
+        // 为什么必须下发：降解表是数据包驱动的、加载器只在服务端跑（AddReloadListenerEvent），
+        // 专用服务器上客户端那张表恒空 ⇒ JEI 分类页会静默变成空的。发送时机见
+        // network/DecompositionDisplaySync（OnDatapackSyncEvent：进服 + /reload）。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.SyncDecompositionDisplayPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SyncDecompositionDisplayPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.SyncDecompositionDisplayPacket::handle
+        );
+        // 范围充电器：充电过滤（黑/白名单 + 掉落物 / 玩家身上物品 / 玩家 三类名单）。
+        // 打开链路：界面按钮 → C2S「请给我权威快照」 → BE 回 S2C 快照 → 客户端据此打开子界面。
+        // 必须 enqueueWork：处理体会读方块实体、写存档级已知玩家池并向玩家发包，都要求服务端主线程。
+        registrar.playToServer(
+            OpenChargerFilterPacket.TYPE,
+            OpenChargerFilterPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() -> OpenChargerFilterPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // 范围充电器：过滤配置整体覆盖（界面每次勾选 / 添加 / 删除都发<b>全量</b>；服务端整体写入并落盘，
+        // 不回 ack —— 界面是乐观更新，服务端权威，客户端下一次打开时会拿到最新快照）。
+        registrar.playToServer(
+            SetChargerFilterPacket.TYPE,
+            SetChargerFilterPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() -> SetChargerFilterPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // 范围充电器：过滤配置 + 已知玩家候选池的权威快照（S2C）。处理体只经 ClientPayloadHooks
+        // 间接调客户端，专用服务端加载本类时不会链接 net.minecraft.client.* 类型。
+        registrar.playToClient(
+            SyncChargerFilterPacket.TYPE,
+            SyncChargerFilterPacket.STREAM_CODEC,
+            SyncChargerFilterPacket::handle
+        );
         registrar.playToServer(
             SetClusterRowPacket.TYPE,
             SetClusterRowPacket.STREAM_CODEC,
@@ -807,6 +1134,32 @@ public class RS_Create_Compat {
             cretae.cookiewyq.rs_create_compat.network.SyncAutocrafterNamesPacket::handle
         );
         // 归流缓存仓：匹配设置（C2S）、滚动偏移（C2S）、匹配区同步（S2C）
+        // 区域选定器：增 / 改 / 删 / 选中 / 改绑维度（C2S，服务端校验后写入物品数据组件）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.AreaSelectorEditPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.AreaSelectorEditPacket.STREAM_CODEC,
+            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.AreaSelectorEditPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
+        // 区域选定器（第 112 轮）：给「某一个区域」配 ghost 过滤标记（C2S）。
+        // 与上面的区域包共用 AreaSelectorTargets 的落点判据；标记存在选定器物品上（support/AreaMarks），
+        // 因此拿着选定器就能配，不必先把选定器插进机器。
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.AreaMarkEditPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.AreaMarkEditPacket.STREAM_CODEC,
+            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.AreaMarkEditPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
+        // 区域选定器（第 125 轮）：把「一个具体的物品栈」加进某区域的标记（JEI 拖入 / 侧栏标记网格用）。
+        // 为什么不复用上面的 AreaMarkEditPacket：它的 ACTION_ADD 从**背包槽**取物品（第 5 参 inventorySlot），
+        // 而 JEI 拖出来的是配方幽灵栈、不在背包 ⇒ 那条路永远静默丢包。本包直接带 itemId + 组件补丁 +
+        // 数量 + 是否流体，服务端自己还原 ItemStack 并按 AreaMarks 的既有口径去重 / 归一化。
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.STREAM_CODEC,
+            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
         registrar.playToServer(
             cretae.cookiewyq.rs_create_compat.network.SetCollectionMarkerConfigPacket.TYPE,
             cretae.cookiewyq.rs_create_compat.network.SetCollectionMarkerConfigPacket.STREAM_CODEC,
@@ -818,6 +1171,15 @@ public class RS_Create_Compat {
             cretae.cookiewyq.rs_create_compat.network.SetCollectionScrollPacket.TYPE,
             cretae.cookiewyq.rs_create_compat.network.SetCollectionScrollPacket.STREAM_CODEC,
             (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.SetCollectionScrollPacket.handle(
+                packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
+        );
+        // 归流缓存仓（高级版）：「当前正在编辑哪个区域的过滤」上下文（C2S，第 101 轮）。
+        // 每区域独立过滤是用户明确要的能力（相邻机器重复吸放的解法）：界面用 < > 切换编辑对象时
+        // 把区域序号发给服务端，服务端 sanitize 后校验序号、只改那一份过滤器。
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.SetAreaFilterContextPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SetAreaFilterContextPacket.STREAM_CODEC,
+            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.SetAreaFilterContextPacket.handle(
                 packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
         // 归流缓存仓：「阻塞」名单切换（C2S，逐个资源单独配置；阻塞后不再写回网络）
@@ -1243,6 +1605,78 @@ public class RS_Create_Compat {
             cretae.cookiewyq.rs_create_compat.network.SyncIntermediateReusePacket.TYPE,
             cretae.cookiewyq.rs_create_compat.network.SyncIntermediateReusePacket.STREAM_CODEC,
             cretae.cookiewyq.rs_create_compat.network.SyncIntermediateReusePacket::handle
+        );
+        // ===== 网络资源接收器 / 请求器：配置 UI 与数据包（服务端权威） =====
+        // C2S：接收器改名（空名 / 超长 / 非法字符 / 同网络重名全部在菜单里拒绝）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.SetReceiverNamePacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SetReceiverNamePacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.SetReceiverNamePacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // C2S：接收器资源列表的「取出 / 翻页」（第 96 轮：资源身份 + 全部标志）。
+        // 服务端在 NetworkResourceReceiverMenu#handleCacheAction 里校验 containerId / 菜单类型 / 距离，
+        // 再从真实缓存扣减：物品按身份跨格取、放不下回填；流体 1000 mB/桶（背包必须有空桶，没有就一点不扣）。
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.ReceiverCacheActionPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.ReceiverCacheActionPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.ReceiverCacheActionPacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // S2C：接收器权威配置快照（名字 + 本网络已占用名字集合 + 操作结果语言键）
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.SyncReceiverConfigPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SyncReceiverConfigPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.SyncReceiverConfigPacket::handle
+        );
+        // C2S：请求器设定目标名（必须能在本网络里唯一解析到一台接收器）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.SetRequesterTargetPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SetRequesterTargetPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.SetRequesterTargetPacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // C2S：订单清单增 / 删 / 改数量（一次只做一个动作；服务端逐字段校验后回发权威清单）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.RequesterOrderPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.RequesterOrderPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.RequesterOrderPacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // S2C：请求器权威配置快照（目标 + 订单清单 + 本网络接收器名字 + 操作结果语言键）
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.SyncRequesterConfigPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SyncRequesterConfigPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.SyncRequesterConfigPacket::handle
+        );
+        // C2S：界面上的「立即发送」→ 服务端调用方块实体既有的 triggerRequest()（搬运逻辑不在网络层）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.TriggerRequesterPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.TriggerRequesterPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.TriggerRequesterPacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // C2S：请求器界面上的「网格」按钮 → 服务端打开我们自己的网格选资源菜单
+        //（客户端开哪个界面只看服务端发出的 MenuType；见 RESOURCE_PICKER_MENU 的类注释）
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.STREAM_CODEC,
+            (packet, ctx) -> ctx.enqueueWork(() ->
+                cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.handle(
+                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
+        );
+        // S2C：序列装配「总线 → 工位」只读快照（第 104 轮 B-4）。
+        // 只发给「打开的正是这条总线类别详细配置界面」的玩家，变化才发；
+        // 界面据此在页顶画两行只读徽标（朝向方块 + 该工位推导出的步），不一致时黄字，只展示不拦。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync.TYPE,
+            cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync::handle
         );
     }
 

@@ -206,9 +206,19 @@ public record RsccBusCategory(String id, String iconItem, String iconFluid, Stri
         );
     }
 
+    /**
+     * <b>静态版</b>：该 id 是否是「输入性产物」类别（物品输入或流体输入，两者都属「输入原料」）。
+     * <p>与 {@link #isInput()} 共用同一批前缀常量：第 104 轮的工位推导在只有 id 字符串时
+     * 也要问同一个问题（{@code sequenceStationView} 的「不一致」提示只对输入类 / 中间产物表态），
+     * 因此必须有静态版，不能两处各写一遍前缀。</p>
+     */
+    public static boolean isInputId(final String id) {
+        return id != null && (id.startsWith(INPUT_PREFIX) || id.startsWith(FLUID_PREFIX));
+    }
+
     /** 是否是「输入性产物」类别（物品输入或流体输入，两者都属「输入原料」）。 */
     public boolean isInput() {
-        return id != null && (id.startsWith(INPUT_PREFIX) || id.startsWith(FLUID_PREFIX));
+        return isInputId(id);
     }
 
     /** 是否是「流体输入」类别。 */

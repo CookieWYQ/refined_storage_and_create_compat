@@ -349,7 +349,11 @@ public class QuantityKeeperScreen extends AbstractContainerScreen<QuantityKeeper
     protected void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         super.renderTooltip(guiGraphics, mouseX, mouseY);
         // 堵塞提示（命中范围与绘制的文字行严格一致）
-        if (menu.isMarkerBlocked() && isHovering(96, 74, 60, 9, mouseX, mouseY)) {
+        // <b>同一帧同一格只画一份</b>：本分支是几何命中（与 hoveredSlot 不同源）；super 那一份原版槽位提示
+        // 若已经画了，这里就直接让位（两份 tooltip 行数不同 ⇒ 贴边时定位点不同 ⇒ 文字互相压）。
+        if (menu.isMarkerBlocked() && isHovering(96, 74, 60, 9, mouseX, mouseY)
+            && !cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers
+                .vanillaSlotTooltipWillDraw(hoveredSlot)) {
             cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers.renderAttached(
                 guiGraphics, font, Component.translatable(
                     "gui.rs_create_compat.quantity_keeper.blocked.tooltip"), mouseX, mouseY);

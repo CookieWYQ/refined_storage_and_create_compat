@@ -5,17 +5,20 @@ gen_advancements.py - 生成本模组的成就（advancements）+ 成就树背�
 
 为什么用脚本而不是手写：
   ① 成就 JSON 有严格的结构要求（display/icon/criteria/requirements、根节点必须有 background、
-     非根节点必须有存在的 parent），手写 36 个文件极易漏字段、写错物品 id 或接错 parent；
+     非根节点必须有存在的 parent），手写 44 个文件极易漏字段、写错物品 id 或接错 parent；
   ② 成就标题 / 描述 = 语言键，中英两份必须成对补齐，漏一个键游戏里就显示键名；
   ③ 每个文件都要能被 json.load 解析、行序稳定（datagen 风格 = 键名排序 + 2 空格缩进）；
   ④ 依赖关系必须**逐条可解释**：每条成就都显式写出 parent + 前置类型 + 理由（见下面的 ADVANCEMENTS），
      由 tools/selfcheck_advancements.py 对每种前置类型做机检或白名单断言 —— 不允许出现
      「只是同主题就硬挂成父子」的依赖（那是上一版「一条子线串到底」的病根）。
 
-依赖模型（parent 只有下面 7 种来源，selfcheck 逐一独立验证）：
+依赖模型（parent 只有下面 8 种来源，selfcheck 逐一独立验证）：
   - ENTRY   root → 入口：该条目在本模组里没有前置（机器配方不含本模组物品 / 事件不需要本模组机器）
             → 各入口并列挂在 root 上（root 只是模组根，不是「前置」）；
   - RECIPE  子项配方里**直接用到**父成就所指物品（父可以是机器，也可以是「任意等级」这种物品集合）；
+  - COMPONENT 反过来的配方依赖：**父机器的配方里直接用到子项物品**（子项是那台机器的部件）。
+            方向与 RECIPE 相反，因此不能复用 RECIPE 的判据：这里要求「父成就物品的配方原料」
+            里真的出现子项物品（第 99 轮 FE 能量立方 = 范围充电器的储能部件）；
   - MACHINE 子项是玩法事件，触发点就在父机器上（事件得先有那台机器才能发生）；
   - OUTPUT  子项物品由父机器产出，且它自己没有合成配方（序列单元样板：终端生成）；
   - COMPOSE 子项由父项编排生成并消耗父项（总样板由单元样板编排）；
@@ -27,7 +30,9 @@ gen_advancements.py - 生成本模组的成就（advancements）+ 成就树背�
   - src/main/resources/assets/rs_create_compat/textures/gui/advancements/backgrounds/advancements.png
   - 向 assets/rs_create_compat/lang/{zh_cn,en_us}.json 追加 advancements.* 键（保持既有行序）
 
-用法：python tools/gen_advancements.py     （幂等：重跑只覆盖，不残留孤儿文件）
+用法：python tools/gen_advancements.py             （幂等：重跑只覆盖，不残留孤儿文件）
+      python tools/gen_advancements.py --no-lang   （只写 JSON + 背景图；语言文件由维护者补，
+                                                    脚本改为打印「还缺哪些键 + 中英原文」）
 """
 import io
 import json
@@ -70,6 +75,8 @@ TERMINALS = [
 # 全部「可放置机器」（= RS_Create_Compat.java 的 BLOCKS.register 名）：根成就的物品谓词就用它
 MACHINES = [
     "range_charger",
+    "fe_energy_cube",
+    "decomposition_generator",
     "quantity_keeper",
     "advanced_quantity_keeper",
     "schematic_loader",
@@ -79,7 +86,11 @@ MACHINES = [
     "sequence_execution_chamber",
     "unit_pattern_manager",
     "collection_cache",
+    "advanced_collection_cache",
     "intermediate_cache",
+    "network_resource_receiver",
+    "network_resource_requester",
+    "inventory_proxy",
     "separation_frame",
     "infinite_separation_frame",
     "camouflage_frame",
@@ -88,6 +99,7 @@ MACHINES = [
 # ---- 前置类型（与 selfcheck_advancements.py 的断言一一对应） ----
 ENTRY = "entry"        # root → 主题入口：配方不含本模组物品
 RECIPE = "recipe"      # 子项配方直接用父成就的物品
+COMPONENT = "component"  # 反过来：父机器的配方里直接用子项物品（子项 = 那台机器的部件）
 MACHINE = "machine"    # 玩法事件发生在父机器上
 OUTPUT = "output"      # 子项物品由父机器产出（自身无配方）
 COMPOSE = "compose"    # 子项由父项编排生成并消耗父项
@@ -141,22 +153,41 @@ ADVANCEMENTS = [
         "range_charger", "task", "隔空充电", "造出范围充电器",
         "Wireless Charging", "Craft a Range Charger",
         items=["range_charger"], theme="能量与定量"),
+    # FE 能量立方：它是范围充电器配方里的储能部件（第 99 轮把充电器中心的铁块换成了它），
+    # 所以方向与 RECIPE 相反 —— 父机器的配方用到子项，判据由 COMPONENT 独立机检。
+    adv("fe_energy_cube", "range_charger", COMPONENT,
+        "范围充电器的配方里直接用到 FE 能量立方（中心储能部件）⇒ 没它就造不出充电器",
+        "fe_energy_cube", "goal", "电力储备", "造出 FE 能量立方",
+        "Power Reserve", "Craft an FE Energy Cube",
+        items=["fe_energy_cube"], theme="能量与定量"),
     adv("quantity_keeper", "root", ENTRY, "配方只有 RS/Create/原版材料，本模组里没有它的前置",
-        "quantity_keeper", "task", "不多不少", "造出定量保持器",
-        "Just Enough", "Craft a Quantity Keeper",
+        "quantity_keeper", "task", "不多不少", "造出资源定量保持器",
+        "Just Enough", "Craft a Resource Quantity Keeper",
         items=["quantity_keeper"], theme="能量与定量"),
     adv("keeper_autocraft", "quantity_keeper", MACHINE, "补货事件发生在定量保持器上，得先有这台机器",
-        "quantity_keeper", "goal", "缺啥补啥", "定量保持器自动补货一次",
-        "Top It Up", "Let the Quantity Keeper autocraft a refill",
+        "quantity_keeper", "goal", "缺啥补啥", "资源定量保持器自动补货一次",
+        "Top It Up", "Let the Resource Quantity Keeper autocraft a refill",
         trigger=MODID + ":keeper_autocrafted", theme="能量与定量"),
     adv("advanced_quantity_keeper", "quantity_keeper", RECIPE, "高级保持器配方里直接用到定量保持器",
-        "advanced_quantity_keeper", "goal", "四路不多", "造出高级定量保持器",
-        "Four Channels", "Craft an Advanced Quantity Keeper",
+        "advanced_quantity_keeper", "goal", "四路不多", "造出高级资源定量保持器",
+        "Four Channels", "Craft an Advanced Resource Quantity Keeper",
         items=["advanced_quantity_keeper"], theme="能量与定量"),
     adv("advanced_keeper_autocraft", "advanced_quantity_keeper", MACHINE, "补货事件发生在高级保持器上",
         "advanced_quantity_keeper", "goal", "四管齐下", "高级保持器自动补货一次",
         "All Four At Once", "Let the Advanced Keeper autocraft a refill",
         trigger=MODID + ":advanced_keeper_autocrafted", theme="能量与定量"),
+    # 电动飞行背包：物品不是方块，配方只有 RS / Create / 原版材料 ⇒ 入口并列挂在 root 下
+    adv("electric_jetpack", "root", ENTRY,
+        "配方只有 RS/Create/原版材料（构造核心 / 精密构件 / 活塞 / 皮革），本模组里没有它的前置",
+        "electric_jetpack", "goal", "凭电上天", "造出电动飞行背包",
+        "Sky High", "Craft an Electric Jetpack",
+        items=["electric_jetpack"], theme="能量与定量"),
+    # 降解室发电机：只吃植物、只输出电量（不需要任何本模组机器），配方只有 RS / 原版材料 ⇒ 入口并列
+    adv("decomposition_generator", "root", ENTRY,
+        "配方只有 RS 石英铁 / 机器外壳 / 铜块 / 漏斗 / 堆肥桶，本模组里没有它的前置",
+        "decomposition_generator", "task", "腐草为萤", "造出降解室发电机",
+        "Rot Into Watts", "Craft a Decomposition Generator",
+        items=["decomposition_generator"], theme="能量与定量"),
 
     # ---------------- 归流与缓存 ----------------
     adv("collection_cache", "root", ENTRY, "配方只有 RS/Create/原版材料，本模组里没有它的前置",
@@ -175,6 +206,10 @@ ADVANCEMENTS = [
         "collection_cache", "goal", "吸星大法", "让归流缓存仓吸进经验球",
         "Star Suction", "Let the Collection Cache absorb an experience orb",
         trigger=MODID + ":collection_xp", theme="归流与缓存"),
+    adv("advanced_collection_cache", "collection_cache", RECIPE, "高级归流缓存仓配方里直接用到归流缓存仓",
+        "advanced_collection_cache", "goal", "照单全收", "造出高级归流缓存仓",
+        "Take It All", "Craft an Advanced Collection Cache",
+        items=["advanced_collection_cache"], theme="归流与缓存"),
     adv("intermediate_cache", "root", ENTRY, "配方只有 RS/Create/原版材料，与归流缓存仓无因果关系",
         "intermediate_cache", "task", "中场休息", "造出中间产物缓存仓",
         "Halftime", "Craft an Intermediate Cache",
@@ -183,6 +218,22 @@ ADVANCEMENTS = [
         "intermediate_cache", "goal", "盘活库存", "给中间产物缓存仓换一次盘",
         "Disk In, Cache On", "Swap a disk in the Intermediate Cache",
         trigger=MODID + ":cache_in_use", theme="归流与缓存"),
+
+    # ---------------- 网络与代理 ----------------
+    adv("network_resource_receiver", "root", ENTRY, "配方只有 RS/Create/原版材料，本模组里没有它的前置",
+        "network_resource_receiver", "task", "照单签收", "造出网络资源接收器",
+        "Signed And Sealed", "Craft a Network Resource Receiver",
+        items=["network_resource_receiver"], theme="网络与代理"),
+    adv("network_resource_requester", "root", ENTRY,
+        "配方只有 RS/Create/原版材料（构造核心 / 黄铜机壳 / 末影珍珠 / 比较器），与接收器无合成依赖，可独立做出",
+        "network_resource_requester", "task", "有求必应", "造出网络资源请求器",
+        "Ask And Receive", "Craft a Network Resource Requester",
+        items=["network_resource_requester"], theme="网络与代理"),
+    adv("inventory_proxy", "root", ENTRY,
+        "配方只有 RS/Create/原版材料（构造核心 / 机器外壳 / 潜影盒 / 漏斗），本模组里没有它的前置",
+        "inventory_proxy", "task", "隔山打牛", "造出容器代理器",
+        "Reach Through", "Craft an Inventory Proxy",
+        items=["inventory_proxy"], theme="网络与代理"),
 
     # ---------------- 序列装配 ----------------
     adv("sequence_pattern_terminal", "root", ENTRY, "配方只有 RS/Create/原版材料，本模组里没有它的前置",
@@ -294,6 +345,10 @@ ADVANCEMENTS = [
             ("patterns", MODID + ":terminal_mode_patterns"),
             ("manager", MODID + ":terminal_mode_manager"),
         ], theme="终端与工具"),
+    adv("area_selector", "root", ENTRY, "配方只有 RS 石英铁 / 玻璃 / 木棍，是物品不是机器，本模组里没有它的前置",
+        "area_selector", "task", "圈地自萌", "造出区域选定器",
+        "Claim The Area", "Craft an Area Selector",
+        items=["area_selector"], theme="终端与工具"),
 ]
 
 BG_BASE = (0x1E, 0x23, 0x2C)     # 深蓝灰底（贴近 RS / Create 的成就页观感）
@@ -316,7 +371,7 @@ def flatten():
             raise RuntimeError("%s 没有 parent（只允许 root 无 parent）" % spec["id"])
         if spec["parent"] not in ids:
             raise RuntimeError("%s 的 parent 不存在：%s" % (spec["id"], spec["parent"]))
-        if spec["kind"] not in (ENTRY, RECIPE, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE):
+        if spec["kind"] not in (ENTRY, RECIPE, COMPONENT, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE):
             raise RuntimeError("%s 的前置类型非法：%s" % (spec["id"], spec["kind"]))
         if not spec["why"]:
             raise RuntimeError("%s 没有写前置理由" % spec["id"])
@@ -462,13 +517,44 @@ def max_depth(parents):
     return best
 
 
+def pending_lang(flat):
+    """`--no-lang` 模式下报告「若写盘会新增 / 改动哪些键」，供语言文件维护者直接照抄。
+
+    为什么要有这个开关：`assets/rs_create_compat/lang/**` 由 Lead 统一维护（同一轮里还可能
+    有别的任务在写同一份文件），资源任务不能整份重写它；但生成器又必须能把「还缺哪些键、
+    中文 / 英文原文是什么」准确说出来，否则漏键就只能等进游戏看到键名才发现。
+    """
+    report = []
+    for file_name, index in (("zh_cn.json", "zh"), ("en_us.json", "en")):
+        with io.open(os.path.join(LANG_DIR, file_name), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        changes = []
+        for spec, _ in flat:
+            for part in ("title", "description"):
+                key = lang_key(spec["id"], part)
+                value = spec["%s_%s" % (index, "title" if part == "title" else "desc")]
+                if data.get(key) != value:
+                    changes.append((key, value, data.get(key)))
+        report.append((file_name, changes))
+    return report
+
+
 def main():
     flat = flatten()
     report_tree(flat)
     print("[gen] 成就 JSON：%d 个 -> %s" % (write_json_files(flat), os.path.relpath(ADV_DIR, ROOT_DIR)))
     print("[gen] 背景贴图：%s" % os.path.relpath(gen_background(), ROOT_DIR))
-    for file_name, index in (("zh_cn.json", "zh"), ("en_us.json", "en")):
-        print("[gen] %s 写入/更新 %d 个成就语言键" % (file_name, merge_lang(file_name, index, flat)))
+    if "--no-lang" in sys.argv[1:]:
+        for file_name, changes in pending_lang(flat):
+            print("[gen] %s：--no-lang 跳过写盘（待维护者落盘的键 %d 个）" % (file_name, len(changes)))
+            for key, value, old in changes:
+                print("       %s = %s%s" % (key, json.dumps(value, ensure_ascii=False),
+                                            "" if old is None else "   （现有：%s）"
+                                            % json.dumps(old, ensure_ascii=False)))
+        print("[gen] 注意：--no-lang ⇒ 未触碰 assets/rs_create_compat/lang/**（由 Lead 统一维护）")
+    else:
+        for file_name, index in (("zh_cn.json", "zh"), ("en_us.json", "en")):
+            print("[gen] %s 写入/更新 %d 个成就语言键" % (file_name, merge_lang(file_name, index, flat)))
     print("[gen] 根标题 = %s（来源 gradle.properties 的 mod_name）" % read_mod_name())
     return 0
 

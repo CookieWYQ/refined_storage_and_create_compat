@@ -16,6 +16,7 @@ import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.SchematicLoaderNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.RsccClusterable;
+import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
 import cretae.cookiewyq.rs_create_compat.support.SafeCollect;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import net.minecraft.core.BlockPos;
@@ -102,7 +103,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     /** 防止 drop 触发 onContentsChanged 导致的递归校验。 */
     private boolean validatingUpgrades;
 
-    /** 上次同步时加农炮输出槽（空白蓝图）数量，用于识别"打印完成"事件（finishedPrinting 会 +1）。 */
+    /** 上次同步时加农炮输出槽（空白蓝图）数量，用于识别"打印完成"事件（finishedPrinting 会 +1）。
+     *  <p><b>第 119 轮修</b>：这个哨兵与 {@link #lastPrintingDone} 以前<b>不落盘</b> —— 读档后两者归零，
+     *  而输出槽里可能还躺着上次没回收的空白蓝图 ⇒ 第一个 work tick 就判成「打印刚完成」，
+     *  把完成横幅（以及成就触发点）再播一遍。现在两个哨兵随档保存；旧档没有这两个 key 时
+     *  走 {@link #printBaselinePrimed} 的「首 tick 重建基线」路径，不会补播。</p> */
     private int lastCannonEmptySchematicCount;
     /**
      * 「从未发生」的 tick 哨兵。
@@ -121,6 +126,15 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     private long lastParseWarnTick = NEVER;
     /** 上次是否处于"打印完成"状态（用于完成横幅的一次性触发）。 */
     private boolean lastPrintingDone;
+    /**
+     * 「打印完成哨兵是否已经有可信基线」。
+     * <p><b>第 119 轮新增</b>：新档会随档保存 {@code LastEmptySchematicCount} / {@code LastPrintingDone}，
+     * 读回后本字段为 true（哨兵可信，不需要重建）。旧档没有这两个 key ⇒ 本字段为 false，
+     * 第一个 work tick 用**当时的输出槽数量**作为基线、且**不**判「刚完成」
+     * —— 否则读档后的第一 tick 会把上次已经播报过的完成横幅再播一遍。
+     * <p>刚落地的机器同样从 false 开始：首个 tick 重建基线，行为与旧实现一致（那时槽是空的）。
+     */
+    private boolean printBaselinePrimed;
     /** 上次队列运行状态（用于识别队列刚启动，立即部署第一张蓝图）。 */
     private boolean lastQueueRunningSeen;
     /** 本 tick 已解析出的「共享蓝图槽的加农炮」缓存（见 {@link #resolvedCannon()}）：
@@ -152,8 +166,16 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
      */
     private final java.util.Map<Item, Long> autocraftRequested = new java.util.HashMap<>();
     /** 紧贴加农炮模式"一轮收集"状态：同一张蓝图 parked 且已集齐后不再反复补料；
-     *  仅当加农炮正在打印（真正消耗材料）或蓝图槽变化（新/重新放入）后才继续。 */
+     *  仅当加农炮正在打印（真正消耗材料）或蓝图槽变化（新/重新放入）后才继续。
+     *  <p><b>本轮绑定的蓝图身份</b>：随档保存（{@code AttachRoundBlueprint}，ItemStack 全量含 components），
+     *  读档后加农炮槽里仍是同一张（{@link ItemStack#isSameItemSameComponents}）时沿用存档里的
+     *  {@link #attachRoundComplete}，<b>不</b>判定为「换图」。
+     *  <p>⚠ 它<b>只是身份缓存</b>：唯一用途是「判断要不要开新一轮」，任何写路径都不得拿它回填库存 /
+     *  交付给加农炮（读档不得复制物品）。 */
     private ItemStack attachRoundBlueprint = ItemStack.EMPTY;
+    /** 存档里没有可用的「本轮蓝图身份」（旧档缺 key / key 里的物品非法）：首个 work tick 以加农炮槽里
+     *  当前的蓝图接管身份，<b>不回流、不复位</b> —— 读档不是「换图」，见 {@link #doLoaderWork}。 */
+    private boolean attachRoundIdentityUnknown;
     private boolean attachRoundComplete;
     /** 日志节流（按 key 独立记录），避免同一状态每 tick 刷屏。 */
     private final java.util.Map<String, String> lastLogMessageByKey = new java.util.HashMap<>();
@@ -164,6 +186,19 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     private java.util.List<SchematicLoaderBlockEntity> guiOrderCache;
     /** guiOrderCache 对应的游戏时间（同一 tick 复用，避免每个槽位都重算一次集群拓扑）。 */
     private long guiOrderCacheTick = Long.MIN_VALUE;
+    /**
+     * 同 tick 的集群 BFS 结果缓存（见 {@link #collectCluster()}）：一次 server tick 里
+     * {@code collectCluster()} 会被调用十几次（补料 / 计数 / 自动打印 / 集群判定…），
+     * 每次六向 BFS 都是同样的结果，没必要重复。
+     * <p><b>只缓存本 tick</b>（key = {@code level.getGameTime()}）：跨 tick 一律不命中 ——
+     * 区块加载 / 卸载边界上邻块可能整 tick 都查不到，缓存久了会把错误拓扑固化。
+     * 拓扑变化由 {@link #rscc$clusterChanged} 主动作废，读档 / 移除也会清空。
+     * <p>缓存内容是不可变副本（{@link java.util.List#copyOf}），调用方拿不到可改的列表；
+     * 只存成员引用，不存库存 / 队列实例（各台当前的库存字段仍然每次现取）。
+     */
+    private java.util.List<SchematicLoaderBlockEntity> clusterCache;
+    /** clusterCache 对应的游戏时间；{@link Long#MIN_VALUE} = 无缓存（与 level==null 的哨兵一致）。 */
+    private long clusterCacheTick = Long.MIN_VALUE;
 
     protected void logState(final String key, final String message) {
         // 蓝图加载器这一族（前缀 [loader]）实测是**最大的刷屏源**：单会话 3.9 万行、峰值 80 行/秒
@@ -432,10 +467,16 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
      * 每 work tick 最多能从网络拉取的材料数量：
      * 无升级时一批 8 个（避免以前“一次只补 1 个”卡顿）；每个速度升级翻倍；
      * 6 个速度升级（满级）时数量不限，瞬间取出。
+     * <p>数值零变化（{@code 8,16,32,64,128,256,∞}），只是把「{@code speed >= 6}」这个裸字面量
+     * 收敛成 {@link RsccRateLimiter#isMaxed(int)} + {@link RsccRateLimiter#UNLIMITED}
+     * （满级哨兵只有一个定义），并把指数段交给饱和移位（I3）。</p>
      */
     public int getMaterialPullLimit() {
-        final int speed = Math.min(countUpgrades(SPEED_UPGRADE), 6);
-        return speed >= 6 ? Integer.MAX_VALUE : (8 << speed);
+        final int speed = countUpgrades(SPEED_UPGRADE);
+        if (RsccRateLimiter.isMaxed(speed)) {
+            return RsccRateLimiter.UNLIMITED;
+        }
+        return RsccRateLimiter.shiftSaturating(8, RsccRateLimiter.level(speed));
     }
 
     /**
@@ -484,34 +525,18 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return blueprintSlot.getStackInSlot(0).copy();
     }
 
-    /** 队列流水线取走下一张蓝图（基础版无队列返回空；高级版覆写从队列移除）。 */
+    /**
+     * 队列流水线取走下一张蓝图（基础版无队列返回空；高级版覆写从队列移除）。
+     *
+     * <p><b>第 118 轮（只读复核 M1）：取出动作必须与「部署」在同一个分支里。</b>
+     * 旧实现先无条件 {@code takeFromQueue()} 再判断该不该部署，不该部署时用 {@code returnToQueue()}
+     * 放回 —— 结果是「加农炮蓝图槽空 + 队列有货」时每 tick 取一张再放回，日志刷屏、方块实体每 tick 标脏，
+     * 且运行状态永远退不回去。现在 {@code takeFromQueue()} 只在「刚打完 / 队列刚启动」两个 tick 调用，
+     * 取出即部署，因此原「放回队列」的补救路径（以及那个方法）已随本轮删除 ——
+     * 不存在「取出了却没有归宿」的中间态。</p>
+     */
     protected ItemStack takeFromQueue() {
         return ItemStack.EMPTY;
-    }
-
-    /**
-     * 把「刚从队列取出的蓝图」原样放回队列（基础版队列为 0 格 → 直接落回世界）。
-     * <p>存在的意义：{@link #takeFromQueue()} 是<b>破坏性</b>的（已把蓝图从队列移除），
-     * 若随后因任何原因无法部署（例如本轮不是「刚打完 / 刚启动」），必须把这张蓝图还回去，
-     * 否则队列里的蓝图会被逐 tick 吞掉（违反「绝不销毁玩家资源」）。</p>
-     *
-     * @return 是否全部放回队列（false = 队列放不下，已落回世界，仍然没有销毁）
-     */
-    protected boolean returnToQueue(final ItemStack stack) {
-        if (stack.isEmpty()) {
-            return true;
-        }
-        ItemStack remainder = stack;
-        for (int i = 0; i < queue.getSlots() && !remainder.isEmpty(); i++) {
-            remainder = queue.insertItem(i, remainder, false);
-        }
-        if (!remainder.isEmpty()) {
-            dropIntoWorld(remainder); // 队列也满：落到方块旁等玩家捡回，绝不销毁
-            setChanged();
-            return false;
-        }
-        setChanged();
-        return true;
     }
 
     /** 兜底归宿：把物品落到本方块处（任何「放不进任何存储」的残料都走这里，绝不销毁）。 */
@@ -597,7 +622,15 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         // 识别"打印刚完成"：加农炮输出槽（slot 1）出现新的空白蓝图（finishedPrinting 会 +1）
         final ItemStack outSlot = cannon.inventory.getStackInSlot(1);
         final int emptySchematicCount = outSlot.isEmpty() ? 0 : outSlot.getCount();
-        final boolean printJustFinished = emptySchematicCount > lastCannonEmptySchematicCount;
+        final boolean printBaselineKnown = printBaselinePrimed;
+        if (!printBaselinePrimed) {
+            // 第 119 轮：旧档 / 刚从存档读回来的第一 tick —— 先把当时的输出槽数量当作基线，
+            // 不判「刚完成」。否则「读档时输出槽里还躺着上次没回收的空白蓝图」会被当成
+            // 刚刚打印完，完成横幅（与服务端成就触发点）重复播一遍。
+            printBaselinePrimed = true;
+            lastCannonEmptySchematicCount = emptySchematicCount;
+        }
+        final boolean printJustFinished = printBaselineKnown && emptySchematicCount > lastCannonEmptySchematicCount;
         lastCannonEmptySchematicCount = emptySchematicCount;
         // 打印完成：把全量需求刻录到输出蓝图（带部署标记）物品上——Create 的已部署蓝图离开现场后
         // 往往无法再解析，带上这份数据后独立装填器/横幅都能免解析拿到准确数量
@@ -626,29 +659,39 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         // 只更新「正在使用的蓝图文件名」缓存，供完成横幅 / 需求快照使用
         updateBlueprintBaselines(cannon.inventory.getStackInSlot(0));
 
-        // 队列自动打印流水线（仅高级版 queueRunning）：打印完成或队列刚启动时，从队列部署下一张蓝图。
-        // 玩家手动从任意蓝图槽拿走蓝图不会触发重新装填（无 printJustFinished 信号）。
+        // 队列自动打印流水线（仅高级版 queueRunning）：<b>只在</b>「刚打完」或「队列刚启动」这两种 tick
+        // 从队列部署下一张蓝图。
+        // 第 118 轮（只读复核 M1）：旧实现把 takeFromQueue() 放在条件外面，于是「加农炮蓝图槽空 + 队列有货」
+        // 会每 tick 走一遍「取出一张 → 原样放回」：玩家从加农炮自己的界面把蓝图取走即可进入该状态，
+        // 打印不会开始、队列不推进、每 tick 还把方块实体标脏。现在「取出」这个动作本身也被这两个条件门控。
         final boolean queueRunning = shouldDeployNext();
         final boolean queueJustStarted = queueRunning && !lastQueueRunningSeen;
         lastQueueRunningSeen = queueRunning;
-        if (queueRunning && cannon.inventory.getStackInSlot(0).isEmpty()) {
+        final boolean cannonSlotEmpty = cannon.inventory.getStackInSlot(0).isEmpty();
+        if (queueRunning && cannonSlotEmpty && (printJustFinished || queueJustStarted)) {
             final ItemStack next = takeFromQueue();
             if (!next.isEmpty()) {
-                if (printJustFinished || queueJustStarted) {
-                    cannon.inventory.setStackInSlot(0, next);
-                    cannon.printer.resetSchematic();
-                    cannon.sendUpdate = true;
-                    // 队列部署蓝图后立即刷新基线缓存，便于下一轮打印完成横幅显示正确文件名
-                    updateBlueprintBaselines(next);
-                    // 「开始」= 进入新一轮收集：清掉上一轮的收集/请求状态（即使还是同一张蓝图也重新收集一遍）
-                    resetRoundCollection();
-                } else {
-                    // 本轮不该部署（既非刚打完、也非刚启动）：takeFromQueue 已经把蓝图从队列移除了，
-                    // 必须原样放回 —— 旧实现直接丢弃 next，加农炮槽一提前空出来会被逐 tick 吞掉整条队列。
-                    returnToQueue(next);
-                    logState("queue", "deploy deferred: blueprint returned to queue (not a print-finished tick)");
-                }
+                cannon.inventory.setStackInSlot(0, next);
+                cannon.printer.resetSchematic();
+                cannon.sendUpdate = true;
+                // 队列部署蓝图后立即刷新基线缓存，便于下一轮打印完成横幅显示正确文件名
+                updateBlueprintBaselines(next);
+                // 「开始」= 进入新一轮收集：清掉上一轮的收集/请求状态（即使还是同一张蓝图也重新收集一遍）
+                resetRoundCollection();
+                // 与 H2 配套：部署新蓝图后清单必须按新蓝图立刻刷新一次（本 tick 的收集门控就要用它）。
+                cannon.updateChecklist();
             }
+        } else if (queueRunning && cannonSlotEmpty && hasPendingBlueprintQueue()
+            && cannon.state == State.STOPPED) {
+            // 队列还有货，但加农炮已经停住、蓝图槽空着：唯一正常的来源是「玩家把正在打印的蓝图取走了」
+            //（Create 会把 state 置 STOPPED、statusMsg=idle）。此时既不是刚打完也不是刚启动，
+            // 流水线没有任何推进信号 —— 与其每 tick 空转，不如把运行状态退回「开始」并告诉附近玩家；
+            // 队列里的蓝图原样保留（不销毁、不消耗）。重启服务器后的正常续打不会走到这里：
+            // 首 tick 的 queueJustStarted 为真，会先在上面的分支把下一张部署进去。
+            stopQueueRun();
+            logState("queue", "stalled: cannon blueprint slot emptied mid-queue -> run stopped, queue kept");
+            notifyNearby(net.minecraft.network.chat.Component.translatable(
+                "block.rs_create_compat.schematic_loader.queue_paused_empty"), true);
         }
         // P1：队列流水线把最后一张蓝图打完（或队列本来就空）→ cannon 槽与队列都无蓝图，
         // 自动把"停止/开始"运行状态切回"开始"，等待玩家放入新蓝图后再开始。
@@ -656,21 +699,39 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             stopQueueRun();
         }
 
-        // 追踪本轮"是否已集齐"状态：蓝图槽清空或变化（新/重新放入）后复位
+        // 追踪本轮"是否已集齐"状态：蓝图槽清空或变化（新/重新放入）后复位。
+        // 「蓝图变了」必须与<b>保存下来的本轮身份</b>比较：身份为空时不能直接当成换图，
+        // 否则读档 / 重载区块后（旧实现 attachRoundBlueprint 恒为 EMPTY）会把已收集材料全部回流、
+        // 复位本轮再整份重拉 —— 每次读档白跑一轮，见 docs/ROUND119_SCHEMATIC_ROUND_STATE.md。
         final ItemStack currentCannonBlueprint = cannon.inventory.getStackInSlot(0);
         if (currentCannonBlueprint.isEmpty()) {
+            // 槽空 = 本轮结束：身份一并清掉，下一次放入任何蓝图都按「新的一轮」处理（与旧行为一致）
             attachRoundBlueprint = ItemStack.EMPTY;
+            attachRoundIdentityUnknown = false;
             resetRoundCollection();
+        } else if (attachRoundIdentityUnknown) {
+            // 旧档没有身份 key / key 数据非法：不知道上一轮绑的是哪张，不能凭「EMPTY != 当前蓝图」
+            // 就判成换图。以槽里这张接管本轮身份，attachRoundComplete 沿用存档值（不回流、不复位）。
+            // 只写身份缓存（copy 一份），绝不回填库存 / 不复制物品给加农炮；之后的真实换图走下面的分支。
+            attachRoundBlueprint = currentCannonBlueprint.copy();
+            attachRoundIdentityUnknown = false;
+            setChanged();
+            logState("attach", "adopted saved round identity: " + schematicFileName(currentCannonBlueprint));
         } else if (!ItemStack.isSameItemSameComponents(currentCannonBlueprint, attachRoundBlueprint)) {
             // 换蓝图：上一张残留的多余材料先回流网络，避免与新蓝图的材料需求混在一起
             recycleBlueprintMaterialsToNetwork(network);
             attachRoundBlueprint = currentCannonBlueprint.copy();
             resetRoundCollection();
             logState("attach", "blueprint changed -> new round: " + schematicFileName(currentCannonBlueprint));
+            // 第 118 轮（只读复核 H2）：checklist 只在「蓝图真的换了」时主动刷新一次。
+            // 旧实现在每个 work tick 无条件调用 cannon.updateChecklist() —— 那是 Create 里最重的操作
+            // （遍历蓝图全部坐标、逐点读世界、重扫邻块容器），而且它内部会置 sendUpdate ⇒ 加农炮随后
+            // 每 tick 向周围客户端发一次方块实体更新包（20 包/秒，无论是否在打印）。Create 自己只在
+            // initializePrinter / 写字板打印完成时调它，这里跟随同一节奏：部署下一张蓝图时我们都会
+            // printer.resetSchematic()，Create 下一个 tick 走 initializePrinter 时会自己刷新 checklist。
+            cannon.updateChecklist();
         }
 
-        // 蓝图更换后强制刷新 checklist，避免沿用旧蓝图的材料清单
-        cannon.updateChecklist();
         // 需求数量快照：优先按蓝图文件统计，失败时回退拷贝 cannon 打印中刷出的完整 checklist
         cacheRequirementsFromBlueprint(cannon);
 
@@ -947,6 +1008,27 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     }
 
     /**
+     * 界面入口用：共享蓝图槽此刻是否被队列流水线掌管（第 118 轮，只读复核 H1）。
+     *
+     * <p><b>为什么必须让菜单先问一句</b>：原版点击逻辑（数字键 SWAP / Shift 点击）在调用
+     * {@code slot.set} <b>之前</b>就已经把物品从玩家背包摘掉了（{@code AbstractContainerMenu} 的
+     * SWAP 先 {@code inventory.setItem(hotbar, EMPTY)}，Shift 点击先 {@code split(1)}）。
+     * 只靠共享视图的 {@code setStackInSlot} 拒收 = 把已经离手的物品扔掉。
+     * 让本方法在 {@code mayPlace} 里返回 false，原版压根不会走到 detach 那一步。</p>
+     *
+     * <p>客户端恒返回 false（{@link #resolvedCannon()} 在客户端为 null）：真正的拦截在服务端
+     * 的 {@code mayPlace}，客户端只负责让界面表现一致。</p>
+     */
+    public boolean isSharedBlueprintSlotQueueLocked() {
+        final Level lvl = getLevel();
+        if (lvl == null || lvl.isClientSide()) {
+            return false;
+        }
+        final SchematicannonBlockEntity cannon = resolvedCannon();
+        return cannon != null && isBlueprintSlotManagedByQueue(cannon);
+    }
+
+    /**
      * 本装填器「正在共享蓝图槽」的那台加农炮（无 = 独立模式）。
      * <p>取整个集群视角（见 {@link #findClusterCannon}）：不相邻的集群成员也应当看到同一张蓝图。
      * <p>每 tick 只解析一次（结果按游戏时间缓存）：界面每 tick 会多次读蓝图槽，
@@ -1065,7 +1147,14 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                 return;
             }
             if (isBlueprintSlotManagedByQueue(cannon)) {
-                logState("blueprint-lock", "queue pipeline owns the cannon blueprint slot -> set refused");
+                // 第 118 轮（只读复核 H1）：这里**必须**把物品还给世界，不能只 return。
+                // 走到 setStackInSlot 说明原版已经把物品从玩家背包 / 光标摘下来了（SWAP、Shift 点击），
+                // 静默 return 等于把蓝图直接销毁（旧代码就是这么丢的；H1 场景：基础装填器贴着同一台
+                // 加农炮、但同集群里没有高级装填器，于是菜单 mayPlace 放行，而这里拒收）。
+                // 菜单侧现在也会先挡（isSharedBlueprintSlotQueueLocked），这里是第二道防线。
+                logState("blueprint-lock", "queue pipeline owns the cannon blueprint slot -> set refused; "
+                    + "stack dropped into world (never voided)");
+                dropIntoWorld(stack);
                 return;
             }
             if (ItemStack.isSameItemSameComponents(cannon.inventory.getStackInSlot(0), stack)) {
@@ -1222,8 +1311,13 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             warnParseFailure(blueprintKey);
             return; // 蓝图无效/无法解析（同一张蓝图按 10s 心跳限频）
         }
-        final int speed = Math.min(countUpgrades(SPEED_UPGRADE), 6);
-        final double rate = speed >= 6 ? Double.MAX_VALUE : (0.5 * (1 << speed)); // 无升级0.5/tick，满级瞬间
+        // 每 tick 拉取速率：0.5,1,2,4,8,16,∞（数值与改前逐格相同）。
+        // 满级判定走统一工具（isMaxed 认「≥6」，因此漏斗塞 64 个也照样是满级）；
+        // 这里保留 Double.MAX_VALUE 而不是 UNLIMITED(int)：速率是 double，
+        // 且「满级 = 不限」在装填器的语义就是「本轮把缺口一次拉满」。
+        final int speed = countUpgrades(SPEED_UPGRADE);
+        final double rate = RsccRateLimiter.isMaxed(speed)
+            ? Double.MAX_VALUE : (0.5 * (1 << RsccRateLimiter.level(speed))); // 无升级0.5/tick，满级瞬间
         final boolean[] allSatisfied = {true};
         final boolean[] pulledAnything = {false};
         logState("standalone", "checklist OK, distinct materials=" + needs.size()
@@ -1240,7 +1334,8 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                     continue; // 网络此刻无货：交给下方的"停滞判定"统一处理（可自动合成则等待）
                 }
                 final double budget = standalonePullBudget.getOrDefault(item, 0D) + rate;
-                final long canPull = speed >= 6 ? diff
+                final long canPull = RsccRateLimiter.isMaxed(speed)
+                    ? diff
                     : Math.min(diff, (long) budget); // 速度不足时按累计预算分批，约 2tick/个起步
                 if (canPull <= 0) {
                     standalonePullBudget.put(item, budget);
@@ -1595,14 +1690,19 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         return null;
     }
 
-    /** 本装填器是否与 cannon 六向紧贴（决定谁真正给 cannon 补料）。 */
+    /** 本装填器是否与 cannon 六向紧贴（决定谁真正给 cannon 补料）。
+     *  <p><b>第 119 轮清理</b>：旧实现是
+     *  {@code level.getBlockEntity(worldPosition) == cannon || 曼哈顿距离 == 1}，
+     *  前半段的 `worldPosition` 是<b>本机</b>坐标 —— 那里的方块实体恒为 {@code this}（装填器），
+     *  永远不可能是加农炮，所以它是个恒假分支（死代码）。真正生效的只有距离判据，删除后行为不变。
+     *  「不紧贴但共享蓝图槽」的情形由 {@code CLUSTER-MIRROR} 模式（见 {@code doLoaderWork}）负责，
+     *  与该判据无关。 */
     protected boolean isCannonAdjacent(final SchematicannonBlockEntity cannon) {
         final Level level = getLevel();
         if (level == null) {
             return false;
         }
-        return level.getBlockEntity(worldPosition) == cannon
-            || cannon.getBlockPos().distManhattan(worldPosition) == 1;
+        return cannon.getBlockPos().distManhattan(worldPosition) == 1;
     }
 
     /**
@@ -1798,9 +1898,14 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             blueprintName = net.minecraft.network.chat.Component.translatable(
                 "block.rs_create_compat.schematic_loader.unknown_blueprint");
         }
-        // 打印已完成 => 材料必然齐过。数量一律取“蓝图文件统计”的需求快照；
-        // 绝不回退到 cannon.checklist —— Create 完成后会把它复位成残留数值（gathered 清零、required 残留 1），
-        // 直接导致“明明 4 个草方块却显示收集 1 个 / 提示资源不够”。
+        // 打印已完成 => 材料必然齐过。数量一律取 {@link #cachedRequirements} 需求快照，
+        // **横幅自身绝不直接读 cannon.checklist** —— Create 完成后会把它复位成残留数值
+        //（gathered 清零、required 残留 1），直接导致“明明 4 个草方块却显示收集 1 个 / 提示资源不够”。
+        // 第 119 轮澄清（旧注释声称「永不回退到 checklist」，与实现不完全一致）：
+        // 快照的来源**优先**是「蓝图文件全量统计」；只有在解析不出材料清单时，
+        // {@link #cacheRequirementsFromBlueprint} 才会<b>临时</b>把它兜底成 checklist 的拷贝
+        // （此时 {@code cachedRequirementsFull == false}，数量可能偏小），
+        // 每个 work tick 都会重试全量统计并在成功后升级 —— 那一步仍然不碰 checklist。
         final net.minecraft.network.chat.Component firstLine = net.minecraft.network.chat.Component.translatable(
             "block.rs_create_compat.schematic_loader.done", blueprintName);
         // 第二行必须基于<b>真实数据</b>，不能无条件说"全部收集完毕"：
@@ -2131,13 +2236,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
             final long gameTime = level == null ? 0 : level.getGameTime();
             if (inCannon.isEmpty() && gameTime - lastGunpowderWarnTick >= 200) {
                 lastGunpowderWarnTick = gameTime;
-                if (level != null && level.getServer() != null) {
-                    level.getServer().getPlayerList().getPlayers().forEach(p ->
-                        p.displayClientMessage(
-                            net.minecraft.network.chat.Component.translatable(
-                                "block.rs_create_compat.schematic_loader.no_gunpowder"),
-                            true));
-                }
+                // 第 118 轮（只读复核 M3）：这里原来给**全服所有玩家**发行动栏——与同文件里
+                // 「距离口径与完成横幅一致（4096 = 64 格平方）：看得到机器的人才收得到提示」自相矛盾；
+                // 基地放 6 台就是每 10 秒 6 条全服消息。改走与横幅同一个 notifyNearby（64 格）。
+                notifyNearby(net.minecraft.network.chat.Component.translatable(
+                    "block.rs_create_compat.schematic_loader.no_gunpowder"), true);
             }
             return;
         }
@@ -2247,6 +2350,11 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
      *  <p><b>已按「共享内存的身份」去重</b>：同一个整体只有一份存储实例，重复列出会把同一份内存
      *  在界面上显示两遍、在计数时算两遍（甚至让同一格被映射两次），因此同族合并后只保留 GUI 顺序最前的
      *  那一台（见 {@link #getClusterInventoryView()} 的说明）。
+     *  <p><b>与 {@link #collectCluster()} 的缓存关系（谁复用谁）</b>：本方法是下游 ——
+     *  自己的同 tick 缓存 {@code guiOrderCache} 未命中时才调用 {@link #computeClusterInGuiOrder()}，
+     *  后者再调用 {@link #collectCluster()}（命中它自己的同 tick BFS 缓存）。于是同一 tick 内
+     *  BFS 只真正跑一次、GUI 顺序最多算一次；拓扑变化由 {@link #rscc$clusterChanged} 经
+     *  {@link #invalidateClusterCaches()} 把两级缓存一起作废，跨 tick 两级都不复用。
      */
     public java.util.List<SchematicLoaderBlockEntity> getClusterInGuiOrder() {
         final Level lvl = getLevel();
@@ -2254,7 +2362,10 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         if (guiOrderCache == null || now != guiOrderCacheTick) {
             // 同 tick 复用：菜单一帧 / 一次广播会按槽位反复解析，避免每个槽位都重算一次集群拓扑。
             // 缓存只存「成员」不含容器引用 —— 各台<b>当前</b>的库存字段仍然每次现取，集群重建后不会指向旧对象。
-            guiOrderCache = computeClusterInGuiOrder();
+            // 第 119 轮：缓存值在**写入时**就做成不可变列表（与 collectCluster 同口径），
+            // 调用方拿到后一旦 sort/removeIf 也不能污染本 tick 的缓存；不在每次读取时拷贝，
+            // 因为本方法每帧会被按槽位反复调用，逐次拷贝反而变成新的热点。
+            guiOrderCache = java.util.List.copyOf(computeClusterInGuiOrder());
             guiOrderCacheTick = now;
         }
         return guiOrderCache;
@@ -2348,12 +2459,36 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
      * <p>合并规则：只要集群中存在高级装填器，基础装填器即并入高级集群当作额外内存（容量叠加）；
      * 纯基础集群维持同类合并。
      *
-     * @return 集群内所有装填器（含自身），按 Y 降序（最上面的优先）
+     * <h2>同 tick 缓存（性能）</h2>
+     * <p>一次 server tick 里本方法会被调用十几次（补料 / 计数 / 自动打印驱动 / 集群判定…），
+     * 而结果只取决于<b>已加载方块的相邻关系</b>，同一 tick 内不会变 —— 因此按
+     * {@code level.getGameTime()} 缓存一次 BFS 结果。规则：
+     * <ul>
+     *     <li><b>跨 tick 不复用</b>：key 是游戏时间，差一个 tick 就重算。区块加载/卸载边界上邻块
+     *     可能整 tick 都查不到，缓存久了会把错误拓扑固化；</li>
+     *     <li><b>拓扑变化作废</b>：{@link #rscc$clusterChanged}（集群重建回调）与
+     *     {@link #setRemoved}、{@link #loadAdditional} 都会调用 {@link #invalidateClusterCaches()}；</li>
+     *     <li><b>返回不可变列表</b>（{@link java.util.List#copyOf}）：调用方<u>不得</u>修改返回值，
+     *     也改不到缓存内部 —— 需要排序 / 去重请自己 {@code new ArrayList<>(...)}。</li>
+     * </ul>
+     * <p><b>与 {@link #getClusterInGuiOrder()} 的关系</b>：{@code getClusterInGuiOrder()} 是下游 ——
+     * 它自己的同 tick 缓存（{@code guiOrderCache}）未命中时才调用 {@code computeClusterInGuiOrder()}，
+     * 后者再调用本方法（命中本方法的 BFS 缓存）。所以同一 tick 内「BFS 真正执行一次」，
+     * GUI 顺序最多再算一次；两者都由同一次 {@link #rscc$clusterChanged} 一起作废。
+     *
+     * @return 集群内所有装填器（含自身），按 Y 降序（最上面的优先）；<b>不可变</b>
      */
     public java.util.List<SchematicLoaderBlockEntity> collectCluster() {
         final Level level = getLevel();
         if (level == null) {
+            // level 尚未就绪（读档构造期 / 客户端占位）：不可能有邻块拓扑，直接返回单机集群。
+            // 不写缓存 —— 否则哨兵 Long.MIN_VALUE 会和「缓存 tick」撞上。
             return java.util.List.of(this);
+        }
+        final long now = level.getGameTime();
+        if (clusterCache != null && now == clusterCacheTick) {
+            // 缓存本身已是不可变副本，直接返回即可（调用方改不动）。
+            return clusterCache;
         }
         final java.util.List<SchematicLoaderBlockEntity> all = new java.util.ArrayList<>();
         final java.util.IdentityHashMap<SchematicLoaderBlockEntity, Boolean> seen =
@@ -2372,7 +2507,21 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                 }
             }
         }
-        return finalizeCluster(all);
+        clusterCache = java.util.List.copyOf(finalizeCluster(all));
+        clusterCacheTick = now;
+        return clusterCache;
+    }
+
+    /**
+     * 作废同 tick 的集群拓扑缓存：BFS 结果（{@link #collectCluster()}）与 GUI 顺序
+     * （{@link #getClusterInGuiOrder()}）一起清空。拓扑变化 / 读档 / 被移除时调用。
+     * <p>只清缓存，不动任何实际内容；下一次调用会按当时的已加载邻块重新 BFS。
+     */
+    private void invalidateClusterCaches() {
+        clusterCache = null;
+        clusterCacheTick = Long.MIN_VALUE;
+        guiOrderCache = null;
+        guiOrderCacheTick = Long.MIN_VALUE;
     }
 
     /**
@@ -2798,8 +2947,9 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
     @Override
     public void rscc$clusterChanged(final int memberCount, final BlockPos masterPos) {
         clusterSize = Math.max(1, memberCount);
-        // 拓扑变了：GUI 顺序/行数缓存立即失效；同时刷新「同集群是否有高级」这个蓝图槽锁定判据
-        guiOrderCache = null;
+        // 拓扑变了：同 tick 的 BFS 缓存与 GUI 顺序缓存立即作废；
+        // 同时刷新「同集群是否有高级」这个蓝图槽锁定判据
+        invalidateClusterCaches();
         refreshClusterHasAdvanced();
         setChanged();
     }
@@ -2851,6 +3001,9 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         if (level != null && !level.isClientSide()) {
             cretae.cookiewyq.rs_create_compat.support.RsccMachineCluster.onMemberRemoved(level, this);
         }
+        // 被移除后本机不再参与任何集群：同 tick 的 BFS / GUI 顺序缓存立即作废
+        //（即使本 tick 内还有调用方拿着旧列表，也不会再从缓存里拿到已移除的成员）。
+        invalidateClusterCaches();
         super.setRemoved();
     }
 
@@ -2909,6 +3062,16 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         tag.putString("StandaloneKey", standaloneBlueprintKey);
         tag.putBoolean("StandaloneHoldingKit", standaloneHoldingKit);
         tag.putBoolean("AttachRoundComplete", attachRoundComplete);
+        // 「本轮绑定的是哪张蓝图」的完整身份（ItemStack 全量，含 data components）。
+        // 读档后据此判断「加农炮槽里还是同一张」→ 沿用 attachRoundComplete，不误走换图分支
+        //（旧实现不存它，读档后恒为 EMPTY ⇒ 每次读档/重载区块都白跑一轮「回流 + 重拉」）。
+        if (!attachRoundBlueprint.isEmpty()) {
+            tag.put("AttachRoundBlueprint", attachRoundBlueprint.save(registries));
+        }
+        // 「打印完成」哨兵（第 119 轮）：不存的话读档后两者归零，输出槽里残留的空白蓝图
+        // 会在第一个 work tick 被当成「刚打印完成」⇒ 完成横幅重复播报。
+        tag.putInt("LastEmptySchematicCount", lastCannonEmptySchematicCount);
+        tag.putBoolean("LastPrintingDone", lastPrintingDone);
         tag.putString("ActiveBlueprintFile", activeBlueprintFileName);
         tag.putString("CacheBlueprintKey", cachedRequirementsBlueprintKey);
         tag.putBoolean("CacheRequirementsFull", cachedRequirementsFull);
@@ -2960,6 +3123,29 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
         standaloneBlueprintKey = tag.getString("StandaloneKey");
         standaloneHoldingKit = tag.getBoolean("StandaloneHoldingKit");
         attachRoundComplete = tag.getBoolean("AttachRoundComplete");
+        // 本轮蓝图身份（ItemStack 全量，含 components）：能读回就用它做「还是同一张蓝图」的判据。
+        // 旧档没有该 key、或 key 里的物品已不存在/不是蓝图 ⇒ 身份未知，交给首个 work tick 以
+        // 加农炮槽里的当前蓝图接管（不回流、不复位）；这里绝不能让异常冒出去，也绝不回填库存。
+        attachRoundBlueprint = ItemStack.EMPTY;
+        attachRoundIdentityUnknown = true;
+        if (tag.contains("AttachRoundBlueprint")) {
+            final ItemStack savedRoundBlueprint =
+                ItemStack.parseOptional(registries, tag.getCompound("AttachRoundBlueprint"));
+            if (isValidBlueprintStack(savedRoundBlueprint)) {
+                attachRoundBlueprint = savedRoundBlueprint;
+                attachRoundIdentityUnknown = false;
+            }
+        }
+        // 「打印完成」哨兵（第 119 轮）：新档带着两个 key ⇒ 基线可信，直接沿用；
+        // 旧档没有 key ⇒ printBaselinePrimed 保持 false，首个 work tick 用当时的输出槽数量重建基线，
+        // 因此「读档时输出槽里还留着上次的空白蓝图」不会再被当成刚打印完、也不会补播完成横幅。
+        printBaselinePrimed = tag.contains("LastEmptySchematicCount");
+        if (printBaselinePrimed) {
+            lastCannonEmptySchematicCount = tag.getInt("LastEmptySchematicCount");
+        } else {
+            lastCannonEmptySchematicCount = 0;
+        }
+        lastPrintingDone = tag.getBoolean("LastPrintingDone");
         activeBlueprintFileName = tag.getString("ActiveBlueprintFile");
         cachedRequirementsBlueprintKey = tag.getString("CacheBlueprintKey");
         cachedRequirementsFull = tag.getBoolean("CacheRequirementsFull");
@@ -2978,6 +3164,9 @@ public class SchematicLoaderBlockEntity extends AbstractBaseNetworkNodeContainer
                 cachedRequirements = req;
             }
         }
+        // 读档换了一份状态：同 tick 的集群 BFS / GUI 顺序缓存必须一起作废，否则读档后的第一 tick
+        // 可能仍读到读档前的成员列表（本方法也可能在 BE 复用/同步时被再次调用）。
+        invalidateClusterCaches();
     }
 
     /**

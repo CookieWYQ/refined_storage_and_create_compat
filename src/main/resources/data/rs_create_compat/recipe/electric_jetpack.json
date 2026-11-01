@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "LAL",
+    "CMC",
+    " P "
+  ],
+  "key": {
+    "L": {
+      "item": "minecraft:leather"
+    },
+    "A": {
+      "item": "refinedstorage:advanced_processor"
+    },
+    "C": {
+      "item": "refinedstorage:construction_core"
+    },
+    "M": {
+      "item": "create:precision_mechanism"
+    },
+    "P": {
+      "item": "minecraft:piston"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:electric_jetpack"
+  }
+}

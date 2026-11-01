@@ -32,9 +32,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  *     控件 {@link ExporterExecutorRowWidget} 自己定几何 + 管绘制 + 管命中，本类只负责把它挂进 Screen。</li>
  * </ol>
  *
- * <p><b>本轮同时移除了两个语义不再适用的原生控件</b>：「过滤器模式（白 / 黑名单）」与「模糊模式」
- * 两个侧边按钮 —— 由 {@code AbstractBaseScreenMixin} 在 {@code addSideButton} 处拦截、不再挂上
- * （见那里的说明；不再挂 = 不留空洞、不留重复坐标，因为它们本来画在面板<b>左侧外面</b>）。</p>
+ * <p><b>原生侧边按钮一律保留（白 / 黑名单、模糊、红石模式），本模组只追加自绘类别条、绝不删除 RS 原生控件。</b>
+ * 输入总线界面在 RS 2.0.9 里由 {@code ImporterScreen#init} 挂「过滤器模式（白 / 黑名单）」与「模糊模式」，
+ * 由基类 {@code AbstractFilterScreen#init} 挂「红石模式」（sources：
+ * {@code common/importer/ImporterScreen.java:21,26}、{@code common/support/AbstractFilterScreen.java:39}）。
+ * 三颗按钮<b>必须全部在</b>：本类只做「追加」—— 在 {@code init} 的 TAIL 处再挂一个自绘类别条控件，
+ * 不拦截「挂侧边按钮」那个方法的入口、不删任何原生控件。</p>
+ *
+ * <p><b>历史教训（1.0.0 ~ beta.3 的真实回归，已修）</b>：此前 {@code AbstractBaseScreenMixin} 曾在
+ * 「挂侧边按钮」那个方法的 HEAD 处<b>无条件</b> {@code ci.cancel()} 掉「过滤器模式 / 模糊模式」两颗按钮，
+ * 于是输入总线界面上只剩一颗红石模式按钮（连普通模式本该与 RS 原版逐像素一致的场合也一起被删）。
+ * 用户原话：「你貌似把输入总线输出总线……所有这样子的总线，它的黑名单那些按钮什么全都删了，
+ * 然后只剩下一个这一个红石开关了……这是个非常严重的问题。」
+ * 该注入已整体删除，并由 {@code tools/selfcheck_round97_bus_side_buttons.py} 钉住
+ * （全仓 {@code src/main/java} 必须一次都不出现那个方法名，连注释里也不写 —— 这样任何人 grep 一眼就能判）。</p>
  *
  * <p><b>为什么不遮挡 RS 原生控件</b>：类别条占用的正是 9 个「过滤器资源槽」所在的横带
  * （{@code AbstractSimpleFilterContainerMenu} 里 {@code FILTER_SLOT_X = 8} / {@code FILTER_SLOT_Y = 20}

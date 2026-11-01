@@ -57,6 +57,23 @@ public class ClientInit {
         net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SeparationFrameKeybinds::onKeyInput);
         // 伪装框架的「隐藏 / 恢复已填充方块」快捷键 K：同一条链路（KeyMapping 在 MOD 总线注册，见 CamouflageKeybinds）
         net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(CamouflageKeybinds::onKeyInput);
+        // 区域选定器：世界内框选手势（右键两点 / 潜行取消 / 潜行右键空气开列表 / Ctrl+滚轮改大小）。
+        // 交互事件走 NeoForge 的 InputEvent（与 Create 的 InputEvents 完全同一条路），
+        // 渲染交给 AreaOutline 喂 Create 的 Outliner（Ponder 已负责 tick + render，本模组不挂渲染事件）。
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(AreaSelectorHandler::onClientTick);
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
+            (net.neoforged.neoforge.client.event.InputEvent.MouseButton.Pre mouseEvent) -> {
+                if (AreaSelectorHandler.onMouseButton(mouseEvent.getButton(),
+                    mouseEvent.getAction() != 0)) {
+                    mouseEvent.setCanceled(true);
+                }
+            });
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
+            (net.neoforged.neoforge.client.event.InputEvent.MouseScrollingEvent scrollEvent) -> {
+                if (AreaSelectorHandler.onScroll(scrollEvent.getScrollDeltaY())) {
+                    scrollEvent.setCanceled(true);
+                }
+            });
         // K 键的开关一变，就「只重建受影响的伪装格」（绝不整片重烘 —— 旧实现的 allChanged() 会让
         // 整个界面 / 世界在一瞬间不渲染并强烈卡顿）。见 CamouflageShellDisplay（纯客户端类，
         // 因此「不许在通用类里碰客户端类型」这条约束不被破坏）。
@@ -139,6 +156,12 @@ public class ClientInit {
     @SubscribeEvent
     public static void onRegisterMenuScreens(final RegisterMenuScreensEvent event) {
         event.register(RS_Create_Compat.RANGE_CHARGER_MENU.get(), RangeChargerScreen::new);
+        // FE 能量立方（第 99 轮）：只读能量条界面（无物品槽），显示本块 / 集群 / 网络三组电量与门控状态
+        event.register(RS_Create_Compat.FE_ENERGY_CUBE_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.FEEnergyCubeScreen::new);
+        // 降解室发电机（第 101 轮）：16×16 物品槽分页 + 进度条 + 电量条
+        event.register(RS_Create_Compat.DECOMPOSITION_GENERATOR_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.DecompositionGeneratorScreen::new);
         event.register(RS_Create_Compat.QUANTITY_KEEPER_MENU.get(), QuantityKeeperScreen::new);
         event.register(RS_Create_Compat.ADVANCED_QUANTITY_KEEPER_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.AdvancedQuantityKeeperScreen::new);
@@ -155,12 +178,29 @@ public class ClientInit {
             cretae.cookiewyq.rs_create_compat.client.screen.SequenceExecutionChamberScreen::new);
         event.register(RS_Create_Compat.COLLECTION_CACHE_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.CollectionCacheScreen::new);
+        // 高级归流缓存仓：沿用基础版界面 + 区域选定器槽 / 区域列表 / 查看范围（橙色）
+        event.register(RS_Create_Compat.ADVANCED_COLLECTION_CACHE_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.AdvancedCollectionCacheScreen::new);
         // 中间产物缓存仓（网络内所有执行舱共享的中间产物临时储存点）
         event.register(RS_Create_Compat.INTERMEDIATE_CACHE_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.IntermediateCacheScreen::new);
         // 单元样板管理舱（按执行舱分组的单元样板管理 + 无线终端里的同一页）
         event.register(RS_Create_Compat.UNIT_PATTERN_MANAGER_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.UnitPatternManagerScreen::new);
+        // 网络资源接收器 / 请求器：改名 / 目标 / 订单清单 / 立即发送的配置界面
+        //（数据包与校验在 network/*Packet + menu，本类只挂屏幕）
+        event.register(RS_Create_Compat.NETWORK_RESOURCE_RECEIVER_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceReceiverScreen::new);
+        event.register(RS_Create_Compat.NETWORK_RESOURCE_REQUESTER_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceRequesterScreen::new);
+        // 容器代理器：代理对象槽 + 六面角色按钮 + 「同一库存不要接两个外部存储」警告
+        event.register(RS_Create_Compat.INVENTORY_PROXY_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.screen.InventoryProxyScreen::new);
+        // 网格选资源界面：我们自己的 MenuType → 我们自己的 Screen（继承 RS 的 GridScreen，
+        // 因此外观与操作就是 RS 自己的网格；注册走 NeoForge 的 RegisterMenuScreensEvent，
+        // 与 RS 自己注册网格界面用的是同一个事件，不需要 RS 的任何许可）
+        event.register(RS_Create_Compat.RESOURCE_PICKER_MENU.get(),
+            cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerScreen::new);
     }
 
     /**

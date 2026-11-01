@@ -8,7 +8,9 @@
      · tooltip 行只有流体自身的名字（唯一实现 GhostMarkerRenderer.fluidName =
        FluidStack#getHoverName 那一口径，RS 的 FluidStackFluidRenderer#getTooltip 同源）；
      · 源码里不再出现 `gui.rs_create_compat.marker.amount` 的调用（数量行整条移除）；
-     · 两个保持器界面都走同一个 renderFluidTooltip（没有第二套自绘）。
+     · 基础版仍走同一个 renderFluidTooltip（没有第二套自绘）；<b>第 88 轮起高级版更进一步</b>：
+       流体标记槽里放的是该流体的<b>真实桶物品</b>，tooltip 完全交给原版物品 tooltip
+       （别的模组才能接管）⇒ 高级版不得再调用 renderFluidTooltip，也不得自拼流体名。
 
 ② 大数值显示不全（1 亿 mB 显示成一串 0）
    —— 判据：输入框几何（RsccKeeperGeometry）保证文本区放得下 `100,000,000` 的千分位写法；
@@ -85,6 +87,13 @@ def method_body(source, signature):
     raise SystemExit("方法体未闭合: " + signature)
 
 
+def strip_java_comments(source):
+    """去掉 // 与 /* */ 注释：判据只认真正的代码（注释里提「不要调 renderFluidTooltip」不算违规）。"""
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    source = re.sub(r"//[^\n]*", "", source)
+    return source
+
+
 def java_int_const(source, name):
     match = re.search(r"int\s+%s\s*=\s*(-?\d+)\s*;" % name, source)
     if not match:
@@ -115,16 +124,26 @@ def section_fluid_tooltip():
     check("fluid.getFluidType().getDescription()" in name_body,
           "①e 我们的 fluidName 与 RS 同源（getDescription = FluidStack#getHoverName 的取法）")
 
-    # 两个保持器界面都只走这一个入口，没有第二套自绘
+    # 两个保持器界面的 tooltip 口径（第 90 轮起两边都「不自拼」）：
+    #   · 基础版走唯一入口 renderFluidTooltip；
+    #   · 高级版第 90 轮把流体标记槽改回<b>流体贴图渲染</b>（槽里不再放桶），因此 hover 时也必须补一次
+    #     流体自身的名字 —— 复用同一个既有入口 renderFluidTooltip（名字 = FluidType#getDescription()，
+    #     可翻译 Component），不允许 literal 硬拼、不允许拼数量。
     basic = read(BASIC_SCREEN)
     adv = read(ADV_SCREEN)
+    adv_code = strip_java_comments(adv)
+    check("GhostMarkerRenderer.renderFluidTooltip(" in basic,
+          "①f 基础版 标记槽 tooltip 仍走唯一入口 renderFluidTooltip（本轮不动基础版）")
+    check("GhostMarkerRenderer.renderFluidTooltip(" in adv_code,
+          "①f2 高级版 流体标记槽 tooltip 走同一个既有入口 renderFluidTooltip（不是自拼第二套）")
+    check("fluidName(" not in adv_code and "Component.literal(\"熔岩\")" not in adv_code
+          and "Component.literal(\"岩浆\")" not in adv_code,
+          "①f3 高级版 不把流体显示成 literal 文字（没有 fluidName / literal 硬拼「熔岩 / 岩浆」）")
     for label, src in (("基础版", basic), ("高级版", adv)):
-        check("GhostMarkerRenderer.renderFluidTooltip(" in src,
-              "①f %s 标记槽 tooltip 走唯一入口 renderFluidTooltip" % label)
         check(AMOUNT_KEY not in src,
               "①g %s 不再引用数量文案键（%s）" % (label, AMOUNT_KEY))
-    check(basic.count("renderFluidTooltip(") == 1 and adv.count("renderFluidTooltip(") == 1,
-          "①h 两个界面各只有一处调用（没有第二套自绘 tooltip）")
+    check(basic.count("renderFluidTooltip(") == 1 and adv_code.count("renderFluidTooltip(") == 1,
+          "①h 两版各只有一处 renderFluidTooltip 调用（同帧只出一个框）")
 
     # 推演：tooltip 行 = [流体名]，不再随数量变化
     def tooltip_lines(fluid_name, amount):
@@ -415,7 +434,8 @@ def section_geometry():
         "BASIC_BTN_W", "BASIC_UNIT_X", "BASIC_UNIT_MAX_RIGHT", "BASIC_LABEL_RIGHT",
         "ROW_MINUS_X", "ROW_BOX_X", "ROW_BOX_W", "ROW_BOX_DY", "ROW_PLUS_X", "ROW_BTN_W",
         "ROW_UNIT_X", "ROW_UNIT_MAX_RIGHT",
-        "ROW_FIRST_Y", "ROW_STEP", "AUTOCRAFT_BTN_X", "OVERFLOW_BTN_X", "TOGGLE_BTN_W")}
+        "ROW_FIRST_Y", "ROW_STEP", "AUTOCRAFT_BTN_X", "OVERFLOW_BTN_X", "TOGGLE_BTN_W",
+        "TOGGLE_BTN_H", "TOGGLE_DY")}
     check(g["BASIC_BOX_W"] > 42 and g["ROW_BOX_W"] > 40,
           "③a 两个界面的输入框都比旧值宽（基础 42→%d，高级 40→%d）"
           % (g["BASIC_BOX_W"], g["ROW_BOX_W"]))
@@ -473,48 +493,73 @@ def section_geometry():
     # ---- 高级版：4 行 y=22/46/70/94，行距 24（烘焙在背景 PNG 里，不能改） ----
     stride = java_int_const(geom, "ROW_STEP")
     first_y = java_int_const(geom, "ROW_FIRST_Y")
+    box_h = java_int_const(geom, "ROW_BOX_H")
+    btn_h = java_int_const(geom, "ROW_BTN_H")
     check(stride == 24 and first_y == 22,
           "③h 高级版行距 22 / 24 未变（槽位位置烘焙在背景 PNG：槽框外框 y=24/48/72/96）")
+    # 第 90 轮：输入框 70×12 → 74×14（「将输入框拉大一些」）
+    check(g["ROW_BOX_W"] == 74 and box_h == 14,
+          "③h2 输入框实测 %d×%d（上一轮 70×12）—— 变宽变高" % (g["ROW_BOX_W"], box_h))
+    check(g["ROW_BOX_W"] - 9 >= 58,
+          "③h3 输入框文本区 %dpx ≥ 「100,000,000」58px" % (g["ROW_BOX_W"] - 9))
     bad = []
     for row in range(4):
         row_y = first_y + row * stride
-        box = rect(g["ROW_BOX_X"], row_y + g["ROW_BOX_DY"], g["ROW_BOX_W"], 12)
-        minus = rect(g["ROW_MINUS_X"], row_y + g["ROW_BOX_DY"], g["ROW_BTN_W"], 12)
-        plus = rect(g["ROW_PLUS_X"], row_y + g["ROW_BOX_DY"], g["ROW_BTN_W"], 12)
-        # 单位文字按「中英最宽的那个」参与判定（en 的 items 24px）
-        unit_w = max(text_width(tables["zh_cn.json"]["gui.rs_create_compat.advanced_quantity_keeper.unit_item"]),
-                     text_width(tables["zh_cn.json"]["gui.rs_create_compat.advanced_quantity_keeper.unit_mb"]),
-                     text_width(tables["en_us.json"]["gui.rs_create_compat.advanced_quantity_keeper.unit_item"]),
-                     text_width(tables["en_us.json"]["gui.rs_create_compat.advanced_quantity_keeper.unit_mb"]))
-        unit = rect(g["ROW_UNIT_X"], row_y + g["ROW_BOX_DY"] + 3, unit_w, 9)
-        auto = rect(g["AUTOCRAFT_BTN_X"], row_y + 3, g["TOGGLE_BTN_W"], 12)
-        over = rect(g["OVERFLOW_BTN_X"], row_y + 3, g["TOGGLE_BTN_W"], 12)
+        box = rect(g["ROW_BOX_X"], row_y + g["ROW_BOX_DY"], g["ROW_BOX_W"], box_h)
+        minus = rect(g["ROW_MINUS_X"], row_y + g["ROW_BOX_DY"], g["ROW_BTN_W"], btn_h)
+        plus = rect(g["ROW_PLUS_X"], row_y + g["ROW_BOX_DY"], g["ROW_BTN_W"], btn_h)
+        auto = rect(g["AUTOCRAFT_BTN_X"], row_y + g["TOGGLE_DY"], g["TOGGLE_BTN_W"], g["TOGGLE_BTN_H"])
+        over = rect(g["OVERFLOW_BTN_X"], row_y + g["TOGGLE_DY"], g["TOGGLE_BTN_W"], g["TOGGLE_BTN_H"])
         slot = rect(9, row_y + 3, 16, 16)
-        items = {"输入框": box, "[-]": minus, "[+]": plus, "单位": unit,
+        # 第 84 轮：每行不再画「个 / mB」单位文字（与基础版同一条口径），因此这一行只剩 5 个控件
+        items = {"输入框": box, "[-]": minus, "[+]": plus,
                  "自动合成": auto, "过量销毁": over, "标记槽": slot}
         for a, b in itertools.combinations(items, 2):
             if overlap(items[a], items[b]):
                 bad.append("row%d %s %s × %s %s" % (row, a, items[a], b, items[b]))
-        if plus[2] > auto[0]:
-            bad.append("row%d [+] 右缘 %d 压住自动合成列 %d" % (row, plus[2], auto[0]))
-        if unit[2] > g["ROW_UNIT_MAX_RIGHT"]:
-            bad.append("row%d 单位文字右缘 %d 越过上限 %d" % (row, unit[2], g["ROW_UNIT_MAX_RIGHT"]))
+        # 间距一律 >= 4px（上一轮 [+] 与开关列 0px）
+        ordered = [("标记槽", slot), ("[-]", minus), ("输入框", box), ("[+]", plus),
+                   ("自动合成", auto), ("过量销毁", over)]
+        for (aname, arect), (bname, brect) in zip(ordered, ordered[1:]):
+            if brect[0] - arect[2] < 4:
+                bad.append("row%d %s 右缘 %d 与 %s 左沿 %d 间距 %d < 4px"
+                           % (row, aname, arect[2], bname, brect[0], brect[0] - arect[2]))
         if over[2] > 187:
             bad.append("row%d 过量销毁右缘 %d 压住插件槽列 187" % (row, over[2]))
-    check(not bad, "③i 高级版 4 行 × 7 控件两两不重叠、不压槽位", str(bad[:3]))
+        # ① 「[+] 右侧重复数字」：这一带必须比最窄两位数（12px）还窄
+        gap = auto[0] - plus[2]
+        if gap >= 12:
+            bad.append("row%d [+]/开关 之间 %dpx ≥ 12px（有空间画重复数字）" % (row, gap))
+    check(not bad, "③i 高级版 4 行 × 6 矩形两两不重叠、相邻间距 >= 4px、不压槽位、[+] 右侧无数字带",
+          str(bad[:3]))
     check("RsccNumberField.bucketHint(" not in read(ADV_SCREEN)
           and "RsccNumberField.bucketTooltip(currentValue(row))" in read(ADV_SCREEN),
           "③j 高级版：桶换算走输入框 tooltip（行距 24px 内没有第二条空带，见 RsccKeeperGeometry 注释）")
     check(g["AUTOCRAFT_BTN_X"] > 134 and g["OVERFLOW_BTN_X"] > 162,
           "③k 高级版两列开关已右移让位（134→%d / 162→%d）"
           % (g["AUTOCRAFT_BTN_X"], g["OVERFLOW_BTN_X"]))
-    check(g["OVERFLOW_BTN_X"] - g["AUTOCRAFT_BTN_X"] == 22,
-          "③l 两列开关列距 22（6px 缝）")
-    center0 = g["AUTOCRAFT_BTN_X"] + g["TOGGLE_BTN_W"] / 2.0
-    center1 = g["OVERFLOW_BTN_X"] + g["TOGGLE_BTN_W"] / 2.0
-    half = java_int_const(geom, "COL_HEADER_HALF_W")
-    check(center0 + half <= center1 - half,
-          "③m 两列标题（半宽 %d）不重叠：%.0f+%d ≤ %.0f-%d" % (half, center0, half, center1, half))
+    # 第 90 轮：两列之间保持 >= 12px（用户反馈「每行两个 ✗ 看起来是重复按钮」）
+    toggle_gap = g["OVERFLOW_BTN_X"] - (g["AUTOCRAFT_BTN_X"] + g["TOGGLE_BTN_W"])
+    check(toggle_gap >= 12,
+          "③l 两列开关之间留 %dpx（>= 12px；%d..%d / %d..%d）"
+          % (toggle_gap, g["AUTOCRAFT_BTN_X"], g["AUTOCRAFT_BTN_X"] + g["TOGGLE_BTN_W"],
+             g["OVERFLOW_BTN_X"], g["OVERFLOW_BTN_X"] + g["TOGGLE_BTN_W"]))
+    # 第 90 轮：两列列标签是「两行完整词」（自动 / 合成、过量 / 销毁），不再是单行短词
+    adv_text = read(ADV_SCREEN)
+    check("COL_HEADER" not in adv_text and "drawColumnHeader" not in adv_text,
+          "③m 高级版不再用 0.75 缩放的单行列标题（改成 9px 正体、两行完整词）")
+    check("Column labels" not in adv_text
+          and "column_autocraft.2" in adv_text and "column_overflow.2" in adv_text,
+          "③m2 高级版列标签引用了两行的第二行键（column_autocraft.2 / column_overflow.2）")
+    check(adv_text.count("drawColumnLabel(guiGraphics,") == 2,
+          "③m3 renderLabels 里两列各画一次列标签块（共 2 次调用）")
+    # ③m4：「[+] 右侧无重复数字」的源码级判据 —— 整份界面只有 3 处 drawString（标题 + 两行标签）
+    check(adv_text.count("drawString(") == 3,
+          "③m4 界面只有 3 处 drawString（标题 1 + 两列标签各 1），行内不画任何文字 / 数字",
+          str(adv_text.count("drawString(")))
+    check("getTarget(" not in adv_text.split("protected void renderLabels(")[1]
+          .split("private void drawTitle(")[0],
+          "③m5 renderLabels 不引用 getTarget / 目标值（不会在 [+] 右侧再画一遍数字）")
 
     # 两个界面的 Java 真的在用这批常量（不是常量写一套、界面写另一套）
     basic = read(BASIC_SCREEN)
@@ -523,7 +568,8 @@ def section_geometry():
                   "RsccKeeperGeometry.BASIC_MINUS_X", "RsccKeeperGeometry.BASIC_PLUS_X"):
         check(token in basic, "③l 基础版控件几何取自 %s" % token.split(".")[-1])
     for token in ("RsccKeeperGeometry.ROW_BOX_X", "RsccKeeperGeometry.ROW_BOX_W",
-                  "RsccKeeperGeometry.ROW_MINUS_X", "RsccKeeperGeometry.ROW_PLUS_X"):
+                  "RsccKeeperGeometry.ROW_MINUS_X", "RsccKeeperGeometry.ROW_PLUS_X",
+                  "RsccKeeperGeometry.TOGGLE_BTN_W", "RsccKeeperGeometry.TOGGLE_BTN_H"):
         check(token in adv, "③m 高级版控件几何取自 %s" % token.split(".")[-1])
     check(java_int_const(adv, "AUTOCRAFT_BTN_X") == g["AUTOCRAFT_BTN_X"]
           and java_int_const(adv, "OVERFLOW_BTN_X") == g["OVERFLOW_BTN_X"],
@@ -564,6 +610,22 @@ def section_lang():
     for name, table in tables.items():
         check(AMOUNT_KEY in table,
               "④g %s 仍保留 marker.amount（归流缓存仓 / 总线条还在用，不删）" % name)
+    # 第 90 轮：两列列标签是「两行完整词」——两段拼起来必须等于 自动合成 / 过量销毁（en 同理）
+    col = "gui.rs_create_compat.advanced_quantity_keeper."
+    expect = {"zh_cn.json": ("自动合成", "过量销毁"), "en_us.json": ("autocraft", "overflow")}
+    for name, table in tables.items():
+        for index, key in enumerate(("column_autocraft", "column_overflow")):
+            line1 = table.get(col + key, "")
+            line2 = table.get(col + key + ".2", "")
+            joined = (line1 + line2).strip()
+            got = joined if name == "zh_cn.json" else joined.lower()
+            check(bool(line1) and bool(line2),
+                  "④h %s 两行列标签两行都非空：%s / %s" % (name, col + key, col + key + ".2"))
+            check(got == expect[name][index],
+                  "④i %s 两行拼起来 = %r（完整词 %r，不能只显示半截）"
+                  % (name, joined, expect[name][index]))
+        check(table.get(col + "column_autocraft") != table.get(col + "column_overflow"),
+              "④j %s 两个列标签不同（能区分哪列管什么）" % name)
 
 
 if __name__ == "__main__":

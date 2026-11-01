@@ -402,6 +402,83 @@ public final class RsccCamouflage {
     }
 
     /**
+     * 一次把<b>一整批</b>伪装格外壳材质设成同一份材质（<b>只来自 FTB Ultimine 的连锁应用</b>）。
+     *
+     * <h2>为什么不是循环调用 {@link #setMaterial}</h2>
+     * <p>{@code setMaterial} 每格都要「写附件 + 通知客户端重烘」，一次连锁几十格就会发几十个包；
+     * 本方法把这一批当成<b>一次事务</b>：逐格写入 → <b>一次</b>按区块聚合的重烘信号
+     * （{@link #notifyClient}）→ 返回真正写入的格数、失败格数与「旧外壳方块」清单
+     * （调用方据此做物品收支：扣新材质、还旧外壳）。</p>
+     *
+     * <h2>逐块容错（硬要求）</h2>
+     * <p>任何一格抛异常（方块实体刚好被移除 / 别的模组在写同一份数据 / 附件被并发清掉）
+     * <b>只影响这一格</b>：整批继续，异常绝不冒回 FTB 的事件链。失败格数由返回值带回，
+     * 调用方必须把它报给玩家（不许静默）。</p>
+     *
+     * <h2>同步</h2>
+     * <p>写入走 {@code be.setData(...)}：NeoForge 的 {@code AttachmentHolder#setData} 内部会
+     * {@code setChanged()} 并按「谁在观察这一格」把附件下发给客户端（见
+     * {@link RsccCamouflageAttachment} 的类注释），因此客户端渲染读到的是<b>同一份数据</b>；
+     * 随后的 {@link #notifyClient} 只是「让那一段网格重烘」的轻量信号。</p>
+     *
+     * <h2>幂等 / 去重</h2>
+     * <p>调用方传入的坐标已经去重（{@code LinkedHashSet}），但这里仍按坐标再写一次
+     * {@code be.getExistingDataOrNull}：<b>没裹住的格绝不写</b>（不会凭空给一根裸线缆塞材质），
+     * 也不存在「同一格被写两次、扣两次物品」的可能。</p>
+     *
+     * @param material 要应用的外壳材质（调用方已用 Create 的 {@code getAcceptedBlockState} 判过）
+     * @param consumed  普通模式 = 每格扣掉的那 1 个方块物品的副本；创造模式 = {@link ItemStack#EMPTY}
+     * @return 写入结果（成功格数 / 失败格数 / 需要还给玩家的旧外壳方块清单）
+     */
+    public static BulkWrite setMaterialAll(final ServerLevel level, final Collection<BlockPos> positions,
+                                           final BlockState material, final ItemStack consumed) {
+        if (positions.isEmpty()) {
+            return new BulkWrite(0, 0, List.of());
+        }
+        int changed = 0;
+        int failed = 0;
+        final List<BlockPos> written = new ArrayList<>(positions.size());
+        final List<ItemStack> refunds = new ArrayList<>();
+        for (final BlockPos pos : new LinkedHashSet<>(positions)) {
+            try {
+                final BlockEntity be = level.getBlockEntity(pos);
+                if (be == null) {
+                    failed++; // 方块实体已经不在（区块边界 / 刚被拆掉）
+                    continue;
+                }
+                final Camo current = be.getExistingDataOrNull(RsccCamouflageAttachment.CAMOUFLAGE.get());
+                if (current == null) {
+                    failed++; // 没裹住：绝不写（本方法只改「已经是伪装格」的那些）
+                    continue;
+                }
+                be.setData(RsccCamouflageAttachment.CAMOUFLAGE.get(),
+                    new Camo(material, consumed.isEmpty() ? ItemStack.EMPTY : consumed.copy(),
+                        current.frameConsumed()));
+                if (!current.consumed().isEmpty()) {
+                    refunds.add(current.consumed().copy()); // 旧外壳原样还给玩家（与单格换壳同一条守恒）
+                }
+                written.add(pos);
+                changed++;
+            } catch (final RuntimeException e) {
+                failed++; // 逐块容错：这一格失败，整批继续
+            }
+        }
+        // 整批只发一次「请重烘」（内部再按区块聚合），绝不给每格各发一个包
+        notifyClient(level, written);
+        return new BulkWrite(changed, failed, refunds);
+    }
+
+    /**
+     * {@link #setMaterialAll} 的结果。
+     *
+     * @param changed 真正写入的格数（调用方据此扣新材质）
+     * @param failed  没能写入的格数（调用方必须把非 0 的失败数报给玩家）
+     * @param refunds 被替换掉的旧外壳方块（原样还给玩家；创造模式套上的记录里是空的，因此不产出）
+     */
+    public record BulkWrite(int changed, int failed, List<ItemStack> refunds) {
+    }
+
+    /**
      * 把这一格外壳的<b>朝向</b>旋转 90°（手持「同一种」方块右键 = 转壳，潜行 = 反向）。
      *
      * <p><b>为什么只改「记录里的材质」就够</b>：外壳的朝向完全由材质方块状态自己携带

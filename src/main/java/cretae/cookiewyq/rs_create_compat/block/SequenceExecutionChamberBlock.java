@@ -32,11 +32,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 序列执行仓方块：接入 RS 网络的“分布式序列装配执行”节点，无 GUI。
+ * 序列执行仓方块：接入 RS 网络的“分布式序列装配执行”节点，<b>右键无条件打开管理界面</b>
+ * （6 行 × 9 列 = 54 格单元样板槽，放入 / 取出<b>全部</b>走界面，方块本身没有「右键放入 / 右键取出」这条路径）。
  * <p>
- * 朝向 property 表示机器侧（朝向所指方向），方块贴靠在目标 Create 机旁放置：
- * 手持单元样板右键放入样板槽，空手右键取出（见方块实体交互）；
+ * 朝向 property 表示机器侧（朝向所指方向），方块贴靠在目标 Create 机旁放置；
  * 接入网络后引擎自动认领本机步骤的过渡件/原料并喂给机器侧相邻容器。
+ * <p>（历史上这里写过「无 GUI / 手持单元样板右键放入样板槽，空手右键取出」，与
+ * {@link #useWithoutItem} 的实际实现（无条件 {@code openMenu}）不符，第 120 轮 F6 已改正。）
  */
 public class SequenceExecutionChamberBlock extends Block implements EntityBlock {
     /**
@@ -216,7 +218,11 @@ public class SequenceExecutionChamberBlock extends Block implements EntityBlock 
         return (BlockEntityTicker<T>) TICKER;
     }
 
-    /** 右键打开界面（3×2 单元样板槽，正常放入/取出）。 */
+    /**
+     * 右键打开界面：6 行 × 9 列 = 54 格单元样板槽（双箱规格，布局见 {@code SequenceExecutionChamberMenu}），
+     * 放入 / 取出都走 GUI —— 方块本身不再有「右键放入 / 空手取出」的旁路。
+     * <p>历史注释曾写「3×2 单元样板槽」（= 6 格），与实际 54 格不符（第 120 轮 F6 改正）。
+     */
     @Override
     protected InteractionResult useWithoutItem(final BlockState state,
                                                final Level level,

@@ -1,0 +1,9 @@
+{
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "particle": "rs_create_compat:block/fe_energy_cube_side",
+    "top": "rs_create_compat:block/fe_energy_cube_top",
+    "bottom": "rs_create_compat:block/fe_energy_cube_bottom",
+    "side": "rs_create_compat:block/fe_energy_cube_side"
+  }
+}

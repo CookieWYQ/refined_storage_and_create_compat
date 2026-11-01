@@ -405,26 +405,20 @@ check("SeparationFrameGuard.isSheatheableFamily" not in SHELL_CODE
 # ============================================================ ⑦ 物理化「单格」链路：取证与结论
 print()
 print("=" * 100)
-print("⑦ 物理化「单格」：为什么本工程内修不了（本轮如实说明，含取证 + 最小可交付替代）")
+print("⑦ 物理化「单格」：Sable 那张专用渲染分支的取证 + 本轮修法（模型数据通道）")
 print("=" * 100)
 # 用户原话：「线缆物理化之后的那个伪装框架，单个（格）的时候仍然是没有正常渲染」。
 # 取证结论（全部来自 jar 字节码，可复现）：
 #   ① Sable 对「结构里只有一格」有一个**专用渲染分支**（VanillaSingleSubLevelRenderData +
 #      SingleBlockSubLevelWrapper），它不走常规 SectionCompiler；
 #   ② 常规区块 / 多格子关卡走 SectionCompiler，而 SectionCompiler 里**明确调用**
-#      BakedModel.getModelData(world, pos, state, base) —— 我们的外壳正是从那里拿到材质
-#      （CamouflageShellModel#gatherModelData 是唯一取数入口）；
+#      BakedModel.getModelData(world, pos, state, base)；
 #   ③ 单格分支把模型数据直接取自 ClientLevel.getModelData(pos)（NeoForge 的惰性缓存）
 #      与 SingleBlockSubLevelWrapper.getModelData(pos)（默认实现 = ModelData.EMPTY），
-#      **从不调用** BakedModel.getModelData ⇒ 我们的 gatherModelData 在单格路径下根本不会被调用
-#      ⇒ 模型数据里没有伪装字段 ⇒ getQuads 一个外壳四元组都不产出（表现就是「单格不渲染」）。
-#   ④ 本工程内修不了的原因：getQuads / getRenderTypes 的入参里 **没有 world + pos**，
-#      拿不到方块实体就取不到材质；而唯一能补的载体（「坐标 → 材质」全局表 / 客户端镜像）
-#      正是上一轮为消残影与「跟随」而**刻意删除**的旧架构（见 ②1 / ②2 / ③6）。要修必须在
-#      Sable 的单格渲染入口补一句 BakedModel.getModelData(...)（= 硬引用 Sable 内部类，
-#      或由上游修）；本工程「零硬引用 Sable」这条不变式（⑤10）不允许这么做。
-#   ⑤ 最小可交付替代（可操作）：把线缆与**任意第二格**（哪怕一块石头）一起物理化 →
-#      结构 ≥2 格时走 VanillaChunkedSubLevelRenderData → SectionCompiler → 外壳正常渲染。
+#      **从不调用** BakedModel.getModelData ⇒ 只靠 gatherModelData 取数的写法在单格路径下必然零外壳。
+#   ④ 本轮修法：让「裹着什么」搭上**方块实体模型数据**这条所有渲染路径都会读的通道
+#      （ClientLevel.getModelData 并上附件；缺省 getter 直接问方块实体；外壳模型在模型数据里
+#      已经带着伪装记录时直接用、getRenderTypes 缺阶段化字段时按材质现算）。详见 ⑧。
 SABLE_JARS = []
 _mods = os.path.join(ROOT, "run", "mods")
 if os.path.isdir(_mods):
@@ -478,16 +472,358 @@ else:
     else:
         print("  [NOTE] 找不到 compiledWithNeoForge_*.jar（Gradle 缓存缺失）⇒ 跳过 ⑦4 的对照取证")
     check(not hard_refs,
-          "⑦5 本工程零硬引用 Sable / Simulated / 航空学（⑤10 同一判据）⇒ 修单格必须新增对 "
-          "Sable 内部类的引用，或由上游修；本工程选择「如实说明 + 给最小替代」")
-    check("RsccCamouflage.get(world, pos)" in body(SHELL_CODE, "protected ModelData.Builder gatherModelData(")
-          and "BlockAndTintGetter" not in body(SHELL_CODE, "public List<BakedQuad> getQuads(")
-          and "BlockPos" not in body(SHELL_CODE, "public List<BakedQuad> getQuads(")
-          and "BlockAndTintGetter" not in body(SHELL_CODE, "public ChunkRenderTypeSet getRenderTypes(")
-          and "BlockPos" not in body(SHELL_CODE, "public ChunkRenderTypeSet getRenderTypes("),
-          "⑦6 外壳取数只发生在 gatherModelData（RsccCamouflage.get(world, pos)），而 getQuads / "
-          "getRenderTypes 的签名里没有任何 BlockAndTintGetter / BlockPos ⇒ 单格路径下无从取数"
-          "（这条就是「本工程内修不了」的根据，与 ②4 / ⑥15 同源）")
+          "⑦5 本工程零硬引用 Sable / Simulated / 航空学（⑤10 同一判据）⇒ 修法必须留在本工程内，"
+          "靠的是「模型数据通道」而不是引用 Sable 的内部类")
+    gather_now = body(SHELL_CODE, "protected ModelData.Builder gatherModelData(")
+    check("CamouflageModelData.camoOf(blockEntityData)" in gather_now
+          and gather_now.index("CamouflageModelData.camoOf(blockEntityData)")
+          < gather_now.index("RsccCamouflage.get(world, pos)"),
+          "⑦6 单格路径的取数已由「模型数据通道」补齐：gatherModelData 先读引擎递进来的方块实体模型数据"
+          "（物理化单格那条路径把 ClientLevel.getModelData 直接交给 getQuads，因此这条通道拿得到），"
+          "读不到才回落去问世界里的方块实体 —— 单格路径不再依赖那次「不会被调用」的回调")
+    check("shellLayers(camo, rand, data)" in body(SHELL_CODE, "public ChunkRenderTypeSet getRenderTypes(")
+          and "modelOf(material).getRenderTypes(material, rand, wrappedData(data))"
+          in body(SHELL_CODE, "private ChunkRenderTypeSet shellLayers("),
+          "⑦7 渲染层也补上了单格路径：模型数据里没有阶段化的 SHELL_LAYERS 时，按<b>材质自己的模型</b>现算"
+          "（只查烘焙模型表、不读世界 / 坐标）—— 否则引擎不会为材质所在的层调用 getQuads，"
+          "外壳仍然一个四元组都产不出来")
+
+# ============================================================ ⑧ 材质数据通道（本轮渲染修复）
+print()
+print("=" * 100)
+print("⑧ 材质数据通道：写 = 数据附件（setData ⇒ setChanged + syncData），读 = 同一份附件的模型数据投影")
+print("=" * 100)
+MODEL_DATA = java("client", "model", "CamouflageModelData.java")
+MODEL_DATA_CODE = code_only(MODEL_DATA)
+CLIENT_LEVEL_MIXIN = java("mixin", "client", "CamouflageClientLevelModelDataMixin.java")
+CLIENT_LEVEL_MIXIN_CODE = code_only(CLIENT_LEVEL_MIXIN)
+GETTER_MIXIN = java("mixin", "client", "CamouflageGetterModelDataMixin.java")
+GETTER_MIXIN_CODE = code_only(GETTER_MIXIN)
+MIXINS_CFG = read_text(os.path.join(ROOT, "src", "main", "resources", "rs_create_compat.mixins.json"))
+INTERACTION_CODE = code_only(INTERACTION)
+
+
+def read_zip_text(jar, entry):
+    """从 jar 里直接读一个文本条目（不落盘：C 盘只剩几 GB，绝不整包解压）。"""
+    import zipfile
+    with zipfile.ZipFile(jar) as zf:
+        return zf.read(entry).decode("utf-8", "replace")
+
+
+def newest(pattern):
+    hits = glob.glob(pattern)
+    return max(hits, key=os.path.getmtime) if hits else None
+
+
+# ⑧1 只有一份「伪装记录」属性：外壳模型里的 CAMOUFLAGE_PROPERTY 必须是同一个实例的别名
+check("public static final ModelProperty<RsccCamouflage.Camo> CAMOUFLAGE" in MODEL_DATA_CODE
+      and "ModelData.of(CAMOUFLAGE, camo)" in MODEL_DATA_CODE
+      and re.sub(r"\s+", "", "CAMOUFLAGE_PROPERTY=CamouflageModelData.CAMOUFLAGE;")
+      in re.sub(r"\s+", "", SHELL_CODE),
+      "⑧1 模型数据属性只有一个实例：CamouflageShellModel.CAMOUFLAGE_PROPERTY = "
+      "CamouflageModelData.CAMOUFLAGE（两条到达模型的通道必须读同一个键，否则等于两份状态）")
+
+# ⑧2 取数顺序：先「引擎递进来的方块实体模型数据」，读不到才回落问世界
+gather_now = body(SHELL_CODE, "protected ModelData.Builder gatherModelData(")
+check("CamouflageModelData.camoOf(blockEntityData)" in gather_now
+      and gather_now.index("CamouflageModelData.camoOf(blockEntityData)")
+      < gather_now.index("RsccCamouflage.get(world, pos)"),
+      "⑧2 gatherModelData 先读方块实体模型数据（物理化单格那条路径唯一拿得到的通道），"
+      "读不到才回落 RsccCamouflage.get(world, pos)（区块 / 装置烘焙的实际来源）")
+
+# ⑧3 getQuads：BASE_DATA_PROPERTY 缺席时把 data 原样转交给被裹模型（否则线缆会丢连接臂）
+quads_now = body(SHELL_CODE, "public List<BakedQuad> getQuads(")
+check("base != null ? base :" in re.sub(r"\s+", " ", quads_now)
+      and "originalModel.getQuads(state, side, rand, forwarded, renderType)" in quads_now,
+      "⑧3 getQuads 在「没有阶段化 BASE_DATA_PROPERTY」时把整份 data 转交给被裹方块自己的模型"
+      "（物理化单格路径下 RS 线缆的 CABLE_CONNECTIONS 就在 data 里，转发丢了就只剩光秃秃的芯柱）")
+
+# ⑧4 getRenderTypes：缺 SHELL_LAYERS 时按材质现算，绝不退回「框架层」
+check("shellLayers(camo, rand, data)" in body(SHELL_CODE, "public ChunkRenderTypeSet getRenderTypes(")
+      and "modelOf(material).getRenderTypes(material, rand, wrappedData(data))"
+      in body(SHELL_CODE, "private ChunkRenderTypeSet shellLayers("),
+      "⑧4 渲染层缺字段时按材质自己的模型现算（纯模型查表，不读世界 / 坐标）："
+      "材质在 solid / translucent 层时，引擎才会为那一层调用 getQuads")
+
+# ⑧5 四元组阶段仍然画「材质自己的模型」（与 Create 伪装板同一句）
+check("model.getQuads(material, side, rand, wrapped, renderType)"
+      in body(SHELL_CODE, "private List<BakedQuad> shellQuads("),
+      "⑧5 外壳四元组 = 材质方块自己的模型（与 Create 伪装板同一句 getModelOf(material).getQuads）")
+
+# ⑧6 客户端模型数据：ClientLevel#getModelData 的返回处并上附件
+check("@Mixin(ClientLevel.class)" in CLIENT_LEVEL_MIXIN
+      and 'method = "getModelData(Lnet/minecraft/core/BlockPos;)' in CLIENT_LEVEL_MIXIN
+      and "getExistingDataOrNull(RsccCamouflageAttachment.CAMOUFLAGE.get())" in CLIENT_LEVEL_MIXIN_CODE
+      and "CamouflageModelData.withCamo(cir.getReturnValue(), camo)" in CLIENT_LEVEL_MIXIN_CODE,
+      "⑧6 ClientLevel#getModelData 的返回值并上同一份附件（物理化单格把它的返回值直接交给 getQuads）")
+
+# ⑧7 缺省 getter：没有自己覆写 getModelData 的 BlockAndTintGetter 直接问方块实体
+check("@Mixin(BlockAndTintGetter.class)" in GETTER_MIXIN
+      and "default ModelData getModelData(final BlockPos pos)" in GETTER_MIXIN
+      and "getBlockEntity(pos)" in GETTER_MIXIN_CODE
+      and "CamouflageModelData.of(camo)" in GETTER_MIXIN_CODE,
+      "⑧7 没有覆写 getModelData 的 BlockAndTintGetter（物理化单格 wrapper / 第三方包装）"
+      "默认直接问 getBlockEntity(pos) 的附件 —— 与 ⑧6 是同一份数据")
+
+# ⑧8 两个 mixin 只登记在 client 段（专服不加载）
+import json as _json
+_mixins = _json.loads(MIXINS_CFG)
+check("client.CamouflageClientLevelModelDataMixin" in _mixins.get("client", [])
+      and "client.CamouflageGetterModelDataMixin" in _mixins.get("client", [])
+      and "client.CamouflageClientLevelModelDataMixin" not in _mixins.get("mixins", [])
+      and "client.CamouflageGetterModelDataMixin" not in _mixins.get("mixins", []),
+      "⑧8 两个新 Mixin 只登记在 mixins.json 的 client 段（专用服务端不加载，避免引用客户端类型）")
+
+# ⑧9 写路径 = write(...) 两步：setData（附件同步）+ notifyClient（请重烘）
+write_now = body(CAMOU_CODE, "private static void write(")
+check("be.setData(RsccCamouflageAttachment.CAMOUFLAGE.get(), camo)" in write_now
+      and "notifyClient(level, List.of(be.getBlockPos()))" in write_now,
+      "⑧9 所有单格改动只经 write(...)：先 setData（附件写 + NeoForge 同步），再 notifyClient（重烘）")
+
+# ⑧10 源码级证明「写即同步」：BlockEntity.setData ⇒ setChanged() + super.setData（⇒ syncData ⇒
+#     AttachmentSync.syncBlockEntityUpdate 下发）。两份源码都从缓存 jar 里直接读，不落盘。
+_mc_src = newest(os.path.join(gc.cache_root()[0], "neoformruntime", "intermediate_results",
+                              "sourcesAndCompiledWithNeoForge_*_output.jar"))
+_ng_src, _ng_notes = gc.find_jar("net.neoforged", "neoforge", kind="sources")
+try:
+    _be_src = read_zip_text(_mc_src, "net/minecraft/world/level/block/entity/BlockEntity.java")
+    _set_data = body(_be_src, "public final <T> T setData(")
+    _sync_data = body(_be_src, "public final void syncData(")
+    _holder_src = read_zip_text(_ng_src, "net/neoforged/neoforge/attachment/AttachmentHolder.java")
+    _holder_set = body(_holder_src, "public <T> @Nullable T setData(")
+    check("setChanged();" in _set_data and "super.setData(type, data);" in _set_data
+          and "AttachmentSync.syncBlockEntityUpdate(this, type);" in _sync_data
+          and "syncData(type);" in _holder_set,
+          "⑧10 源码级：BlockEntity#setData = setChanged() + super.setData(...)，而 AttachmentHolder#setData "
+          "会调 syncData(type)，BlockEntity#syncData 直接走 AttachmentSync.syncBlockEntityUpdate "
+          "⇒ 「写附件」这一步天然带存档脏标记 + 下发观察者（不需要我们再补 setChanged / 手写同步包）")
+except (OSError, KeyError, TypeError, ValueError, SystemExit) as _exc:  # pragma: no cover - 缓存缺失时显式判负
+    check(False, "⑧10 源码级：BlockEntity#setData ⇒ setChanged + syncData（取证失败：%r）" % (_exc,))
+
+# ⑧11 渲染侧没有第二份状态（不许回到「坐标 → 材质」表 / 客户端镜像 / 复制 CopycatBlockEntity）
+_render_side = CLIENT_LEVEL_MIXIN_CODE + GETTER_MIXIN_CODE + MODEL_DATA_CODE
+check(all(banned not in _render_side for banned in
+          ("SavedData", "mirrored", "renderCells", "CopycatBlockEntity", "Map<BlockPos")),
+      "⑧11 渲染侧没有第二份状态：两个 Mixin / 模型数据只做「附件 → 模型数据」的投影，"
+      "不查全局表、不建客户端镜像、不读 CopycatBlockEntity（与 ②1 / ②2 / ③6 同一条纪律）")
+
+# ⑧12 专服安全：这三个客户端类不许被任何 common 类引用
+_model_data_refs = []
+for _folder, _dirs, _names in os.walk(os.path.join(ROOT, "src", "main", "java")):
+    for _name in _names:
+        if not _name.endswith(".java"):
+            continue
+        _path = os.path.join(_folder, _name)
+        _text = code_only(read_text(_path))
+        if "CamouflageModelData" in _text:
+            _rel = os.path.relpath(_path, ROOT).replace("\\", "/")
+            if "/client/" not in _rel and "/mixin/client/" not in _rel:
+                _model_data_refs.append(_rel)
+check(not _model_data_refs,
+      "⑧12 只有 client 包 / client 段 Mixin 引用 CamouflageModelData（common 类零引用 ⇒ 专服不会解析到它）",
+      "命中: %s" % _model_data_refs)
+
+# ⑧13 单格装壳 / 换壳都落在同一条写路径上（且先写记录、再扣物品）
+_apply = body(INTERACTION_CODE, "private static void applyMaterial(")
+check("RsccCamouflage.setMaterial(level, pos, material, consumed)" in _apply
+      and _apply.index("RsccCamouflage.setMaterial(") < _apply.index("stack.consume(1, player)"),
+      "⑧13 手动逐个套壳（换 / 装外壳）走 RsccCamouflage.setMaterial → write → setData + notifyClient，"
+      "且先写记录再扣物品（写不进去就绝不扣）")
+
+# ⑧14 反例自证：把「只写不 sync」「只读不写」「没有模型数据通道」的写法喂给判据 ⇒ 必须判负
+def judge_write_sync(src):
+    """⑧ 的判据：一次材质写入必须同时包含「附件写入」与「重烘通知」两步。"""
+    code = code_only(src)
+    return "be.setData(" in code and "notifyClient(" in code
+
+
+def judge_model_channel(src):
+    """⑧ 的判据：外壳取数必须能从「方块实体模型数据」这条通道读到，且渲染层能现算。"""
+    code = code_only(src)
+    return ("camoOf(blockEntityData)" in code
+            and "RsccCamouflage.get(world, pos)" in code
+            and "shellLayers(" in code)
+
+
+COUNTER_ONLY_READ = """
+private static void write(ServerLevel level, BlockEntity be, Camo camo) {
+    be.getExistingDataOrNull(RsccCamouflageAttachment.CAMOUFLAGE.get());
+}
+"""
+COUNTER_WRITE_NO_SYNC = """
+private static void write(ServerLevel level, BlockEntity be, Camo camo) {
+    be.setData(RsccCamouflageAttachment.CAMOUFLAGE.get(), camo);
+}
+"""
+COUNTER_NO_MODEL_CHANNEL = """
+protected ModelData.Builder gatherModelData(Builder builder, BlockAndTintGetter world, BlockPos pos,
+        BlockState state, ModelData blockEntityData) {
+    Camo camo = RsccCamouflage.get(world, pos);
+    if (camo == null) { return builder; }
+    builder.with(CAMOUFLAGE_PROPERTY, camo);
+    return builder;
+}
+"""
+check(not judge_write_sync(COUNTER_ONLY_READ)
+      and not judge_write_sync(COUNTER_WRITE_NO_SYNC)
+      and judge_write_sync(CAMOU_CODE)
+      and not judge_model_channel(COUNTER_NO_MODEL_CHANNEL)
+      and judge_model_channel(SHELL),
+      "⑧14 反例自证：判据对「只读不写」「只写不 sync」判负，对真实写入路径判正；"
+      "对「只有 gatherModelData 现问世界」的旧外壳模型判负（⑥ 的旧写法），对当前实现判正")
+
+# ============================================================ ⑨ 连锁应用材质
+print()
+print("=" * 100)
+print("⑨ 连锁应用材质：手持方块 + 连锁键 ⇒ 同族伪装格批量换材质（上限 / 去重 / 权限 / 距离 / 逐块容错 / 提示）")
+print("=" * 100)
+CHAIN = java("support", "RsccCamouflageChain.java")
+CHAIN_CODE = code_only(CHAIN)
+SHEATH_CODE = code_only(java("support", "RsccSheathChain.java"))
+ULTIMINE_CODE = code_only(java("support", "RsccUltimineIntegration.java"))
+ULTIMINE_SRC = java("support", "RsccUltimineIntegration.java")
+
+# ⑨1 唯一入口 + 只处理「已经裹着」的格
+check("public static int chainApplyMaterial(" in CHAIN_CODE
+      and "if (!RsccCamouflage.isCamouflaged(level, anchor))" in CHAIN_CODE
+      and "if (!RsccCamouflage.isCamouflaged(level, pos))" in CHAIN_CODE,
+      "⑨1 连锁应用材质只有一个入口，且只改「已经是伪装格」的那些（命中格没裹住 ⇒ 返回 0 交回 FTB / 原版）")
+
+# ⑨2 上限：FTB 的 maxBlocks + 手里真的有那么多块（与既有 affordable 同一口径）
+check("limit <= 0" in CHAIN_CODE and "targets.size() >= limit" in CHAIN_CODE
+      and "targets.size() >= stack.getCount()" in CHAIN_CODE,
+      "⑨2 上限沿用 FTB 对这名玩家生效的 maxBlocks，再叠加手持数量（普通模式）；创造模式不设数量上限")
+
+# ⑨3 去重
+check("new LinkedHashSet<>()" in CHAIN_CODE and "targets.add(pos)" in CHAIN_CODE,
+      "⑨3 去重：LinkedHashSet 保序去重（同一格不会被写两次、扣两次）")
+
+# ⑨4 权限 + 距离
+check("player.mayBuild()" in CHAIN_CODE
+      and "Component.translatable(MSG_CANNOT_BUILD)" in CHAIN_CODE
+      and "RsccBusClipboard.ULTIMINE_MAX_DISTANCE" in CHAIN_CODE
+      and "withinReach(player, pos)" in CHAIN_CODE,
+      "⑨4 权限与距离：mayBuild（没权限给出提示），距离复用 RsccBusClipboard.ULTIMINE_MAX_DISTANCE（32 格）")
+
+# ⑨5 批量写入：一次事务 + 每格 try/catch + 一次按区块聚合的重烘
+_set_all = body(CAMOU_CODE, "public static BulkWrite setMaterialAll(")
+check("for (final BlockPos pos : new LinkedHashSet<>(positions))" in _set_all
+      and "try {" in _set_all and "catch (final RuntimeException e)" in _set_all
+      and "be.setData(RsccCamouflageAttachment.CAMOUFLAGE.get()," in _set_all
+      and "notifyClient(level, written)" in _set_all
+      and "return new BulkWrite(changed, failed, refunds)" in _set_all,
+      "⑨5 setMaterialAll = 一批一次事务：逐格 setData（附件同步）＋逐块 try/catch＋整批只发一次重烘")
+
+# ⑨6 失败不静默 / 守恒（先写后扣、旧外壳原样归还）
+check("Component.translatable(MSG_NO_TARGET)" in CHAIN_CODE
+      and "Component.translatable(MSG_PARTIAL" in CHAIN_CODE
+      and "Component.translatable(MSG_FULL_BLOCK_ONLY)" in CHAIN_CODE
+      and CHAIN_CODE.index("RsccCamouflage.setMaterialAll(") < CHAIN_CODE.index("stack.consume(result.changed(), player)")
+      and "CamouflageFrameItem.give(player, refund.copy())" in CHAIN_CODE,
+      "⑨6 失败一定有提示（没有可改的格 / 部分失败 / 方块不能当外壳 / 没权限），"
+      "且守恒：先写记录再扣新材质，旧外壳原样归还")
+
+# ⑨7 与既有连锁的触发区分：剪贴板 → 框架 → 材质，且框架那一支返回 >0 就不再往下走
+_chain_branch = body(ULTIMINE_CODE, "private static Object chain(")
+check(_chain_branch.index("AllBlocks.CLIPBOARD.isIn(held)")
+      < _chain_branch.index("RsccSheathChain.chainSheath(")
+      < _chain_branch.index("RsccCamouflageChain.chainApplyMaterial(")
+      and re.search(r"if\s*\(\s*framed\s*>\s*0\s*\)\s*\{\s*return\s+framed;", _chain_branch),
+      "⑨7 触发区分（顺序即语义）：剪贴板 → 框架（套上 / 取下，>0 直接返回）→ 材质；"
+      "拿框架连锁的语义一字未改，拿方块连锁才改材质")
+
+# ⑨8 规划复用既有 BFS（同族口径只有一处）
+check("public static List<BlockPos> planTargets(" in SHEATH_CODE
+      and "RsccSheathChain.planTargets(" in CHAIN_CODE,
+      "⑨8 「哪几格属于同一段管线」复用 RsccSheathChain.planTargets（同族 BFS / 上限口径只有一份）")
+
+# ⑨9 只接受方块物品（材质），且外壳判定复用 Create
+check("stack.getItem() instanceof BlockItem" in CHAIN_CODE
+      and "getAcceptedBlockState(level, anchor, stack, face)" in CHAIN_CODE,
+      "⑨9 手里必须是方块物品，且「能不能当外壳」复用 Create 的 getAcceptedBlockState（不另立口径）")
+
+# ⑨10 文案键齐备（两份语言文件都要有；缺了玩家看到的是原始 key）
+_zh = read_text(os.path.join(ROOT, "src", "main", "resources", "assets", "rs_create_compat",
+                             "lang", "zh_cn.json"))
+_en = read_text(os.path.join(ROOT, "src", "main", "resources", "assets", "rs_create_compat",
+                             "lang", "en_us.json"))
+for _key in ("message.rs_create_compat.camouflage_chain.none",
+             "message.rs_create_compat.camouflage_chain.partial"):
+    check(('"%s"' % _key) in _zh and ('"%s"' % _key) in _en,
+          "⑨10 文案键在中英两份语言文件里都存在：%s" % _key)
+
+# ⑨11 反例自证：无上限 / 静默失败 / 无逐块容错 的写法 ⇒ 判负
+def judge_chain_entry(src):
+    """⑨ 的判据（入口）：上限 + 去重 + 权限 + 失败提示 + 交给批量写入。"""
+    code = code_only(src)
+    required = (
+        "targets.size() >= limit",          # 上限（FTB maxBlocks）
+        "LinkedHashSet",                    # 去重
+        "player.mayBuild()",                # 权限
+        "displayClientMessage",             # 失败不静默
+        "RsccCamouflage.setMaterialAll(",   # 交给唯一批量写入
+    )
+    return all(token in code for token in required)
+
+
+def judge_batch_write(src):
+    """⑨ 的判据（批量写入）：逐块容错 + 数据写入 + 一次重烘。"""
+    code = code_only(src)
+    required = (
+        "catch (final RuntimeException",    # 逐块容错
+        "be.setData(",                      # 数据写入（同步由 NeoForge 承诺，见 ⑧10）
+        "notifyClient(level, written)",     # 整批只发一次重烘
+        "getExistingDataOrNull",            # 只改「已经裹着」的格
+        "BulkWrite",                        # 把失败格数带回给调用方
+    )
+    return all(token in code for token in required)
+
+
+COUNTER_NO_LIMIT = """
+public static int chainApplyMaterial(ServerPlayer player, BlockPos anchor) {
+    Set<BlockPos> targets = new LinkedHashSet<>();
+    if (!player.mayBuild()) { player.displayClientMessage(msg, true); }
+    for (BlockPos pos : targets) {
+        try { be.setData(CAMOUFLAGE.get(), camo); } catch (final RuntimeException e) { }
+    }
+    return RsccCamouflage.setMaterialAll(level, targets, material, consumed).changed();
+}
+"""
+COUNTER_SILENT = """
+public static int chainApplyMaterial(ServerPlayer player, BlockPos anchor, int limit) {
+    Set<BlockPos> targets = new LinkedHashSet<>();
+    if (!player.mayBuild()) { return 0; }
+    for (BlockPos pos : targets) {
+        if (targets.size() >= limit) { break; }
+    }
+    return RsccCamouflage.setMaterialAll(level, targets, material, consumed).changed();
+}
+"""
+COUNTER_WRITE_ONLY = """
+public static BulkWrite setMaterialAll(ServerLevel level, Collection<BlockPos> positions) {
+    List<BlockPos> written = new ArrayList<>();
+    for (BlockPos pos : positions) {
+        BlockEntity be = level.getBlockEntity(pos);
+        be.setData(CAMOUFLAGE.get(), camo);
+        written.add(pos);
+    }
+    return new BulkWrite(written.size(), 0, List.of());
+}
+"""
+check(judge_chain_entry(CHAIN_CODE)
+      and judge_batch_write(_set_all)
+      and not judge_chain_entry(COUNTER_NO_LIMIT)
+      and not judge_chain_entry(COUNTER_SILENT)
+      and not judge_batch_write(COUNTER_WRITE_ONLY),
+      "⑨11 反例自证：判据对「无上限 / 静默失败 / 无逐块容错且不重烘」的写法判负，"
+      "对真实的连锁入口与批量写入判正")
+
+# ============================================================ ⑩ 结论
+print()
+print("=" * 100)
+print("⑩ 本轮结论：伪装外观 = 同一份附件的两种投影（区块 / 装置走 gatherModelData，"
+      "物理化单格 / 第三方走去重后的模型数据）；连锁应用材质 = 同一批事务（上限 / 去重 / 权限 / 距离 / 容错 / 提示）")
+print("=" * 100)
 
 print()
 print("=" * 100)

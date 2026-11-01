@@ -109,7 +109,11 @@ public class SequenceAssemblyExecutorBlock extends Block implements EntityBlock 
                 new BlockContentReleaser.Host() {
                     @Override
                     public void collectItems(final List<ItemStack> out) {
-                        // 执行器库存全部是样板类内容（见 collectPatterns）
+                        // 现在不空了：第 121 轮起执行器有「上游缓冲」—— RS 已经当作消费成功交给本机、
+                        // 但还没写回网络的普通物品就停在这里。它<b>不是样板类内容</b>，所以走「物品」这一档
+                        // （回网 / 爆出 / 存方块 NBT 由 BlockContentReleaser 统一决定），不要并进 collectPatterns
+                        // （样板永不回网，并进去会把可回网的缓冲物品错误地按样板处理）。
+                        executor.collectBufferedItems(out);
                     }
 
                     @Override
@@ -119,7 +123,16 @@ public class SequenceAssemblyExecutorBlock extends Block implements EntityBlock 
 
                     @Override
                     public void collectFluids(final List<FluidStack> out) {
-                        // 本方块不含流体
+                        // 现在不空了：上游缓冲里可能停着还没写回网络的流体（本方块仍然没有自己的流体储罐）。
+                        // 交给结算器的流体硬规则（能回网就回网，回不去就整份存进方块 NBT 余量按桶落地）。
+                        executor.collectBufferedFluids(out);
+                    }
+
+                    @Override
+                    public List<FluidStack> receiveFluids(final List<FluidStack> stacks) {
+                        // 余量先回缓冲（受 128000 mB 硬上限约束），放不下才交回结算器按桶落地 ——
+                        // 否则「网络已满 + 装不成桶的气体类流体」会在默认全拒的 receiveFluids 上被丢弃。
+                        return executor.receiveBufferedFluids(stacks);
                     }
                 });
         }

@@ -21,7 +21,9 @@ import net.minecraft.world.item.ItemStack;
  * <p>三项：{@link #requiresInput()}（是否需要输入原料）、{@link #recipeType()}（配方类型 id，如
  * {@code create:pressing}）、{@link #name()}（用户自定义名）；{@link #input()} 为可选的输入标记物品。</p>
  * <p>写入目标 {@link #targetSlot()}：{@code -1} = 写入当前终端菜单的单元样板输出槽；
- * {@code >= 0} = 写入终端单元样板库的该下标（越界自动收敛到末格）。</p>
+ * {@code >= 0} = 写入终端单元样板库的该下标。<b>第 117 轮更正</b>：越界<b>不是</b>「收敛到末格」——
+ * 第 116 轮起 {@code >= max(当前容量, 1024)} 一律拒绝并提示（见 {@code warnLibraryFull}），
+ * 而两个哨兵以外的负下标也一并拒绝（旧注释写的「收敛」与实现不符，复核 L2 报出）。</p>
  * <p>说明：新语义下单元样板不再绑定具体机器，因此旧 {@code machine}/{@code crafter} 分量写空串；
  * 每一步的机器在导出装配样板时按 recipeType 自动指派（见终端方块实体）。</p>
  *
@@ -39,7 +41,10 @@ public record CreateUnitPatternPacket(String recipeType, String name, boolean re
                                       ItemStack input, int targetSlot) implements CustomPacketPayload {
     /** targetSlot 取值：写入当前菜单的单元样板输出槽。 */
     public static final int TARGET_OUTPUT_SLOT = -1;
-    /** targetSlot 取值：写入终端单元样板库的第一个空位（库满时自动扩容追加，不覆盖已有样板）。 */
+    /**
+     * targetSlot 取值：写入终端单元样板库的第一个空位（<b>第 117 轮更正</b>：不再是「库满时自动扩容
+     * 追加」——第 116 轮起库有 1024 格硬上限，到上限后本包拒绝写入并提示，原有样板一张不动）。
+     */
     public static final int TARGET_FIRST_EMPTY_LIBRARY = -2;
 
     public static final Type<CreateUnitPatternPacket> TYPE =
@@ -63,8 +68,16 @@ public record CreateUnitPatternPacket(String recipeType, String name, boolean re
             return;
         }
         final HolderLookup.Provider registries = terminal.getLevel().registryAccess();
-        final String recipeType = packet.recipeType() == null ? "" : packet.recipeType();
         final ItemStack input = packet.input() == null ? ItemStack.EMPTY : packet.input().copy();
+        // 第 116 轮：三项全部是客户端给的、都会写进单元样板的 CustomData 并永久落盘
+        //（物品带全部数据组件、名字与配方类型是任意长字符串）。这里按「同一把尺」先判后写：
+        // 超限就整包拒绝（不生成、不落盘、不动任何已有样板）+ 日志留证 + 动作栏告知。
+        if (cretae.cookiewyq.rs_create_compat.support.MarkerBudget.isStackTooBig(input, registries)
+            || tooLong(packet.name()) || tooLong(packet.recipeType())) {
+            rejectTooLarge(player);
+            return;
+        }
+        final String recipeType = packet.recipeType() == null ? "" : packet.recipeType();
         final ItemStack unit = new ItemStack(RS_Create_Compat.SEQUENCE_UNIT_PATTERN.get());
         SequencePatternData.writeUnit(unit, new SequencePatternData.UnitData(
             "", input, "", "", -1,
@@ -96,20 +109,131 @@ public record CreateUnitPatternPacket(String recipeType, String name, boolean re
         }
 
         if (packet.targetSlot() == TARGET_OUTPUT_SLOT) {
+            // 第 117 轮（复核 L2）：输出槽里可能已经有一张样板（界面允许连续生成 / 玩家先放一张在那）。
+            // 旧实现直接 setStackInSlot(0, unit) ⇒ 被顶掉的那张样板（是物品）凭空消失。
+            // 按本工程「绝不销毁玩家物品」的规矩：先把旧样板交给玩家（背包放不下就掉在脚下），再写入。
+            final ItemStack previous = terminal.unitOutputSlot.getStackInSlot(0);
+            if (!previous.isEmpty()) {
+                final ItemStack refund = previous.copy();
+                terminal.unitOutputSlot.setStackInSlot(0, ItemStack.EMPTY);
+                if (!player.getInventory().add(refund)) {
+                    player.drop(refund, false);
+                }
+            }
             terminal.unitOutputSlot.setStackInSlot(0, unit);
         } else {
             // 负值哨兵（首空位）在服务端换算成真实下标；正值直接按库下标写入。
-            // 库无上限：越界写入会自动扩容（不再收敛到末格，避免覆盖已有样板）。
-            // 网络边界防护：最多允许写到「末尾空槽」位置（即扩容一格），避免恶意包用超大下标撑爆库。
+            // 库可自动扩容，但第 116 轮起有<b>容量硬上限</b>（{@code MAX_UNIT_LIBRARY_SLOTS}）：
+            // 到上限后一律拒绝新增写入（原有样板一张不动），绝不越界扩容 / 覆盖末格。
+            // 上限按「max(当前容量, 硬上限)」算：旧存档里已经超过上限的库，仍允许玩家编辑它已有的格。
+            if (packet.targetSlot() < 0 && packet.targetSlot() != TARGET_FIRST_EMPTY_LIBRARY) {
+                // 第 117 轮（复核 L2）：除了两个哨兵之外的负下标一律非法（改包可达）。
+                // 旧实现的 Math.max(0, ·) 会把它写到 0 号格、覆盖一张已有样板 —— 静默做错事。
+                // 合法界面不会发出这种请求，所以这里只留日志（每进程一条），不给玩家造一条假提示。
+                warnNegativeTarget();
+                return;
+            }
+            final int writableLimit = Math.max(terminal.unitLibrary.getSlots(),
+                SequencePatternTerminalBlockEntity.MAX_UNIT_LIBRARY_SLOTS);
+            if (packet.targetSlot() >= writableLimit) {
+                warnLibraryFull(player);
+                return;
+            }
             final int requested = packet.targetSlot() == TARGET_FIRST_EMPTY_LIBRARY
-                ? firstEmptyLibrarySlot(terminal) : Math.max(0, packet.targetSlot());
+                ? firstEmptyLibrarySlot(terminal) : packet.targetSlot();
+            if (requested < 0) {
+                // firstEmptySlot() 返回 -1 = 库已满且到上限
+                warnLibraryFull(player);
+                return;
+            }
+            // 第 118 轮：格数够之外还有「合计体积预算」这道闸（见 support/UnitLibraryLimits）。
+            // 两道闸各自独立：格数满 = firstEmptySlot 返回 -1 / 下标越界；体积满 = 下面这一条。
+            if (!terminal.unitLibrary.canAcceptMore(unit)) {
+                warnLibraryBytesFull(player);
+                return;
+            }
             final int slot = Math.min(requested, terminal.unitLibrary.getSlots());
-            terminal.unitLibrary.setStackInSlot(slot, unit);
+            if (!terminal.unitLibrary.trySetStackInSlot(slot, unit)) {
+                // 写入入口（唯一）自己的兜底判据：正常到不了这里（上面已判过），
+                // 但万一撞上就按「库已满」提示，绝不静默吞掉玩家这次新建。
+                warnLibraryBytesFull(player);
+            }
         }
         terminal.setChanged();
     }
 
-    /** 单元样板库的第一个空位下标（库满时返回末尾，写入即自动扩容追加，不会覆盖已占用格）。 */
+    /**
+     * 非法负下标（改包可达）的 WARN：每进程一条。合法界面只会发 {@link #TARGET_OUTPUT_SLOT} 与
+     * {@link #TARGET_FIRST_EMPTY_LIBRARY} 两个哨兵，所以这里不给玩家造提示（玩家永远看不到）。
+     */
+    private static boolean negativeTargetWarned;
+
+    private static void warnNegativeTarget() {
+        if (negativeTargetWarned) {
+            return;
+        }
+        negativeTargetWarned = true;
+        LOGGER.warn("[rs_create_compat] 序列终端：拒绝了一次非法 targetSlot（负下标，除两个哨兵外都非法）——"
+            + "旧实现会用 Math.max(0, ·) 把它写到 0 号格覆盖已有样板；正常界面不会发出这种请求");
+    }
+
+    /** 是否超过字符串长度上限（第 116 轮：{@code readUtf} 以前只受包长限制，可写进 NBT 的内容无界）。 */
+    private static boolean tooLong(final String value) {
+        return value != null && value.length() > SequencePatternTerminalBlockEntity.MAX_IMPORT_STRING_LENGTH;
+    }
+
+    private static final org.slf4j.Logger LOGGER =
+        org.slf4j.LoggerFactory.getLogger("rs_create_compat/CreateUnitPatternPacket");
+
+    /** 「库里已到上限」的 WARN：每进程只打一条 + 给玩家一条动作栏提示（否则「点了没反应」）。 */
+    private static boolean libraryFullWarned;
+
+    private static void warnLibraryFull(final ServerPlayer player) {
+        if (!libraryFullWarned) {
+            libraryFullWarned = true;
+            LOGGER.warn("[rs_create_compat] 序列终端：单元样板库已达容量上限 {} 格，拒绝新增单元样板"
+                    + "（原有样板未改动）；请先取出一些单元样板",
+                SequencePatternTerminalBlockEntity.MAX_UNIT_LIBRARY_SLOTS);
+        }
+        player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+            "gui.rs_create_compat.sequence_pattern_terminal.generate.library_full",
+            SequencePatternTerminalBlockEntity.MAX_UNIT_LIBRARY_SLOTS), true);
+    }
+
+    /** 「库里已到<b>合计体积</b>上限」的 WARN（第 118 轮）：每进程只打一条 + 同样的动作栏提示。 */
+    private static boolean libraryBytesFullWarned;
+
+    private static void warnLibraryBytesFull(final ServerPlayer player) {
+        if (!libraryBytesFullWarned) {
+            libraryBytesFullWarned = true;
+            LOGGER.warn("[rs_create_compat] 序列终端：单元样板库已达合计体积上限 ≈ {} KB 线上，拒绝新增单元样板"
+                    + "（原有样板未改动）；请先取出一些单元样板",
+                cretae.cookiewyq.rs_create_compat.support.UnitLibraryLimits.MAX_LIBRARY_WIRE_KB);
+        }
+        player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+            "gui.rs_create_compat.sequence_pattern_terminal.generate.library_full_bytes",
+            cretae.cookiewyq.rs_create_compat.support.UnitLibraryLimits.MAX_LIBRARY_WIRE_KB), true);
+    }
+
+    /** 「数据过大已拒绝」的 WARN + 玩家动作栏提示：每进程只打一条日志。 */
+    private static boolean tooLargeWarned;
+
+    private static void rejectTooLarge(final ServerPlayer player) {
+        if (!tooLargeWarned) {
+            tooLargeWarned = true;
+            LOGGER.warn("[rs_create_compat] 序列终端：拒绝创建了一张单元样板 —— 输入物品的数据体积或"
+                + "名字 / 配方类型长度超过上限（单条阈值 {} 堆估算 ≈ 2 KB 线上意图、字符串 {} 字符）；正常界面操作不会触发",
+                cretae.cookiewyq.rs_create_compat.support.MarkerBudget.MAX_ENTRY_BYTES,
+                SequencePatternTerminalBlockEntity.MAX_IMPORT_STRING_LENGTH);
+        }
+        player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+            "message.rs_create_compat.sequence.marker_too_large"), true);
+    }
+
+    /**
+     * 单元样板库的第一个空位下标（未到上限时库满返回末尾 = 写入即自动扩容追加；
+     * 第 116 轮起<b>到上限后返回 -1</b> = 调用方必须拒绝写入）。
+     */
     private static int firstEmptyLibrarySlot(final SequencePatternTerminalBlockEntity terminal) {
         return terminal.unitLibrary.firstEmptySlot();
     }

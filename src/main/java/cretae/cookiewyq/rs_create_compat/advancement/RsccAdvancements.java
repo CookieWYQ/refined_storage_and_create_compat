@@ -18,6 +18,7 @@ import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * 本模组「玩法型成就」的自定义 criterion 注册点与触发点。
@@ -36,9 +37,14 @@ import net.neoforged.neoforge.registries.DeferredRegister;
  * <p><b>服务端 / 客户端边界</b>：成就判定只存在于服务端（{@link ServerPlayer} 才有
  * {@code PlayerAdvancements}），因此两族 fire 都只在服务端调用：
  * <ul>
- *     <li>{@code fireNearby}：机器自己干活、没有「操作者」语义 → 按原版结构生成一类事件的惯例，
- *     记给动作发生那一刻就在旁边的玩家（半径与完成横幅同口径 64 格）；</li>
- *     <li>{@code fire}：事件天然属于某一个玩家（按快捷键开终端 / 切模式）→ 只发给本人。</li>
+ *     <li>{@code fire(player, …)}：<b>玩家动作</b>（按快捷键开终端 / 切模式 / 用扳手断缝 / 用框架套壳）
+ *     → <b>只发给真正做这件事的那名玩家</b>。用户原话：「应该是谁发出操作才让谁得到进度，
+ *     而不是谁发出操作旁边所有人一起」。因此这几个入口都<b>必须</b>带着操作者；
+ *     拿不到操作者时<b>宁可不发</b>，绝不猜一个「附近的人」；</li>
+ *     <li>{@code fireNearby(level, pos, …)}：<b>机器自己干活、没有「操作者」语义</b>的事件
+ *     （装填器自动打印、缓存仓吸掉落物、自动合成补货…）→ 按原版「结构生成」类事件的惯例，
+ *     记给事件发生那一刻就在旁边的玩家（半径与完成横幅同口径 64 格）。这类事件没有「谁发出的操作」，
+ *     所以不会出现「我点了一下，旁边新人白拿成就」的情况。</li>
  * </ul>
  * 重复 fire 不需要自己去重：原版 {@code PlayerAdvancements.award} 对已完成的 criterion 直接返回
  * false，toast 不会再弹一次。</p>
@@ -175,6 +181,8 @@ public final class RsccAdvancements {
         fireNearby(keeper.getLevel(), keeper.getBlockPos(), ADVANCED_KEEPER_AUTOCRAFTED);
     }
 
+    // ==================== 语义化触发点：玩家动作（只记给操作者本人；拿不到操作者就不发） ====================
+
     /**
      * 一格（或一整段的第一格）刚被套上框架外壳。
      *
@@ -182,28 +190,45 @@ public final class RsccAdvancements {
      * 是「套上」这件事唯一不会漏的 choke point（含 FTB 连锁）。</p>
      *
      * @param infinite 是否为无限分隔框架（不消耗、取下不归还）那一位
+     * @param actor    <b>这一次按右键套壳的玩家</b>（成就只记给他本人；为 {@code null} 时不发，
+     *                 绝不退回「记给附近所有人」—— 用户明确否掉了那种口径）
      */
-    public static void onSheathApplied(final ServerLevel level, final BlockPos pos, final boolean infinite) {
-        fireNearby(level, pos, SHEATH_APPLIED);
+    public static void onSheathApplied(@Nullable final ServerPlayer actor,
+                                       final ServerLevel level, final BlockPos pos, final boolean infinite) {
+        if (actor == null) {
+            return; // 没有操作者就不发：不猜、不散给附近的人
+        }
+        fire(actor, SHEATH_APPLIED);
         if (infinite) {
-            fireNearby(level, pos, SHEATH_APPLIED_INFINITE);
+            fire(actor, SHEATH_APPLIED_INFINITE);
         }
     }
 
     /**
      * 一次批量套壳真正新增了多格（≥2 才算「一整段」；用户要求「首次给整段线缆套壳」）。
+     *
+     * @param actor 触发这次连锁的玩家（成就只记给他本人；{@code null} 不发）
      */
-    public static void onSheathChained(final ServerLevel level, final BlockPos pos) {
-        fireNearby(level, pos, SHEATH_CHAIN);
+    public static void onSheathChained(@Nullable final ServerPlayer actor,
+                                       final ServerLevel level, final BlockPos pos) {
+        if (actor == null) {
+            return;
+        }
+        fire(actor, SHEATH_CHAIN);
     }
 
     /**
      * 刚切换了一道线缆缝的接通状态。
      *
-     * @param wasCut {@code true} = 这一次是「把断掉的接回去」；{@code false} = 这一次是「断开」
+     * @param actor   <b>这一次拿扳手的玩家</b>（成就只记给他本人；{@code null} 不发）
+     * @param wasCut  {@code true} = 这一次是「把断掉的接回去」；{@code false} = 这一次是「断开」
      */
-    public static void onSeamToggled(final ServerLevel level, final BlockPos pos, final boolean wasCut) {
-        fireNearby(level, pos, wasCut ? SEAM_RESTORED : SEAM_CUT);
+    public static void onSeamToggled(@Nullable final ServerPlayer actor,
+                                     final ServerLevel level, final BlockPos pos, final boolean wasCut) {
+        if (actor == null) {
+            return;
+        }
+        fire(actor, wasCut ? SEAM_RESTORED : SEAM_CUT);
     }
 
     // ==================== 语义化触发点：玩家事件（只记给本人） ====================

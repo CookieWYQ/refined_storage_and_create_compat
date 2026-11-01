@@ -216,12 +216,30 @@ EXPECTED_BLOCKS = [
     "sequence_assembly_executor", "sequence_execution_chamber", "unit_pattern_manager",
     "collection_cache", "intermediate_cache",
     "separation_frame", "infinite_separation_frame", "camouflage_frame",
+    # 第 67 轮新增（网络资源接收器 / 请求器）：判据是「注册表命名空间 = 本模组」，
+    # 它们一注册就天然在扳手快速拆卸的覆盖范围内，因此这里必须同步登记
+    # —— 否则本条断言会把「新增方块」误报成「清单不一致」。
+    "network_resource_receiver", "network_resource_requester",
+    # 第 89 轮新增（容器代理器）：同样是「注册表命名空间」判据自动覆盖，这里同步登记；
+    # 它的「扳手右键切换命中面」写在 support/RsccInventoryProxyWrench（方块类里零扳手代码），
+    # 因此不违反本脚本第 5 条：潜行 + 扳手仍先被快速拆卸取消，不潜行才轮到切面。
+    "inventory_proxy",
+    # 第 90 轮新增（区域选定器 + 高级归流缓存仓）：判据同样是「注册表命名空间 = 本模组」，
+    # 一注册就天然在扳手快速拆卸的覆盖范围内，这里同步登记（第 91 个方块清单条目）。
+    "advanced_collection_cache",
+    # 第 99 轮新增（FE 能量立方）：与上面同一条「注册表命名空间 = 本模组」判据，一注册就天然
+    # 在扳手快速拆卸覆盖范围内；方块类里没有任何扳手代码（内容物也只有自身的 FE，不走
+    # BlockContentReleaser），因此不影响本脚本第 5 条。
+    "fe_energy_cube",
+    # 第 101 轮新增（降解室发电机）：同一条「注册表命名空间 = 本模组」判据自动覆盖；
+    # 内容物走 BlockContentReleaser（256 格主库存），方块类里没有扳手代码。
+    "decomposition_generator",
 ]
 registered = sorted(set(re.findall(r'BLOCKS\.register\("([^"]+)"', main)))
-check("本模组注册的方块清单与脚本登记的一致（11 台机器 + 3 个框架方块 = 14 个）",
+check("本模组注册的方块清单与脚本登记的一致（20 个 = 17 台机器 + 3 个框架方块）",
       registered == sorted(EXPECTED_BLOCKS),
       "实际 %d 个：%s" % (len(registered), ",".join(registered)))
-check("覆盖判据是「注册表命名空间 = 本模组」（全部 14 个注册项天然在册）",
+check("覆盖判据是「注册表命名空间 = 本模组」（全部 20 个注册项天然在册）",
       is_dismantlable is not None
       and "BuiltInRegistries.BLOCK.getKey(block)" in is_dismantlable
       and "RS_Create_Compat.MODID.equals(id.getNamespace())" in is_dismantlable)
@@ -235,7 +253,7 @@ check("registration 挂点接在既有扳手挂点之后（同优先级内顺序
 check("主类一行都没改（注册顺带写在既有的 RsccWrenchCableInteraction#register 里）",
       "RsccWrenchDismantle" not in main)
 
-# 推演：命名空间判据覆盖全部 14 个注册项；外来方块不接管
+# 推演：命名空间判据覆盖全部 16 个注册项；外来方块不接管
 def is_dismantlable_model(block_id, own_namespace="rs_create_compat"):
     return block_id.split(":")[0] == own_namespace
 
@@ -243,8 +261,8 @@ def is_dismantlable_model(block_id, own_namespace="rs_create_compat"):
 model_covered = [b for b in EXPECTED_BLOCKS if is_dismantlable_model("rs_create_compat:" + b)]
 model_foreign = [b for b in ("refinedstorage:cable", "create:fluid_pipe", "minecraft:stone")
                  if is_dismantlable_model(b)]
-check("推演：14/14 个本模组方块全部被判据覆盖",
-      len(model_covered) == 14, "%d/14" % len(model_covered))
+check("推演：%d/%d 个本模组方块全部被判据覆盖" % (len(EXPECTED_BLOCKS), len(EXPECTED_BLOCKS)),
+      len(model_covered) == len(EXPECTED_BLOCKS), "%d/%d" % (len(model_covered), len(EXPECTED_BLOCKS)))
 check("推演：RS 线缆 / Create 管道 / 原版方块一律不接管（它们仍由 RS / Create 自己的扳手逻辑处理）",
       not model_foreign, "误接管：%s" % model_foreign)
 

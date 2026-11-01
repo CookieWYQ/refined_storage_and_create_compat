@@ -1,16 +1,21 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.client.AreaOutline;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.menu.CollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.menu.UpgradeSlot;
 import cretae.cookiewyq.rs_create_compat.network.SetCollectionAbsorbTogglePacket;
 import cretae.cookiewyq.rs_create_compat.network.SetCollectionScrollPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetCollectionXpFormPacket;
+import cretae.cookiewyq.rs_create_compat.network.ShowCollectionRangePacket;
 import cretae.cookiewyq.rs_create_compat.support.AbsorbType;
+import cretae.cookiewyq.rs_create_compat.support.Area;
+import cretae.cookiewyq.rs_create_compat.support.AreaSelection;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
 import cretae.cookiewyq.rs_create_compat.support.XpForm;
 import net.minecraft.client.gui.GuiGraphics;
@@ -20,6 +25,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
@@ -43,6 +49,21 @@ import java.util.List;
  * <p>两个区域各有独立的滚动条与偏移（服务端权威，经 ContainerData 同步）。
  * <p>硬规则：<b>精灵坐标 → Menu 坐标 = x、y 均 +1</b>（本类常量全部为 Menu 坐标）；
  * AbstractContainerScreen 不会自动渲染槽位 tooltip，所有 tooltip 都在 {@link #render} 里手动调用。
+ *
+ * <h2>第 99 轮：「查看吸取范围」（用户实机反馈）</h2>
+ * <p>用户原话：「你这个归流缓存器也像这一个范围充电器一样可以显示它这个吸取的范围包括基础和高级的」。
+ * 按钮 / 框选实现放在本类，<b>基础版与高级版共用一份</b>（高级版用它自己那颗「范围」按钮，
+ * 见 {@link #usesOwnRangeButton()} / {@link #rangeTriggerButton()}）。链路与范围充电器逐字同构：</p>
+ * <ol>
+ *     <li>点击 → 原版菜单按钮通道（{@code CollectionCacheMenu.BUTTON_SHOW_RANGE}）；</li>
+ *     <li>服务端校验菜单有效性后，由方块实体把「此刻真正在扫的几何」算成方块区域，经
+ *     {@code ShowCollectionRangePacket}（S2C）下发；</li>
+ *     <li>客户端<b>只画</b>：{@code Area → AABB}（{@code AreaOutline.showForView}），
+ *     5 秒后自动消失、再点一次立即移除、关界面按剩余时长重新武装。</li>
+ * </ol>
+ * <p>四种口径（服务端决定，客户端只按 mode 决定「画」还是「提示」）：基础版半径框 / 高级版选定区域 /
+ * 区域不可用（不画 + 提示）/ 未装选定器（不画 + 提示）。<b>不可用状态绝不画半径框</b> ——
+ * 那会谎报「这片地正在被吸」（方块实体此时 {@code absorbAll} 整段跳过）。</p>
  */
 public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCacheMenu> {
     private static final ResourceLocation TEXTURE =
@@ -62,6 +83,38 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private static final int RANGE_BTN_Y = 4;
     private static final int RANGE_BTN_W = 42;
     private static final int RANGE_BTN_H = 14;
+
+    // ===== 「查看吸取范围」按钮 + 框选（与范围充电器同一套体验：点一次画、再点立即移除、5 秒自动消失） =====
+    /**
+     * 按钮几何：面板底部左下的空白带（升级槽从 x=76 起、玩家背包从 y=242 起，都不碰）。
+     * <p>高级版在同一带回有自己的「区域 / 范围」两颗按钮，因此它覆写 {@link #usesOwnRangeButton()}
+     * 用自己的那颗，不再重复创建本按钮（见 {@code AdvancedCollectionCacheScreen}）。</p>
+     */
+    private static final int SHOW_RANGE_BTN_X = 8;
+    private static final int SHOW_RANGE_BTN_Y = 219;
+    private static final int SHOW_RANGE_BTN_W = 44;
+    private static final int SHOW_RANGE_BTN_H = 16;
+    /**
+     * 框选显示时长（<b>毫秒</b>）：{@code AreaOutline.VIEW_TTL}(100 tick) × 50ms = 5000ms = 5 秒
+     * —— 与范围充电器同一个可见时长。
+     *
+     * <p><b>为什么用墙钟而不是 gameTime</b>：本界面沿用原版 {@code AbstractContainerScreen} 的
+     * {@code isPauseScreen() == true} ⇒ 单机（内置服务端）打开界面时世界被暂停，
+     * {@code level.getGameTime()} 根本不前进，用 tick 计时会让「5 秒后自动消失」永远等不到；
+     * 而 Outliner 在暂停时也不会倒计时（条目静态挂着）。改成墙钟后两种环境都是真 5 秒：
+     * 多人服里世界照常 tick（每 tick 重喂 + 到点停喂）；单机暂停时到点停喂，关界面后
+     * {@code removed()} 按剩余时长换算成 tick 重新武装。</p>
+     */
+    private static final long RANGE_SHOW_TTL_MS = AreaOutline.VIEW_TTL * 50L;
+    /**
+     * 显示窗口内「每 tick 重喂一次」用的短 TTL：只要界面还开着，Outliner 条目就不会开始淡出；
+     * 可见时长由 {@code rangeShownAt} 控制，停止重喂后 2 tick 开始淡出、8 tick 后移除。
+     */
+    private static final int RANGE_REFRESH_TTL = 2;
+    /** Outliner slot key 前缀（按盒子下标拼）：重复 show 会替换同一条目，remove 一次即清干净。 */
+    private static final String RANGE_SLOT_PREFIX = "collect_range/";
+    /** 一次最多画多少个盒子：与网络包的条目上限同源，防老存档 / 异常包把界面拖死。 */
+    private static final int RANGE_MAX_BOXES = AreaSelection.ABSOLUTE_MAX_AREAS;
 
     /** 「输入面」入口按钮（标题行，紧邻范围按钮左侧；与执行仓「面配置」同一套交互理念）。 */
     private static final int INPUT_FACE_BTN_X = 160;
@@ -86,8 +139,15 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private static final int MATCH_LABEL_Y = 21;
     private static final int CACHE_LABEL_X = 10;
     private static final int CACHE_LABEL_Y = 107;
-    /** 匹配区标题带可画宽度（标题 + 「已失效」后缀都在这条带里，超出即按像素截断）。 */
-    private static final int MATCH_LABEL_BAND_W = 104;
+    /**
+     * 匹配区标题带可画宽度（10 → {@link #COLLECT_ALL_LABEL_X} 之前，约 92px）。
+     * <p><b>第 104 轮（去省略号）</b>：这里只画短标题「匹配区 / Markers」（中 27px、英 40px，1.0 倍都放得下）。
+     * 旧实现把「（全收中已失效）」后缀也拼进这条带，英文 {@code Markers (inactive: collect-all on)} 有 140px，
+     * 于是被 {@code trimToWidth} 截成 {@code Markers (inacti...)}。现在后缀不再上屏 ——
+     * 同一句话的完整版就在紧邻的「全收」按钮 tooltip 里（{@code collect_all.on}：
+     * 已开启：匹配区失效，半径内物品全收），再加上标题灰化，禁用态一点信息都没丢。</p>
+     */
+    private static final int MATCH_LABEL_BAND_W = 92;
 
     /**
      * <b>删除模式开关</b>（2026-10-05）：放在「缓存区」标题带的空白处（Menu y106 那一行），
@@ -152,22 +212,28 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private static final int COLLECT_ALL_LABEL_X = 104;
     private static final int COLLECT_ALL_BTN_X = COLLECT_ALL_LABEL_X + LABEL_BAND_W + LABEL_GAP;
     private static final int INVERT_LABEL_X = COLLECT_ALL_BTN_X + TOGGLE_W + GROUP_GAP;
-    private static final int INVERT_BTN_X = INVERT_LABEL_X + LABEL_BAND_W + LABEL_GAP;
+    /**
+     * 「反转匹配」自己的标签带宽（第 104 轮去省略号的改排列）：
+     * <p>共享的 {@value #LABEL_BAND_W}（26px，够两个汉字）放不下英文 {@code Invert}（32px），
+     * 旧实现于是把它截成 {@code Inve...}。这一组右边到面板右缘（252）还有 46px 空白，
+     * 所以<b>只把这一组的标签带宽加到 34px</b>（中 18px / 英 32px 都完整），按钮右缘 216 &lt; 252。</p>
+     */
+    private static final int INVERT_LABEL_W = 34;
+    private static final int INVERT_BTN_X = INVERT_LABEL_X + INVERT_LABEL_W + LABEL_GAP;
     /**
      * 删除模式那一组（「销毁匹配资源」+ 复选框）。
      *
      * <p><b>2026-10-05 用户反馈</b>：「销毁匹配资源以及它的按钮移到背景外面去了往左边移」，
      * 而且「现在销毁匹配资源就只显示了销毁两个字，剩下几个字变成 ... 了」。</p>
      *
-     * <p>原因：它原来是从反转那一组自动推导出来的（{@code INVERT_BTN_X + TOGGLE_W + GROUP_GAP}），
-     * 而共享的 {@code LABEL_BAND_W = 26} 只够两个汉字 —— 「销毁匹配资源」有 <b>6 个汉字</b>（≈54px），
-     * 于是被 {@code trimToWidth} 截成「销毁…」，起点也被推到 204、按钮落到面板右缘之外。</p>
-     *
-     * <p>改法：<b>这两项不再从反转推导</b>，按「标签够放 6 个汉字 + 按钮留在面板内」直接定值；
-     * 反转那一组一个字都不动（用户明确要求）。</p>
+     * <p><b>第 104 轮（去省略号）再改一次排列</b>：上一版把标签带宽定成 54px（正好 6 个汉字），
+     * 中文勉强放得下，但英文 {@code Destroy matched} 有 84px，还是会被截成 {@code Destroy mat...}。
+     * 这一行（Menu y106..117 缓存区标题带）在「缓存区」标签（10..40）之后、右上角区域槽（232 起）之前
+     * 整段都是空白，因此<b>整组左移</b>到 x=42、标签带宽给到 86px：
+     * 中 54px / 英 84px 都完整显示（1.0 倍），按钮 130..144 仍在面板内、也不碰高级版的区域信息行（162 起）。</p>
      */
-    private static final int DELETE_MODE_LABEL_W = 54;
-    private static final int DELETE_MODE_LABEL_X = 88;
+    private static final int DELETE_MODE_LABEL_W = 86;
+    private static final int DELETE_MODE_LABEL_X = 42;
     private static final int DELETE_MODE_BTN_X = DELETE_MODE_LABEL_X + DELETE_MODE_LABEL_W + LABEL_GAP;
     /** 控件行：Menu y=19 高 12（上不压标题行，下不压匹配区面板首行 Menu 32）。 */
     private static final int TOGGLE_ROW_Y = 19;
@@ -232,6 +298,19 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private Button xpFormButton;
     /** 删除模式复选框（2026-10-05）：状态来自服务端数据槽；开启需经确认子窗口。 */
     private Button deleteModeButton;
+    /**
+     * 「查看吸取范围」按钮（<b>基础版自己创建</b>；高级版用自己的那颗 → {@link #rangeTriggerButton()}）。
+     * <p>点击走原版菜单按钮通道，几何由服务端 S2C 下发 —— 客户端不读方块实体、不读半径。</p>
+     */
+    @Nullable
+    private Button showRangeButton;
+    /**
+     * 当前正在显示的框（几何<b>全部</b>来自 {@link ShowCollectionRangePacket} 快照；
+     * 空表 = 当前没有框）。列表元素是服务端算好的方块区域，客户端只做 {@code Area → AABB}。
+     */
+    private final List<Area> shownAreas = new ArrayList<>();
+    /** 这次框选开始的墙钟时间（{@link Long#MIN_VALUE} = 当前没有框；见 {@link #RANGE_SHOW_TTL_MS}）。 */
+    private long rangeShownAtMs = Long.MIN_VALUE;
     /** 红石模式控件（复用 RS 原版侧边按钮；显示值每 tick 由菜单同步数据刷新）。 */
     private cretae.cookiewyq.rs_create_compat.client.widget.RsccRedstoneModeButton.RsccRedstoneModeProperty
         rscc$redstoneMode;
@@ -388,6 +467,30 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         return !tags.isEmpty() && tags.containsAll(entry.tags()) ? entry.tags() : List.of();
     }
 
+    /**
+     * 第 106 轮：**当前同步窗口**里的第 {@code windowIndex} 条过滤标记（只读，越界 / null ⇒ 空条目）。
+     *
+     * <p>高级版主界面要在状态带右边直接画「当前编辑区域吸什么」的物品图标。它能拿到的最新数据
+     * 就是匹配窗口那份 S2C 快照（服务端已经按编辑上下文切换好了）—— <b>不新开一条同步通道</b>，
+     * 因此图标与下面那 48 格 ghost 窗口永远是同一份数据，不会出现「图标说有、窗口里没有」。</p>
+     *
+     * <p>注意：窗口随 {@code matchOffset} 翻页，所以这里给的是「当前这一页」的条目；
+     * 图标区只画前若干个（见高级版 {@code FILTER_ICON_MAX}），翻页不影响它的语义
+     * （都是同一个区域的过滤条目）。</p>
+     */
+    protected final MarkerEntry visibleMarkerEntry(final int windowIndex) {
+        if (windowIndex < 0 || windowIndex >= markerEntries.size()) {
+            return MarkerEntry.EMPTY;
+        }
+        final MarkerEntry entry = markerEntries.get(windowIndex);
+        return entry == null ? MarkerEntry.EMPTY : entry;
+    }
+
+    /** 当前同步窗口的条目数（含空位；画图标时自己按 {@link MarkerEntry#isEmpty()} 过滤）。 */
+    protected final int visibleMarkerCount() {
+        return markerEntries.size();
+    }
+
     /** 全局下标 → 同步窗口内的条目（不在当前窗口内返回空条目）。 */
     private MarkerEntry markerEntry(final int globalIndex) {
         final int index = globalIndex - markerWindowStart;
@@ -401,6 +504,12 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     @Override
     protected void init() {
         super.init();
+        // 必须先清空：init() 在缩放 / 从子界面返回时会重跑，而 scrollbars 是 final 成员列表，
+        // 只 add 不 clear 会让每次重建都多出一批「陈旧实例」。这些旧滚动条带着旧坐标与旧滑块偏移，
+        // 而本类绘制（render）与命中（mouseClicked / mouseMoved / mouseDragged / mouseReleased）
+        // 用的是同一条列表 —— 于是旧实例既被再画一份（看起来「框还停在原来那里」），
+        // 又会在命中时先被撞到（「点到的和看到的不是同一个」）。此处清空后只保留本次 init 新建的实例。
+        scrollbars.clear();
         // 匹配区滚动条（NORMAL，轨道 10 宽，贴在匹配区面板内右缘）
         matchScrollbar = new SptScrollbarWidget(leftPos + MATCH_SCROLL_X, topPos + MATCH_SCROLL_Y,
             SptScrollbarWidget.Type.NORMAL, SCROLL_H, SCROLL_W);
@@ -459,6 +568,19 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
             .bounds(leftPos + RANGE_BTN_X, topPos + RANGE_BTN_Y, RANGE_BTN_W, RANGE_BTN_H)
             .build();
         addRenderableWidget(rangeButton);
+        // 「查看吸取范围」（第 99 轮用户实机反馈：「这个归流缓存器也像这一个范围充电器一样可以
+        // 显示它这个吸取的范围包括基础和高级的」）：
+        // 与「收集范围」按钮<b>不同</b> —— 那颗是编辑三轴数值的子窗口入口，这颗是<b>在世界里画框</b>。
+        // 几何全部由服务端算好经 S2C 下发（客户端菜单 block == null，自己算不出也读不到）。
+        // 高级版覆写 usesOwnRangeButton() 用自己的「范围」按钮，不重复创建。
+        if (!usesOwnRangeButton()) {
+            showRangeButton = new Button.Builder(
+                Component.translatable(LANG + "show_range"), btn -> toggleRange())
+                .bounds(leftPos + SHOW_RANGE_BTN_X, topPos + SHOW_RANGE_BTN_Y,
+                    SHOW_RANGE_BTN_W, SHOW_RANGE_BTN_H)
+                .build();
+            addRenderableWidget(showRangeButton);
+        }
         // 输入面：入口按钮 → 打开「哪些面可以输入」子窗口（与执行仓面配置同款十字网交互）
         inputFaceButton = new Button.Builder(Component.translatable(LANG + "input_face"),
             btn -> openInputFaceConfig())
@@ -521,6 +643,9 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         if (rscc$redstoneMode != null) {
             rscc$redstoneMode.set(menu.rscc$getRedstoneMode().ordinal());
         }
+        // 框选维护：显示窗口（5 秒）内每 tick 重喂一次，到期停止 ⇒ 由 Outliner 自己淡出。
+        // 与范围充电器逐字同一套（{@code RangeChargerScreen#containerTick}）。
+        updateRangeOutline();
     }
 
     /** 打开「输入面配置」子窗口（逐面开启/关闭漏斗 / 管道的输入；服务端权威）。 */
@@ -546,6 +671,213 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         if (minecraft != null) {
             minecraft.setScreen(new CollectionRangeConfigScreen(this, menu));
         }
+    }
+
+    // ==================== 「查看吸取范围」框选（S2C 权威几何 + 与充电器同一套生命周期） ====================
+
+    /**
+     * 本界面是否<b>自带</b>「查看范围」按钮。
+     * <p>基础版返回 {@code false}（由本类 {@link #init()} 在底部左下空白带创建）；
+     * 高级版返回 {@code true} —— 它已经有「区域 / 范围」两颗按钮占住那一带，
+     * 再塞第三颗只会挤掉它们（见 {@code AdvancedCollectionCacheScreen}）。</p>
+     */
+    protected boolean usesOwnRangeButton() {
+        return false;
+    }
+
+    /** 用来做 tooltip 与二次点击判定的那颗「查看范围」按钮（高级版覆写成自己的那颗）。 */
+    @Nullable
+    protected Button rangeTriggerButton() {
+        return showRangeButton;
+    }
+
+    /**
+     * 点击「查看吸取范围」：<b>显示中 → 立刻移除</b>；否则发 C2S 请求、等 S2C 快照回来再画。
+     *
+     * <p>C2S 复用原版菜单按钮通道（{@code ServerboundContainerButtonClickPacket}，见
+     * {@link CollectionCacheMenu#BUTTON_SHOW_RANGE}）：服务端 {@code clickMenuButton} 先校验菜单
+     * 仍有效（方块实体身份 / 维度 / 距离），再让方块实体组「此刻真正在扫的几何」快照回传。
+     * 客户端<b>不猜</b>坐标、<b>不读</b>半径、<b>不读</b>方块实体 —— 这是既有铁律。</p>
+     */
+    protected void toggleRange() {
+        if (isRangeVisible()) {
+            hideRange();
+            return;
+        }
+        // 先清掉可能残留在 Outliner 里的旧条目（上一次 5 秒已过、条目正在淡出）
+        hideRange();
+        if (minecraft != null && minecraft.gameMode != null) {
+            minecraft.gameMode.handleInventoryButtonClick(menu.containerId,
+                CollectionCacheMenu.BUTTON_SHOW_RANGE);
+        }
+    }
+
+    /** 框选是否还在显示窗口内（按钮二次点击用它判断「现在点一下是取消」）。 */
+    private boolean isRangeVisible() {
+        return !shownAreas.isEmpty() && rangeShownAtMs != Long.MIN_VALUE
+            && nowMs() - rangeShownAtMs < RANGE_SHOW_TTL_MS;
+    }
+
+    /**
+     * 第 106 轮：把一组<b>服务端快照里的区域</b>画出来（高级版的「单显 / 全显」用它）。
+     *
+     * <p>为什么放在基类而不是高级版自己画：绘制 + 5 秒 TTL + 每 tick 重喂 + 关界面按剩余时长
+     * 重新武装这一整套生命周期只能有<b>一份</b>实现 —— 两台界面各写一套必然漂移（第 99 轮把「喂
+     * Outliner」从高级版搬进基类就是同一个理由）。高级版只负责「挑哪几个盒子」（单显 = 1 个、
+     * 全显 = 全部），几何一律来自服务端下发的区域，客户端仍然只做 {@code Area → AABB}。</p>
+     *
+     * <p><b>多区域不互相覆盖</b>：每个盒子一个独立 slot（{@code collect_range/N}），
+     * 且显示窗口内 {@link #updateRangeOutline()} 每 tick 把<b>每一个</b>盒子重喂一次；
+     * 盒子数量变少时 {@link #hideRange()} 会先清掉所有旧 slot，因此不会出现「上一个模式残留的框」。</p>
+     */
+    protected final void showAreas(final List<Area> boxes) {
+        hideRange();
+        if (boxes == null || boxes.isEmpty()) {
+            return;
+        }
+        final int count = Math.min(boxes.size(), RANGE_MAX_BOXES);
+        for (int i = 0; i < count; i++) {
+            final Area area = boxes.get(i);
+            if (area == null) {
+                continue;
+            }
+            AreaOutline.showForView(AreaOutline.slot(RANGE_SLOT_PREFIX + i), area);
+            shownAreas.add(area);
+        }
+        if (shownAreas.isEmpty()) {
+            return;
+        }
+        rangeShownAtMs = nowMs();
+        feedRangeOutline(RANGE_REFRESH_TTL);
+    }
+
+    /** 当前是否有一个「查看范围 / 单显 / 全显」的显示窗口在开着（二次点击据此判断「现在是取消」）。 */
+    protected final boolean isRangeShown() {
+        return isRangeVisible();
+    }
+
+    /** 立即移除框选（二次点击 / 口径变成「不画」时；对不存在的 slot 是空操作）。 */
+    protected final void hideRange() {
+        for (int i = 0; i < RANGE_MAX_BOXES; i++) {
+            AreaOutline.remove(AreaOutline.slot(RANGE_SLOT_PREFIX + i));
+        }
+        shownAreas.clear();
+        rangeShownAtMs = Long.MIN_VALUE;
+    }
+
+    /**
+     * S2C 到达（服务端已校验、几何已算好）：把快照里的方块区域<b>原样</b>画出来。
+     *
+     * <h2>诚实性（本轮最要紧的一条）</h2>
+     * <p>{@code MODE_NO_AREA} / {@code MODE_NO_SELECTOR} 时<b>一个框都不画</b>，
+     * 只在<b>点按钮这一刻</b>给一条行动栏提示（不 tick 刷屏）：这两种状态下服务端
+     * {@code absorbAll} 整段跳过，本机一点不吸 —— 画一个半径框等于告诉玩家「这片地正在被吸」，
+     * 那正是用户最反感的「界面说一套、代码做一套」。</p>
+     *
+     * <h2>客户端只做绘制</h2>
+     * <p>这里唯一的运算是 {@code Area → AABB}（{@link AreaOutline#showForView} 内部
+     * {@code Area#toAabb()}）：<b>不读方块实体、不读半径、不做「半径 / 2」式换算</b>。</p>
+     */
+    public void showCollectionRange(final ShowCollectionRangePacket packet) {
+        hideRange();
+        if (packet.mode() == ShowCollectionRangePacket.MODE_NO_AREA
+            || packet.mode() == ShowCollectionRangePacket.MODE_NO_SELECTOR) {
+            showRangeUnavailableHint(packet.mode());
+            return;
+        }
+        final int count = Math.min(packet.boxes().size(), RANGE_MAX_BOXES);
+        for (int i = 0; i < count; i++) {
+            final Area area = packet.boxes().get(i);
+            if (area == null) {
+                continue;
+            }
+            AreaOutline.showForView(AreaOutline.slot(RANGE_SLOT_PREFIX + i), area);
+            shownAreas.add(area);
+        }
+        if (shownAreas.isEmpty()) {
+            return; // 空快照（服务端不该发，但绝不在客户端凭空造框）
+        }
+        rangeShownAtMs = nowMs();
+        // 立刻换成「每 tick 重喂」的短 TTL：可见时长由 rangeShownAtMs 控制，静止时也每 tick 续命
+        feedRangeOutline(RANGE_REFRESH_TTL);
+    }
+
+    /**
+     * 「这次点按钮不给框」时说一句<b>为什么</b>（每条提示只在 S2C 到达这一刻发一次）。
+     * <p>两种口径的文案例外分开：玩家据此知道该「放选定器」还是「给选定器加区域」，
+     * 而不是对着一个没反应的按钮猜。</p>
+     */
+    private void showRangeUnavailableHint(final int mode) {
+        if (minecraft == null || minecraft.player == null) {
+            return;
+        }
+        minecraft.player.displayClientMessage(Component.translatable(
+            mode == ShowCollectionRangePacket.MODE_NO_SELECTOR
+                ? LANG + "range.no_selector" : LANG + "range.no_area"), true);
+    }
+
+    /** 把当前快照里的每个盒子喂给共享 Outliner 出口（橙 + 棋盘面 + 1/16 线宽，与充电器同一套）。 */
+    private void feedRangeOutline(final int ttl) {
+        for (int i = 0; i < shownAreas.size(); i++) {
+            AreaOutline.showForView(AreaOutline.slot(RANGE_SLOT_PREFIX + i), shownAreas.get(i), ttl);
+        }
+    }
+
+    /** 显示窗口内每 tick 重喂一次；到期后停止重喂，让条目按最后一次的 2 tick TTL 自然淡出。 */
+    private void updateRangeOutline() {
+        if (shownAreas.isEmpty() || rangeShownAtMs == Long.MIN_VALUE) {
+            return;
+        }
+        if (nowMs() - rangeShownAtMs >= RANGE_SHOW_TTL_MS) {
+            shownAreas.clear(); // 停止重喂：条目 2 tick 后开始淡出、8 tick 后移除
+            rangeShownAtMs = Long.MIN_VALUE;
+            return;
+        }
+        feedRangeOutline(RANGE_REFRESH_TTL);
+    }
+
+    /** 墙钟毫秒（Outliner 的条目寿命按 tick 计，这里只负责算「还剩多少」。 */
+    private static long nowMs() {
+        return net.minecraft.Util.getMillis();
+    }
+
+    /**
+     * 关界面：<b>不立刻删框</b>，而是按剩余 TTL 重新武装一次，让框在关掉 GUI 后继续画完、由 Outliner
+     * 自己淡出。
+     *
+     * <p>为什么（与范围充电器同一个 bug）：玩家的真实操作是「点『查看范围』→ 世界被 GUI 背景虚化、
+     * 几乎看不清 → 关掉界面想看」，若在关界面这一刻删框，看起来就是「点了没反应」。
+     * 现在只是不再每 tick 重喂，改按 {@code rangeShownAt + RANGE_SHOW_TTL - now} 的<b>剩余</b>时间
+     * 对每个盒子重新 {@code showForView} 一次 ⇒ Outliner 自己倒计时 + 淡出。
+     * 手动「再点一次取消」仍由 {@link #toggleRange()} 负责（立即删除）。</p>
+     */
+    @Override
+    public void removed() {
+        if (!shownAreas.isEmpty() && rangeShownAtMs != Long.MIN_VALUE) {
+            // 剩余墙钟毫秒 → Outliner 的 tick 寿命（50ms / tick，向上取整，至少 1 tick）
+            final long remainingMs = rangeShownAtMs + RANGE_SHOW_TTL_MS - nowMs();
+            if (remainingMs > 0L) {
+                final int remaining = (int) Math.max(1L, (remainingMs + 49L) / 50L);
+                for (int i = 0; i < shownAreas.size(); i++) {
+                    AreaOutline.showForView(AreaOutline.slot(RANGE_SLOT_PREFIX + i),
+                        shownAreas.get(i), remaining);
+                }
+                // 内部状态复位：框已经在 Outliner 里自己倒计时，不再算「本界面正在显示」
+                shownAreas.clear();
+                rangeShownAtMs = Long.MIN_VALUE;
+            } else {
+                hideRange(); // 剩余时间已经过了（客户端卡顿 / 长时间挂后台）：走统一移除路径
+            }
+        }
+        super.removed();
+    }
+
+    /**
+     * 「查看吸取范围」tooltip 的<b>正文行</b>（基类给基础版口径；高级版覆写成它自己那套说明）。
+     * <p>手动渲染：本模组的 GUI 不会自动渲染 tooltip。</p>
+     */
+    protected void appendRangeTooltipLines(final List<Component> lines) {
+        lines.add(Component.translatable(LANG + "show_range.tip"));
     }
 
     /** 向服务端发送「切换阻塞」请求（本地先用已知名单翻转，立即得到视觉反馈；服务端权威值随后覆盖）。 */
@@ -673,6 +1005,7 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         }
         renderTooltip(guiGraphics, mouseX, mouseY);
         renderCacheTooltips(guiGraphics, mouseX, mouseY);
+        renderStatusBandTooltip(guiGraphics, mouseX, mouseY);
     }
 
     /** 每帧把服务端权威的开关状态写回按钮文案（按钮点击后由数据槽回传）。 */
@@ -766,60 +1099,214 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     @Override
     protected void renderLabels(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         guiGraphics.drawString(font, title, TITLE_X, TITLE_Y, 0xFF333333, false);
+        // 第 101 轮状态行（回答「为什么没在吸」）：第 104 轮搬到吸取开关行下方的整行留白。
+        drawStatusLine(guiGraphics);
         // 两分区标签（Java 文字，背景留白）：匹配区 / 缓存区。
-        // 「吸取所有物品」开启时匹配区整体失效 → 标题灰化 + 追加失效后缀（三态里的「禁用态」表达）
+        // 「吸取所有物品」开启时匹配区整体失效 → 标题灰化。禁用原因（{@code collect_all.on}：
+        // 已开启：匹配区失效，半径内物品全收）在紧邻的「全收」按钮 tooltip 里完整显示，
+        // 因此这里只画短标题，不再拼「（全收中已失效）」这个会被截断的后缀。
         final boolean matchDisabled = menu.isCollectAll();
-        Component matchLabel = Component.translatable(LANG + "region_marker");
-        if (matchDisabled) {
-            matchLabel = Component.translatable(LANG + "region_marker.disabled",
-                matchLabel.getString());
-        }
-        guiGraphics.drawString(font, Component.literal(trimToWidth(matchLabel.getString(), MATCH_LABEL_BAND_W)),
+        guiGraphics.drawString(font, Component.translatable(LANG + "region_marker"),
             MATCH_LABEL_X, MATCH_LABEL_Y, matchDisabled ? COLOR_DISABLED : 0xFF333333, false);
         guiGraphics.drawString(font, Component.translatable(LANG + "region_cache"),
             CACHE_LABEL_X, CACHE_LABEL_Y, 0xFF333333, false);
-        // 删除模式复选框的文字标签（缓存区标题带；紧贴其按钮左侧，按像素截断，英文长词也不越界）
-        guiGraphics.drawString(font,
-            Component.literal(trimToWidth(
-                Component.translatable(LANG + "delete_mode.label").getString(),
-                DELETE_MODE_BTN_X - DELETE_MODE_LABEL_X - LABEL_GAP)),
+        // 删除模式复选框的文字标签（缓存区标题带；整组左移 + 86px 带宽，中英都完整显示）
+        guiGraphics.drawString(font, Component.translatable(LANG + "delete_mode.label"),
             DELETE_MODE_LABEL_X, DELETE_MODE_LABEL_Y,
             menu.isDeleteMode() ? COLOR_DESTROY_MARK : 0xFF333333, false);
-        // 两个新开关的文字标签（画在各自 ✓/✗ 按钮左侧；按像素截断，英文长词也不越界）
-        guiGraphics.drawString(font,
-            Component.literal(trimToWidth(Component.translatable(LANG + "collect_all.label").getString(),
-                COLLECT_ALL_BTN_X - COLLECT_ALL_LABEL_X - LABEL_GAP)),
-            COLLECT_ALL_LABEL_X, TOGGLE_LABEL_Y, matchDisabled ? 0xFF333333 : COLOR_DISABLED, false);
-        guiGraphics.drawString(font,
-            Component.literal(trimToWidth(Component.translatable(LANG + "invert.label").getString(),
-                INVERT_BTN_X - INVERT_LABEL_X - LABEL_GAP)),
-            INVERT_LABEL_X, TOGGLE_LABEL_Y, matchDisabled ? COLOR_DISABLED : 0xFF333333, false);
+        // 「吸取所有物品」/「反转匹配」的文字标签：各自带宽够中英完整显示（见 INVERT_LABEL_W 注释）
+        guiGraphics.drawString(font, Component.translatable(LANG + "collect_all.label"),
+            COLLECT_ALL_LABEL_X, TOGGLE_LABEL_Y,
+            matchDisabled ? 0xFF333333 : COLOR_DISABLED, false);
+        guiGraphics.drawString(font, Component.translatable(LANG + "invert.label"),
+            INVERT_LABEL_X, TOGGLE_LABEL_Y,
+            matchDisabled ? COLOR_DISABLED : 0xFF333333, false);
         // 收集范围入口按钮的文字由原版 Button 自己绘制（MC 风格按钮贴图），此处不再重复画标签：
         // 三轴数值在子窗口里编辑（与范围充电器同款交互），数值明细走按钮 tooltip。
-        // 4 个吸取开关：按钮 + 紧跟其后的文本（按像素截断，保证英文长词也不越到下一组）
+        // 4 个吸取开关：按钮 + 紧跟其后的文本（组宽 60 扣掉按钮与间隔后仍有 41px：中 18 / 英最长 30）
         final AbsorbType[] types = AbsorbType.values();
         for (int i = 0; i < types.length && i < ABSORB_BTN_X.length; i++) {
-            guiGraphics.drawString(font,
-                Component.literal(trimToWidth(
-                    Component.translatable(absorbNameKey(types[i])).getString(),
-                    ABSORB_GROUP_W - ABSORB_LABEL_DX - 2)),
-                ABSORB_BTN_X[i] + ABSORB_LABEL_DX, ABSORB_LABEL_Y, 0xFF333333, false);
+            RsccTextFit.drawFitLine(guiGraphics, font,
+                Component.translatable(absorbNameKey(types[i])),
+                ABSORB_BTN_X[i] + ABSORB_LABEL_DX, ABSORB_LABEL_Y,
+                ABSORB_GROUP_W - ABSORB_LABEL_DX - 2, 0xFF333333);
         }
     }
 
-    /** 按像素宽截断字符串（尾部补省略号）：保证文字不越过所属分组。 */
-    private String trimToWidth(final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
+    /**
+     * 画「为什么没在吸」状态行（第 101 轮加，第 104 轮换位置）。
+     * <p><b>第 104 轮口径：界面文字一律完整显示，禁止省略号。</b>状态行最长的一句英文
+     * （{@code Advanced: selector dimension mismatch, so nothing is absorbed}）有 316px，
+     * 而旧位置（标题行右侧）只有 150px —— 连最短的一句中文（81px，「没有生效的过滤标记」）都贴着边，
+     * 于是每句「为什么没吸」都会被截成 {@code …}。现在改排列：搬到吸取开关行与升级槽之间的整行留白
+     * （Menu y210，8..248 = 240px），放不下就按 {@link RsccTextFit} 缩字号（下限 0.6），绝不省字。</p>
+     * <p>高级版覆盖本方法，让同一条带在有区域时改说「正在编辑哪个区域的过滤器」（见子类）。</p>
+     */
+    protected void drawStatusLine(final GuiGraphics guiGraphics) {
+        final Component status = absorbStatusText();
+        if (status == null) {
+            return;
         }
-        if (font.width(text) <= maxWidth) {
-            return text;
+        drawStatusBand(guiGraphics, status, absorbStatusColor());
+    }
+
+    /**
+     * 状态带（Menu y210 整行留白）的唯一绘制出口：单行、完整、放不下就缩字号。
+     * <p>子类的高级版状态 / 区域摘要也走这里，保证「同一条带只有一处画、同一套完整显示规则」。</p>
+     */
+    protected final void drawStatusBand(final GuiGraphics guiGraphics, final Component line,
+                                        final int color) {
+        drawStatusBand(guiGraphics, line, color, STATUS_LINE_W);
+    }
+
+    /**
+     * 同上，但显式指定宽度（第 106 轮：高级版要在状态带右端画「这个区域吸什么」的过滤图标，
+     * 文字只能占左边那一段；仍然走 {@link RsccTextFit} 的「完整显示、放不下缩字号」口径，
+     * 绝不省略号）。
+     */
+    protected final void drawStatusBand(final GuiGraphics guiGraphics, final Component line,
+                                        final int color, final int width) {
+        RsccTextFit.drawFitBlock(guiGraphics, font, line,
+            STATUS_LINE_X, STATUS_LINE_Y, Math.max(24, width), 1, 9, color);
+    }
+
+    // ==================== 「为什么没在吸」状态行（第 101 轮） ====================
+
+    /** 状态行：吸取开关行（197..209）与升级槽行（219 起）之间的整行留白，宽 240px。 */
+    protected static final int STATUS_LINE_X = 8;
+    protected static final int STATUS_LINE_Y = 210;
+    protected static final int STATUS_LINE_W = 240;
+    /** 状态行文字高度（MC 默认字体 8px + 1px 行距；tooltip 命中判定用）。 */
+    protected static final int STATUS_LINE_H = 9;
+
+    /**
+     * 鼠标是否落在状态带上（子类用它把完整句子放进 tooltip —— 主行缩字号时不丢信息）。
+     */
+    protected final boolean isOverStatusBand(final double mouseX, final double mouseY) {
+        return mouseX >= leftPos + STATUS_LINE_X
+            && mouseX < leftPos + STATUS_LINE_X + STATUS_LINE_W
+            && mouseY >= topPos + STATUS_LINE_Y
+            && mouseY < topPos + STATUS_LINE_Y + STATUS_LINE_H;
+    }
+
+    /**
+     * 状态带悬停：把完整（1.0 倍）的状态句再给一遍。
+     * <p>第 104 轮口径：主行放不下只缩字号、绝不省字；tooltip 里永远是 1.0 倍原文，
+     * 因此「缩到 0.6 才放得下」的极端偏长句子也不会牺牲可读性。高级版覆盖本方法，
+     * 把「正在编辑哪个区域的过滤器」一并列出来。</p>
+     */
+    protected void renderStatusBandTooltip(final GuiGraphics guiGraphics, final int mouseX,
+                                           final int mouseY) {
+        if (!isOverStatusBand(mouseX, mouseY)) {
+            return;
         }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
+        final Component status = absorbStatusText();
+        if (status == null) {
+            return;
         }
-        return s + "...";
+        guiGraphics.renderTooltip(font, java.util.List.of(status), java.util.Optional.empty(),
+            mouseX, mouseY);
+    }
+
+    /**
+     * 本轮状态行文案：<b>正常（吸到了 / 条件齐全只是暂时没货）→ 返回 null 不占位</b>；
+     * 其余状态各给一句短话，回答玩家「它到底为什么不吸」。
+     * <p>状态码由服务端每轮扫描后算好（{@code CollectionCacheBlockEntity#computeAbsorbStatus()}），
+     * 客户端只做「码 → 语言键」的翻译，不做任何判定。</p>
+     */
+    /**
+     * 客户端把服务端算好的状态码翻成一句话（第 101 轮；第 104 轮改为 {@code protected}：
+     * 高级版要在同一条状态带上区分「区域不可用」与「正在编辑哪个区域」，两处必须用同一个判定）。
+     */
+    @Nullable
+    protected Component absorbStatusText() {
+        final int code = menu.getAbsorbStatus();
+        if (code == cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity.ABSORB_STATUS_OK) {
+            return null;
+        }
+        // 第 106 轮（用户第 3 条，原话「这他妈什么废话都不需要显示，所有都不需要显示这些东西」）：
+        // 本轮只把「真的会让机器停摆的原因」上屏，其余一律不画。判据集中在本方法，界面不会再有第二处例外。
+        if (!isStatusVisible(code)) {
+            return null;
+        }
+        return switch (code) {
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_NETWORK -> Component.translatable(LANG + "status.no_network");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_INACTIVE -> Component.translatable(LANG + "status.inactive");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_TOGGLE_OFF -> Component.translatable(LANG + "status.toggle_off");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_MARKER -> Component.translatable(LANG + "status.no_marker");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_TARGET -> Component.translatable(LANG + "status.no_target");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_THRESHOLD -> Component.translatable(LANG + "status.threshold");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_CACHE_FULL -> Component.translatable(LANG + "status.cache_full");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_AREA_NO_SELECTOR -> Component.translatable(LANG + "status.area.no_selector");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_AREA_EMPTY -> Component.translatable(LANG + "status.area.empty");
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_AREA_DIMENSION -> Component.translatable(LANG + "status.area.dimension");
+            default -> null;
+        };
+    }
+
+    /**
+     * <b>第 106 轮：哪些状态码允许上屏</b>（用户第 3 条的落地判据，唯一一处）。
+     *
+     * <h2>删掉的（永远不显示）</h2>
+     * <ul>
+     *     <li>{@code ABSORB_STATUS_NO_MARKER}（没有生效的过滤标记）、
+     *     {@code ABSORB_STATUS_NO_TARGET}（范围内没有匹配的掉落物）、
+     *     {@code ABSORB_STATUS_THRESHOLD}（命中了但没凑够数量）——
+     *     这正是用户点名的「没匹配到 / 匹配到了但数量没达到」那一坨红字。它们的共同点是
+     *     <b>机器本身没坏</b>：只是「这一轮没货」或「还差几件」，属于正常运转的中间状态。
+     *     过滤配没配、每个区域吸什么，现在由过滤器图标直显（见高级版界面）表达，不需要一句话；</li>
+     *     <li>{@code ABSORB_STATUS_TOGGLE_OFF}（物品吸取开关是关的）—— 开关本身就在同一屏上亮着 ✗，
+     *     再红一行字纯属重复；而且玩家<b>故意</b>关掉时它会一直挂着（正是「刷屏废话」的形态）。</li>
+     * </ul>
+     *
+     * <h2>保留的（会显示）</h2>
+     * <ul>
+     *     <li>{@code NO_NETWORK} / {@code INACTIVE}：没接网络 / 没激活 ⇒ 本机<b>一点都不会吸</b>，
+     *     玩家必须知道，否则只会觉得「坏了」（这两条画成灰，不是错误红）；</li>
+     *     <li>{@code CACHE_FULL}：缓存真的满了 ⇒ 这一刻吸不进来，需要玩家取走缓存（自愈但仍要提示）；</li>
+     *     <li>高级版的三个区域原因（没装选定器 / 区域为空 / 维度不符）：整段吸收被跳过，
+     *     这是「为什么高级版一点不吸」的唯一出口。</li>
+     * </ul>
+     */
+    protected static boolean isStatusVisible(final int code) {
+        return switch (code) {
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_NETWORK,
+                 cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                     .ABSORB_STATUS_INACTIVE,
+                 cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                     .ABSORB_STATUS_CACHE_FULL,
+                 cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                     .ABSORB_STATUS_AREA_NO_SELECTOR,
+                 cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                     .ABSORB_STATUS_AREA_EMPTY,
+                 cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                     .ABSORB_STATUS_AREA_DIMENSION -> true;
+            default -> false;
+        };
+    }
+
+    /** 状态行颜色：未接网络 / 未激活 = 灰（不是错误），其余「不吸」的原因 = 橙红（要玩家处理）。 */
+    private int absorbStatusColor() {
+        final int code = menu.getAbsorbStatus();
+        return switch (code) {
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_NETWORK, cretae.cookiewyq.rs_create_compat.block.entity
+                .CollectionCacheBlockEntity.ABSORB_STATUS_INACTIVE -> 0xFF6A6A6A;
+            case cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity
+                .ABSORB_STATUS_NO_TARGET -> 0xFF6A6A6A;
+            default -> 0xFFB8402A;
+        };
     }
 
     // ==================== 缓存槽上的流体叠加（与物品共用同一套槽，V4 文档 §8） ====================
@@ -1002,6 +1489,19 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
                 return;
             }
         }
+        // 1b) 空匹配槽：告诉玩家「怎么把要吸的东西标记进来」。
+        // <b>第 95 轮第 13 条</b>：Shift+左键的默认语义从「塞进缓存」改成了「写标记」，
+        // 这个改动必须能在界面上被看见，否则老玩家会以为「Shift 点了没反应」。
+        // 整份提示都归 SHIFT 层（按住 Shift 正准备点的那一瞬间就能看到全文；
+        // 不按住时只看到「按住 [Shift] 查看…」提示行，不会给每一格都糊一段长文）。
+        if (hoveredSlot != null && menu.getCarried().isEmpty()
+            && hoveredSlot.index >= 0 && hoveredSlot.index < CollectionCacheMenu.MATCH_WINDOW
+            && menu.isMarkerWindow(hoveredSlot.index)) {
+            RsccTooltipLayers.render(guiGraphics, font,
+                RsccTooltipLayers.allShift(List.of(Component.translatable(LANG + "match_empty"))),
+                mouseX, mouseY);
+            return;
+        }
         // 2) 缓存槽（真实存储）：物品 tooltip（常显）+ 阻塞结论（常显）+ 「被谁阻塞」细节（Alt 层）
         if (hoveredSlot != null && menu.getCarried().isEmpty() && minecraft != null && minecraft.player != null
             && hoveredSlot.index >= CollectionCacheMenu.MATCH_WINDOW
@@ -1013,6 +1513,10 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
                     ? net.minecraft.world.item.TooltipFlag.Default.ADVANCED
                     : net.minecraft.world.item.TooltipFlag.Default.NORMAL));
             lines.addAll(itemBlockedStateLines(stack));
+            // 第 95 轮第 13 条：Shift+左键从背包点是「写匹配标记」，不再是「塞进缓存」。
+            // 这条说明放在缓存槽上（玩家想「把东西放进缓存」时看的就是这里），写明真正的放入路径。
+            RsccTooltipLayers.append(lines, RsccTooltipLayers.shift(
+                Component.translatable(LANG + "cache_put_hint")));
             RsccTooltipLayers.append(lines, itemBlockedDetailLines(stack));
             guiGraphics.renderTooltip(font, lines, stack.getTooltipImage(), mouseX, mouseY);
             return;
@@ -1249,6 +1753,15 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
                             + menu.getCollectRadius(2) - 3)))), mouseX, mouseY);
             return;
         }
+        // 0.25) 「查看吸取范围」按钮（第 99 轮）：说明 + 「点一次画 / 再点取消 / 5 秒自动消失」。
+        // 高级版把正文换成它自己那套（区域模式取代半径 + 没选定器时不画框），见 appendRangeTooltipLines。
+        final Button rangeTrigger = rangeTriggerButton();
+        if (rangeTrigger != null && rangeTrigger.isMouseOver(mouseX, mouseY)) {
+            final List<Component> lines = new ArrayList<>(2);
+            appendRangeTooltipLines(lines);
+            renderWrappedLines(guiGraphics, lines, mouseX, mouseY);
+            return;
+        }
         // 0.3) 「吸取所有物品」开关：当前状态 + 它开启后匹配区失效（优先级说明）
         if (collectAllButton != null && collectAllButton.isMouseOver(mouseX, mouseY)) {
             RsccTooltipLayers.render(guiGraphics, font, List.of(
@@ -1316,6 +1829,21 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
     private void renderLines(final GuiGraphics guiGraphics, final List<Component> lines,
                              final int mouseX, final int mouseY) {
         GhostMarkerRenderer.renderLines(guiGraphics, font, lines, mouseX, mouseY);
+    }
+
+    /**
+     * 手动渲染<b>带折行</b>的 tooltip：每行先按 200px 用 {@code font.split} 折成多段再交给原版渲染。
+     * <p>为什么范围按钮的提示要折行：同一句话中文约 20 字、英文 200+ px，原版
+     * {@code renderTooltip(List<FormattedCharSequence>)} <b>不会</b>自动折行（折行只在
+     * {@code font.split} 那条路径上发生）⇒ 不折就会顶出屏幕右边被裁掉。</p>
+     */
+    private void renderWrappedLines(final GuiGraphics guiGraphics, final List<Component> lines,
+                                    final int mouseX, final int mouseY) {
+        final List<FormattedCharSequence> wrapped = new ArrayList<>(lines.size() * 2);
+        for (final Component line : lines) {
+            wrapped.addAll(font.split(line, 200));
+        }
+        guiGraphics.renderTooltip(font, wrapped, mouseX, mouseY);
     }
 
     // ==================== 输入转发 ====================

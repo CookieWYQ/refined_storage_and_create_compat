@@ -218,9 +218,11 @@ check("推理: 最后一件加工中（crafting=1）也算已交付 —— 这�
 # ============================================================ ⑤ 疯狂拉出又吐回
 section("⑤ 不先大批拉出再吐回：确定性配方不再整批预抽；摘要量纲分开")
 
-check("锚点: 自动合成请求量按「确定性 / 概率性」分档（确定性 = 一次一份）",
-      "final long requestBatch = pipelineUsesChance()" in chamber
-      and "autocrafting.ensureTask(resource, Math.min(deficit, requestBatch)," in chamber)
+check("锚点: 自动合成请求量按「确定性 / 概率性」分档（冷档确定性 = 一次一份；"
+      "2026-10-17 热档 = 每台在工作的机器各一份，仍夹缺口 / 名额）",
+      "final long requestBatch = chancePipeline" in chamber
+      and "autocrafting.ensureTask(resource, Math.min(deficit, requestBatch)," in chamber
+      and ": (batchCeiling > 0L ? batchCeiling : 1L);" in chamber)
 check("锚点: 备料侧「每轮抽取批上限」仍在（把一步到位摊成每 ENGINE_INTERVAL_TICKS 一小批）",
       "private static final long BUS_PULL_BATCH_ITEMS = 4L;" in chamber
       and "BUS_PULL_BATCH_ITEMS);" in chamber)

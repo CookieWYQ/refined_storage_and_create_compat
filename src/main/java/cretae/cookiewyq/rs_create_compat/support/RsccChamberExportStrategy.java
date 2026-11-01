@@ -133,6 +133,16 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
      * {@code SequenceExecutionChamberBlockEntity#consumesStepExtraAt(BlockPos)}。</p>
      */
     private static final String ASSERT_STEP_EXTRA_NOT_CONSUMER = "assert_step_extra_not_consumer";
+    /**
+     * 断言拒绝：这一件<b>不是本总线朝向那个工位</b>该收的（第 104 轮 B-2）。
+     *
+     * <p>判据唯一实现在 {@code SequenceExecutionChamberBlockEntity#stationAcceptsPush(BlockPos, ItemStack)}：
+     * 先问「这一格是哪台机器、它负责本链哪些步」，再问「这一件是不是那些步的料」。
+     * 典型被拒：把<b>冲压步的过渡件</b>推进一台<b>空的机械手</b>（今天会被 Create 的手位无条件收下，
+     * 然后永久卡在手里 —— 文档 A1）。该件留在执行舱内部存储里，不丢、不复制；判不出时该方法返回
+     * {@code true}（= 保持今天的宽松口径），因此这条闸门只会收紧「判得出的错配」。</p>
+     */
+    private static final String ASSERT_STATION_REJECTS = "assert_station_rejects_item";
 
     /** 本策略所属的输出总线（用它解析当前绑定的执行舱；服务端权威、逐次解析、不缓存引用）。 */
     private final RsccExporterExecutorMode owner;
@@ -365,7 +375,8 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
     private static boolean isAssertionRefusal(final String detail) {
         return ASSERT_NOT_CURRENT_STEP_INPUT.equals(detail)
             || ASSERT_MACHINE_HOLDS_OTHER_STEP_INPUT.equals(detail)
-            || ASSERT_STEP_EXTRA_NOT_CONSUMER.equals(detail);
+            || ASSERT_STEP_EXTRA_NOT_CONSUMER.equals(detail)
+            || ASSERT_STATION_REJECTS.equals(detail);
     }
 
     // ==================== 「在途自动合成任务的预留」夹量（脱绑委托那一路） ====================
@@ -643,6 +654,7 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
         // 抽取与推送一律<b>原样使用仓内那一格</b>。
         final List<SlotPick> picks = new ArrayList<>(2);
         long plannedTotal = 0;
+        boolean stationRejected = false;
         final IItemHandler chamberStore = chamber.itemStorage();
         for (int slot = 0; slot < chamberStore.getSlots() && plannedTotal < quota; slot++) {
             final ItemStack inSlot = chamberStore.getStackInSlot(slot);
@@ -664,6 +676,16 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
             if (!chamber.isNextForMyMachines(inSlot)) {
                 continue;
             }
+            // <b>第 104 轮 B-2：逐工位推料断言（唯一实现，本轮扩到「所有物品」）</b>。
+            // 位置在「抽取计划」这一层而不是 transfer 入口：入口拿到的是<b>过滤项资源</b>
+            // （{@code ItemResource}，没有内容组件），而步序 / 是否过渡件这些都挂在<b>仓内那一格</b>的
+            // {@link ItemStack} 上；这里判的正是「即将被推上去的那一件」，因此与 B-1 的工位推导同源、
+            // 也与后面的 {@code busExportAcceptsForPush} 同一处检查点（判据本体全在执行舱，不新增第二套）。
+            // 判不出 ⇒ true（宽松，见方法 javadoc）；拒绝只是「这一件这一轮不推」。
+            if (!chamber.stationAcceptsPush(targetPos, inSlot)) {
+                stationRejected = true;
+                continue;
+            }
             // 「按步」放行判据（<b>本轮放宽</b>，判定点见 SequenceExecutionChamberBlockEntity
             // #busExportAcceptsForPush）：过渡件只要求「物品相同 + 本仓的机器确实还要它」，
             // <b>不再</b>要求过滤项原型上的步序与它逐位相同。否则「同一台机器连续承担多个步」时，
@@ -678,6 +700,10 @@ public final class RsccChamberExportStrategy implements ExporterTransferStrategy
             plannedTotal += want;
         }
         if (picks.isEmpty()) {
+            if (stationRejected) {
+                // 仓里确实有这类料、但「这一格工位不该收它」：这是 B-2 的断言拒绝，值得一条限频日志。
+                return new TransferOutcome(Result.SKIPPED, 0L, ASSERT_STATION_REJECTS);
+            }
             // 执行舱内部存储里没有这一类物料（本机无从导出）
             return new TransferOutcome(Result.RESOURCE_MISSING, 0L, "chamber_empty");
         }

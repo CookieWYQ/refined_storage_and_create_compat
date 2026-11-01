@@ -20,10 +20,12 @@ import java.util.function.Function;
  * <p><b>交互</b>：滚轮下滚 = 下一项 / 上滚 = 上一项；左键点左半边 = 上一项、右半边 = 下一项
  * （Create 原版只支持滚轮，这里额外照顾鼠标玩家）。每次选择变化都会回调 {@code onSelect}。</p>
  * <p><b>外观</b>：自绘 1px 深色描边 + 更深内填充的凹槽框（{@code guiGraphics.fill}，不新增贴图），
- * 当前项文字水平 / 垂直居中，两端用 {@code ◀} / {@code ▶} 文本符提示可切换（宽度不足时自动省略）。</p>
+ * 当前项文字水平 / 垂直居中，两端用 {@code ◀} / {@code ▶} 文本符提示可切换
+ * （第 104 轮起宽度不足时<b>整体缩字号</b>而不是省略，见 {@link #drawCenteredFitLine}）。</p>
  * <p><b>tooltip</b>：本控件不参与原版自动 tooltip，必须由所属界面手动调用
  * {@link #renderTooltip(GuiGraphics, int, int)}；窗口最多 16 行，当前项写 {@code -> 选项}（白），
- * 其余 {@code > 选项}（灰），上下溢出补 {@code > ...}，与 hover 判定同源（{@link #inBounds}）。</p>
+ * 其余 {@code > 选项}（灰），窗口外还有项时补一行「上面 / 下面还有 N 项（共 M 项）」，
+ * 与 hover 判定同源（{@link #inBounds}）。</p>
  */
 public class ScrollSelectWidget<T> extends AbstractWidget {
     private static final String LANG = "gui.rs_create_compat.widget.scroll_select.";
@@ -39,6 +41,8 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
     private static final int COLOR_TEXT_HOVER = 0xFFFFFFFF;
     private static final int COLOR_TEXT_DISABLED = 0xFF808080;
     private static final int COLOR_ARROW = 0xFF9AA4B0;
+    /** 选项图标（16×16）占用的横向宽度（含右侧 2px 间距）。 */
+    private static final int ICON_RESERVE = 18;
 
     private final Font font;
     private List<T> options = List.of();
@@ -52,6 +56,12 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
     private Function<T, List<Component>> extraTooltipLines;
     /** 是否可交互（false 时灰显且不响应滚轮 / 点击）。 */
     private boolean selectable = true;
+    /**
+     * 可选的「选项图标」提供者（当前选中项左侧的 16×16 物品图标）。
+     * <p>为 {@code null} 时不画图标、也不占位，<b>渲染结果与加这个特性之前逐像素一致</b>
+     * （其它复用本控件的界面因此零回归）。</p>
+     */
+    private Function<T, net.minecraft.world.item.ItemStack> iconFor;
 
     public ScrollSelectWidget(final Font font, final int x, final int y, final int width, final int height) {
         super(x, y, width, height, Component.empty());
@@ -99,6 +109,17 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
 
     public ScrollSelectWidget<T> selectable(final boolean selectable) {
         this.selectable = selectable;
+        return this;
+    }
+
+    /**
+     * 当前选中项左侧的 16×16 图标（例：配方类型 → 能执行它的机器方块）。
+     * <p><b>只影响绘制，不改几何</b>：图标占用控件内部左侧 {@value #ICON_RESERVE}px，
+     * 文字区与 ◀/▶ 箭头整体右移同样的宽度，控件本身的 x/y/w/h 一个像素都不变。
+     * 传 {@code null} 恢复「纯文字」外观（与旧版完全一致）。</p>
+     */
+    public ScrollSelectWidget<T> withIcon(final Function<T, net.minecraft.world.item.ItemStack> iconFor) {
+        this.iconFor = iconFor;
         return this;
     }
 
@@ -198,22 +219,53 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
         }
 
         final int arrowW = font.width(ARROW_PREV);
+        // 选项图标：只在装了 iconFor 时占位（否则文字 / 箭头的坐标与旧版完全一致）
+        final int iconReserve = iconFor == null ? 0 : ICON_RESERVE;
+        if (iconFor != null) {
+            final net.minecraft.world.item.ItemStack icon = iconFor.apply(options.get(state));
+            if (icon != null && !icon.isEmpty()) {
+                guiGraphics.renderItem(icon, x + 2, y + (h - 16) / 2);
+            }
+        }
         // 不可交互时仍显示当前项（灰显、无箭头）：让玩家看得到被锁定的当前值，而不是只看到「不可用」
-        final boolean showArrows = selectable && options.size() > 1 && w >= 2 * arrowW + 8 + 8;
-        int textX = x + 2;
-        int textW = w - 4;
+        final boolean showArrows = selectable && options.size() > 1
+            && w >= 2 * arrowW + 8 + 8 + iconReserve;
+        int textX = x + 2 + iconReserve;
+        int textW = w - 4 - iconReserve;
         final int color = !selectable ? COLOR_TEXT_DISABLED
             : (inBounds(mouseX, mouseY) ? COLOR_TEXT_HOVER : COLOR_TEXT);
         if (showArrows) {
-            guiGraphics.drawString(font, Component.literal(ARROW_PREV), x + 2, lineY, COLOR_ARROW, false);
+            guiGraphics.drawString(font, Component.literal(ARROW_PREV), x + 2 + iconReserve, lineY,
+                COLOR_ARROW, false);
             guiGraphics.drawString(font, Component.literal(ARROW_NEXT), x + w - 2 - arrowW, lineY,
                 COLOR_ARROW, false);
-            textX = x + 2 + arrowW + 2;
-            textW = w - 4 - 2 * (arrowW + 2);
+            textX = x + 2 + iconReserve + arrowW + 2;
+            textW = w - 4 - iconReserve - 2 * (arrowW + 2);
         }
-        final String text = trimToWidth(display.apply(options.get(state)).getString(), textW);
-        guiGraphics.drawString(font, Component.literal(text), textX + (textW - font.width(text)) / 2, lineY,
-            color, false);
+        final String text = display.apply(options.get(state)).getString();
+        // 第 104 轮：选中项一律**完整显示**。控件宽度不够时按 RsccTextFit 整体缩字号（下限 0.6 倍），
+        // 绝不切成「前半段…」；缩到下限仍放不下的超长自由文本（第三方模组的配方类型名 / 玩家命名）
+        // 的完整原文在 tooltip 里（tooltipLines 的「-> 当前项」+ 上下溢出计数）。
+        drawCenteredFitLine(guiGraphics, text, textX, textW, lineY, color);
+    }
+
+    /**
+     * 在 {@code [textX, textX + textW)} 里<b>水平居中</b>画一行完整文本。
+     * <p>仅用于本控件内部的居中文字：先按 {@link RsccTextFit#requiredScaleForLine} 取缩放（不低于
+     * {@link RsccTextFit#MIN_SCALE}），再把缩放后的宽度居中，最后交给
+     * {@link RsccTextFit#drawFitLine} 实画 —— 因此「量出来的宽度」和「画出来的宽度」是同一个值，
+     * 居中不会偏。<b>不做任何截断。</b></p>
+     */
+    private void drawCenteredFitLine(final GuiGraphics guiGraphics, final String text,
+                                     final int textX, final int textW, final int lineY,
+                                     final int color) {
+        final Component component = Component.literal(text);
+        final int rawWidth = font.width(component);
+        final float scale = Math.max(RsccTextFit.MIN_SCALE,
+            RsccTextFit.requiredScaleForLine(font, component, textW));
+        final int drawnWidth = Math.round(rawWidth * scale);
+        final int drawX = textX + Math.max(0, (textW - drawnWidth) / 2);
+        RsccTextFit.drawFitLine(guiGraphics, font, component, drawX, lineY, textW, color);
     }
 
     /** 手动渲染 tooltip：判定范围与绘制范围完全一致（左闭右开）。 */
@@ -229,7 +281,12 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
         guiGraphics.renderTooltip(font, wrapped, mouseX, mouseY);
     }
 
-    /** tooltip 内容：标题 + 16 行窗口（当前项 {@code ->}，其它 {@code >}）+ 提示。 */
+    /**
+     * tooltip 内容：标题 + 16 行窗口（当前项 {@code ->}，其它 {@code >}）+ 上下溢出计数 + 提示。
+     * <p><b>第 104 轮</b>：窗口外的项不再画成 {@code > ...} 这种省略号占位，而是换成一整句
+     * 「上面 / 下面还有 N 项（共 M 项）」—— 同样一眼看出「还有多少没列出来」，但界面里
+     * 不再出现任何省略号；当前项本身永远整串显示（见 {@link #drawCenteredFitLine}）。</p>
+     */
     private List<Component> tooltipLines() {
         final List<Component> lines = new ArrayList<>();
         if (!title.getString().isEmpty()) {
@@ -242,7 +299,8 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
                 Math.min(options.size() - MAX_TOOLTIP_LINES, state - MAX_TOOLTIP_LINES / 2));
             final int max = Math.min(options.size(), min + MAX_TOOLTIP_LINES);
             if (min > 0) {
-                lines.add(Component.literal("> ...").withStyle(ChatFormatting.GRAY));
+                lines.add(Component.translatable(LANG + "more_above", min, options.size())
+                    .withStyle(ChatFormatting.GRAY));
             }
             for (int i = min; i < max; i++) {
                 final Component option = display.apply(options.get(i));
@@ -253,7 +311,8 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
                 }
             }
             if (max < options.size()) {
-                lines.add(Component.literal("> ...").withStyle(ChatFormatting.GRAY));
+                lines.add(Component.translatable(LANG + "more_below", options.size() - max, options.size())
+                    .withStyle(ChatFormatting.GRAY));
             }
         }
         if (hint != null) {
@@ -278,21 +337,6 @@ public class ScrollSelectWidget<T> extends AbstractWidget {
     public boolean inBounds(final double mouseX, final double mouseY) {
         return mouseX >= getX() && mouseX < getX() + getWidth()
             && mouseY >= getY() && mouseY < getY() + getHeight();
-    }
-
-    /** 按像素宽截断字符串（尾部补省略号）。 */
-    private String trimToWidth(final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     @Override

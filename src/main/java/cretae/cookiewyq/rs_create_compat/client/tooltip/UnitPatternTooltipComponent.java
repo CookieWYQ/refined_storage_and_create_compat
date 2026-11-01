@@ -24,6 +24,11 @@ import java.util.List;
  * </ol>
  * <p>无机器 / 无输入 / 无流体时对应行不占位（绝不显示空行）；老样板没有流体标记时
  * {@link FluidStack#EMPTY} 直接跳过（优雅降级）。所有文字无阴影（硬规则）。</p>
+ *
+ * <h2>可见性（2026-10-17 用户明确要求）</h2>
+ * <p><b>机器行与输入池原料行常显</b>（不按键也能看到），<b>不再</b>藏进 Shift 层；输入流体行仍按 Ctrl
+ * （它带数量 mB，属数值层）。原因见 {@code machineVisible()} 上方那段注释。常显行数恒 ≤
+ * {@link #MAX_ALWAYS_ROWS}（两类各 1 行，多候选在行内轮播）。</p>
  */
 public class UnitPatternTooltipComponent implements ClientTooltipComponent {
     private static final int ICON_SIZE = ItemCycleTooltipComponent.ICON_SIZE;
@@ -99,35 +104,67 @@ public class UnitPatternTooltipComponent implements ClientTooltipComponent {
             inputFluid.getAmount());
     }
 
-    // ==================== 逐行可见性：本模组附加信息默认收起，按修饰键展开 ====================
-    // 组件行不走 Component，无法经 RsccTooltipLayers#append 过滤，因此可见性统一问
-    // RsccTooltipLayers#componentVisible —— 按键状态依然只在唯一实现里读一次（不在这里自己读 Shift/Ctrl）。
-    // 分层归属（信息层面）：机器行 / 输入原料行 = Shift（「这一步由什么机器、吃什么原料跑」= 机制）；
-    // 输入流体行 = Ctrl（带数量 mB，属于数值层面）。
+    // ==================== 逐行可见性：机器 / 输入池原料常显，输入流体仍按 Ctrl ====================
+    // 用户原话（2026-10-17）：「另一个单元样板因为不可能像总的（序列装配样板）一样使用某一些物品作为它的
+    // 那个图标，所以说呢它的那些机器和它的输入池原料应该始终保持显示，不要改成 shift 再显示」。
+    //
+    // 为什么偏偏是这两块常显（而不是整份 tooltip 都常显）：
+    //   总样板能拿产物 / 主原料当物品图标，鼠标一放上去看物品名就知道「这张样板是什么」；
+    //   单元样板只是一个「步骤」，它没有天然的代表物品 —— 图标区（getTooltipImage）承载的
+    //   「这一步由哪台机器跑、吃什么原料」几乎是它唯一可读的信息。把这两行藏进 Shift 层，
+    //   等于不按键时这张样板在 tooltip 上没有任何可判断的内容（用户实测的抱怨）。
+    //
+    // 行数控制（用户此前抱怨过 tooltip 太挤 / 行距堆叠）：
+    //   机器行 / 输入池原料行<b>各固定 1 行</b>，多候选只在同一行内按同一节拍轮播，
+    //   因此常显新增行数恒 ≤ {@link #MAX_ALWAYS_ROWS}（= 2），<b>不随候选数量增长</b>。
+    //
+    // 其余附加信息仍走 RsccTooltipLayers 分层（在物品级 appendHoverText 里）：
+    //   配方类型名 = Shift；配方类型 id / 输入物 id = Alt；输入流体行 = Ctrl（带数量 mB，属数值层）。
 
-    /** 机器行是否显示：有候选机器 且 按住 Shift。 */
+    /**
+     * 常显行数上限：机器行 1 + 输入池原料行 1。
+     * <p>这个常量不是装饰：{@link #visibleRows()} 用它截断，所以将来若有人把「按候选逐个增行」
+     * 写进来，tooltip 也不会无限变长（每类最多仍占 1 行）。</p>
+     */
+    public static final int MAX_ALWAYS_ROWS = 2;
+
+    /**
+     * 机器行是否显示：<b>常显</b> —— 有候选机器就显示，<b>不再问 Shift 层</b>。
+     * <p>为什么把判据从「按键层」换成「有没有内容」：见本节顶部注释（用户明确要求常显）。
+     * 没有反查到机器时该行不占位（绝不显示空行），这是既有的优雅降级。</p>
+     */
     private boolean machineVisible() {
-        return !machines.isEmpty()
-            && RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.SHIFT);
+        return !machines.isEmpty();
     }
 
-    /** 输入原料行是否显示：有输入物（代表物或候选）且 按住 Shift。 */
+    /**
+     * 输入池原料行是否显示：<b>常显</b> —— 有代表物或候选就显示，<b>不再问 Shift 层</b>。
+     * <p>候选组（标签型 ingredient，如「铁粒 或 锌粒」）仍只在同一行内轮播，不按候选数增行。</p>
+     */
     private boolean inputVisible() {
-        return !input.isEmpty() || !inputCandidates.isEmpty()
-            ? RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.SHIFT)
-            : false;
+        return !input.isEmpty() || !inputCandidates.isEmpty();
     }
 
-    /** 输入流体行是否显示：有输入流体 且 按住 Ctrl（该行含数量 mB）。 */
+    /** 输入流体行是否显示：有输入流体 且 按住 Ctrl（该行含数量 mB，仍属数值层，本次不改）。 */
     private boolean fluidVisible() {
         return !inputFluid.isEmpty()
             && RsccTooltipLayers.componentVisible(RsccTooltipLayers.Layer.CTRL);
     }
 
+    /**
+     * 全部可见行数（高度计算的唯一来源）。
+     * <p>常显部分用 {@link #MAX_ALWAYS_ROWS} 截断：机器 / 原料各 1 行，即使将来有人按候选加行也不会超上限。</p>
+     */
+    private int visibleRows() {
+        final int always = Math.min(
+            (machineVisible() ? 1 : 0) + (inputVisible() ? 1 : 0), MAX_ALWAYS_ROWS);
+        return always + (fluidVisible() ? 1 : 0);
+    }
+
     @Override
     public int getHeight() {
-        return (machineVisible() ? ICON_SIZE : 0) + (inputVisible() ? ICON_SIZE : 0)
-            + (fluidVisible() ? ICON_SIZE : 0);
+        // 一律按 visibleRows() 计价：与 renderImage 的逐行推进同源（行高 = ICON_SIZE）
+        return visibleRows() * ICON_SIZE;
     }
 
     @Override
@@ -148,8 +185,11 @@ public class UnitPatternTooltipComponent implements ClientTooltipComponent {
 
     @Override
     public void renderImage(final Font font, final int x, final int y, final GuiGraphics graphics) {
-        // 高度为 0 时原版仍会调用本方法，因此这里必须用与 getHeight 完全相同的三个条件逐行再挡一次
-        // （否则「没按住键」时图标会照画）；行序恒为 机器 → 输入原料 → 输入流体（按可见行紧凑排布）。
+        // 行序恒为 机器 → 输入池原料 → 输入流体（按可见行紧凑排布）。
+        // 前两行现在常显；第三行仍按 Ctrl —— 因此每一行都必须用与 getHeight/visibleRows 完全相同的
+        // 条件单独判断（否则没按 Ctrl 时流体行也会照画，高度与实际绘制就不一致）。
+        // 注意：这里绝不按候选数量循环加行（机器 / 原料各只画「当前轮播到的那一件」），
+        // 常显行数因此恒 ≤ MAX_ALWAYS_ROWS。
         int row = 0;
         if (machineVisible()) {
             graphics.renderItem(currentMachine(), x, y);

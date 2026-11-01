@@ -22,6 +22,23 @@ bg.png 结构（256x256）：
     python make_gui_bg.py --out ..\\gui\\loader.png --width 208 --height 222 --container-height 140 --with-inventory \
         --slot-start-x 8 --slot-start-y 140 --slot-cols 9 --slot-rows 3 \
         --slots "8,8,1,1" "35,8,6,1" "8,26,9,6" "8,198,9,1"
+
+坐标语义（**第 126 轮钉死，写错就是「槽位与背景差 1px」**）：
+    MC 的 ``Slot.x / Slot.y`` 指的是**物品图标**的左上角；18×18 的槽框背景
+    左上角在 ``(Slot.x - 1, Slot.y - 1)``，而本工装贴的 17×17 ``slot.png``
+    正是那个「槽框」——所以 **PNG 精灵坐标 = Menu 坐标 - 1**。
+    权威出处：``tools/make_gui_gui.py`` 第 21 / 905 / 1365 / 1495 行
+    「精灵坐标 +1 = Menu 坐标」。
+
+因此有两种传参方式，**新界面一律用 ``--slots-menu``**：
+    ``--slots``      参数是**精灵坐标**（历史用法，贴图原样落位）；
+    ``--slots-menu`` 参数是**Menu / Spec 坐标**（本工具自动 -1），
+                     与 ``XxxSpec`` 里给 ``addSlot`` 的数字**逐字相同**，
+                     杜绝「手算 -1 算反」这类事故。
+
+    # 降解室发电机（Menu 坐标与 DecompositionGeneratorSpec 逐字一致）
+    python make_gui_bg.py --out ..\\decomposition_generator.png --width 182 --height 212 \
+        --slots-menu "8,18,4,4" "118,37,2,2" "118,76,3,2" "8,128,9,3" "8,188,9,1"
 """
 import argparse
 import os
@@ -41,6 +58,8 @@ BG_INV_Y = 165  # 背包区域起始 y
 # MC 槽位间距 18px，粘贴时相邻槽之间留 1px 背景空隙。
 SLOT_PX = 17    # 槽位素材像素尺寸
 SLOT_GAP = 18   # 槽位中心间距
+# 精灵坐标 = Menu 坐标 - SLOT_INSET（见文件头「坐标语义」；权威出处 make_gui_gui.py）。
+SLOT_INSET = 1
 
 
 def stretch(dst: Image.Image, src: Image.Image, sx, sy, sw, sh, dx, dy, dw, dh):
@@ -108,13 +127,23 @@ def main():
     parser.add_argument("--slot-cols", type=int, default=9)
     parser.add_argument("--slot-rows", type=int, default=3)
     parser.add_argument("--slot-gap", type=int, default=18)
-    parser.add_argument("--slots", action="append", default=[], metavar="X,Y,COLS,ROWS",
-                        help="自定义槽位网格，可多次指定（如 --slots \"8,8,1,1\" \"8,26,9,6\"）")
+    parser.add_argument("--slots", action="append", nargs="+", default=[], metavar="X,Y,COLS,ROWS",
+                        help="自定义槽位网格（精灵坐标，原样贴图），可多次/多值指定（如 --slots \"8,8,1,1\" \"8,26,9,6\"）")
+    parser.add_argument("--slots-menu", action="append", nargs="+", default=[], metavar="X,Y,COLS,ROWS",
+                        help="自定义槽位网格（Menu/Spec 坐标，贴图时自动 -1）；新界面用这个")
     args = parser.parse_args()
 
     bg = Image.open(args.bg).convert("RGBA")
     slot_img = Image.open(args.slot).convert("RGBA").crop((0, 0, SLOT_PX, SLOT_PX))
     container_h = args.container_height if args.container_height else args.height
+
+    # 精灵坐标 = Menu 坐标 - 1（MC 的 18×18 槽框左上角在 Slot.x/y 的 -1 处）。
+    # 两种传参在这里合流，后面只有一条绘制路径，不会出现「两套语义」。
+    flat = lambda groups: [spec for group in groups for spec in group]
+    slot_specs = [tuple(int(v) for v in spec.split(",")) for spec in flat(args.slots)]
+    slot_specs += [(sx - SLOT_INSET, sy - SLOT_INSET, cols, rows)
+                   for sx, sy, cols, rows in
+                   (tuple(int(v) for v in spec.split(",")) for spec in flat(args.slots_menu))]
 
     dst = Image.new("RGBA", (args.width, args.height), (0, 0, 0, 0))
     # 整幅背景连续铺满（bg.png 0-165 有效区域 9-slice 拉伸），保证无透明洞
@@ -124,8 +153,7 @@ def main():
                        args.slot_start_x, args.slot_start_y, args.slot_cols, args.slot_rows, args.slot_gap)
 
     # 自定义槽位网格（与 Menu 槽位坐标一一对应）
-    for spec in args.slots:
-        sx, sy, cols, rows = (int(v) for v in spec.split(","))
+    for sx, sy, cols, rows in slot_specs:
         for row in range(rows):
             for col in range(cols):
                 x, y = sx + col * SLOT_GAP, sy + row * SLOT_GAP

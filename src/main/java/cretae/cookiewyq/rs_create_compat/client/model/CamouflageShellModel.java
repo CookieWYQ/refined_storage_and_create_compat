@@ -73,8 +73,18 @@ import java.util.Set;
  * 读方块实体、读静态的方块颜色表、读一个 client-only 的布尔开关 —— 都不写任何共享状态。</p>
  */
 public class CamouflageShellModel extends BakedModelWrapperWithData {
-    /** 这一格的伪装记录；<b>没有</b>这个字段 = 这一格没被裹住（四元组阶段一个外壳都不产出）。 */
-    public static final ModelProperty<RsccCamouflage.Camo> CAMOUFLAGE_PROPERTY = new ModelProperty<>();
+    /**
+     * 这一格的伪装记录；<b>没有</b>这个字段 = 这一格没被裹住（四元组阶段一个外壳都不产出）。
+     *
+     * <p><b>2026-10-17：它就是 {@link CamouflageModelData#CAMOUFLAGE} 本身（同一个实例，不是第二份）</b>。
+     * 原因见 {@link CamouflageModelData}：伪装记录现在有两条到达模型的通道 ——
+     * ① 引擎回调 {@code BakedModel#getModelData(...)} 时由本类现问方块实体（区块 / 装置烘焙）；
+     * ② 由方块实体模型数据（{@code ClientLevel#getModelData} / 缺省
+     * {@code BlockAndTintGetter#getModelData}）直接带进来（物理化单格等「不回调 getModelData」的渲染路径）。
+     * 两条通道必须是<b>同一个属性实例</b>，否则模型数据里那份读不出来，等于又回到「看不到外壳」。</p>
+     */
+    public static final ModelProperty<RsccCamouflage.Camo> CAMOUFLAGE_PROPERTY =
+        CamouflageModelData.CAMOUFLAGE;
     /** 被裹方块自己的模型数据（原样转发）。 */
     private static final ModelProperty<ModelData> BASE_DATA_PROPERTY = new ModelProperty<>();
     /** 材质方块自己的模型数据（转发给材质的模型）。 */
@@ -135,9 +145,15 @@ public class CamouflageShellModel extends BakedModelWrapperWithData {
                                                 final BlockPos pos, final BlockState state,
                                                 final ModelData blockEntityData) {
         builder.with(BASE_DATA_PROPERTY, blockEntityData);
-        // 唯一取数来源：被裹方块自己的方块实体（两种烘焙路径 —— RenderChunkRegion / VirtualRenderWorld
-        // —— 都实现了 getBlockEntity，因此区块网格与装置网格走的是同一句话）
-        final RsccCamouflage.Camo camo = RsccCamouflage.get(world, pos);
+        // ① 先看引擎递进来的「方块实体模型数据」里有没有伪装记录：这是唯一一条
+        //    「任何渲染路径都拿得到」的通道（物理化单格那条路径不会回调本方法，只把模型数据直接
+        //    塞给 getQuads / getRenderTypes，见 CamouflageModelData 的类注释）。
+        RsccCamouflage.Camo camo = CamouflageModelData.camoOf(blockEntityData);
+        // ② 回落：被裹方块自己的方块实体（两种烘焙路径 —— RenderChunkRegion / VirtualRenderWorld
+        //    —— 都实现了 getBlockEntity，因此区块网格与装置网格走的是同一句话）
+        if (camo == null) {
+            camo = RsccCamouflage.get(world, pos);
+        }
         if (camo == null) {
             return builder; // 没裹住：连伪装字段都不放 → getQuads 不会产出任何外壳四元组
         }
@@ -181,8 +197,13 @@ public class CamouflageShellModel extends BakedModelWrapperWithData {
                                     final RandomSource rand, @Nullable final ModelData data,
                                     @Nullable final RenderType renderType) {
         final ModelData base = data == null ? null : data.get(BASE_DATA_PROPERTY);
+        // 被裹方块自己的模型数据：模型数据阶段一定会塞进 BASE_DATA_PROPERTY（区块 / 装置烘焙）。
+        // 但「物理化单格」那条路径不回调 getModelData，直接把方块实体模型数据原样递到这里 ——
+        // 那时 BASE_DATA_PROPERTY 不存在，必须把 data 本身转交给对方模型，
+        // 否则 RS 线缆会丢掉 CABLE_CONNECTIONS（只剩一根光秃秃的芯柱）。
+        final ModelData forwarded = base != null ? base : (data == null ? ModelData.EMPTY : data);
         final List<BakedQuad> quads = new ArrayList<>(
-            originalModel.getQuads(state, side, rand, base == null ? ModelData.EMPTY : base, renderType));
+            originalModel.getQuads(state, side, rand, forwarded, renderType));
         final RsccCamouflage.Camo camo = data == null ? null : data.get(CAMOUFLAGE_PROPERTY);
         if (camo != null) {
             quads.addAll(shellQuads(state, side, rand, data, camo, renderType));
@@ -237,13 +258,17 @@ public class CamouflageShellModel extends BakedModelWrapperWithData {
     /**
      * 渲染层 = <b>并集</b>（被裹方块自己的 ∪ 外壳的）。漏任何一层，那一层的几何就永远不会被画。
      *
-     * <p><b>外壳那一半取自模型数据阶段算好的 {@link #SHELL_LAYERS_PROPERTY}</b>：
+     * <p><b>外壳那一半优先取模型数据阶段算好的 {@link #SHELL_LAYERS_PROPERTY}</b>：
      * 与 {@link #getQuads} 里那道层门禁读的是<b>同一份集合</b>，因此不可能出现
      * 「这里报了某层、那里却把它判掉」的静默丢失。</p>
      *
-     * <p><b>并集永不为空</b>：引擎只会为这里出现过的层调用 {@code getQuads}。被裹方块自己的模型
-     * 若报了空集合（孤立态 / 第三方模型 / 资源包把它整段改掉），外壳就会连被问一次的机会都没有 ——
-     * 因此空集合一律兜底成 {@code solid}（那一层画不出东西时引擎自己会丢弃空网格，没有副作用）。</p>
+     * <h2>2026-10-17：缺 {@link #SHELL_LAYERS_PROPERTY} 时<b>现算</b>，绝不退回「框架层」</h2>
+     * <p>物理化单格那条路径<b>不回调</b> {@code gatherModelData}，因此模型数据里只有「裹着什么」，
+     * 没有阶段化算好的层集合。旧实现在这种情况下退回<b>框架模型</b>的层（cutout）：
+     * 材质若在 solid / translucent 层（石头、黑曜石、玻璃），引擎就不会为那一层调用 {@code getQuads}，
+     * 外壳<b>一个四元组都产不出来</b> —— 正是「手动套上去也看不到外观」。
+     * 现在改成按<b>材质自己的模型</b>现算（只查烘焙模型表，不读世界 / 坐标，因此烘焙线程上同样安全），
+     * 并保留「并集永不为空」的兜底。</p>
      */
     @Override
     public ChunkRenderTypeSet getRenderTypes(final BlockState state, final RandomSource rand,
@@ -257,12 +282,28 @@ public class CamouflageShellModel extends BakedModelWrapperWithData {
             if (layers != null) {
                 layers.forEach(types::add);
             } else {
-                // 不变量兜底（gatherModelData 永远与伪装记录成对写入，此处只防模型数据被别处裁剪）：
-                // 外壳至少要报出一个层，否则引擎不会调用 getQuads
-                frameModel.getRenderTypes(frameState(), rand, ModelData.EMPTY).forEach(types::add);
+                shellLayers(camo, rand, data).forEach(types::add);
             }
         }
         return types.isEmpty() ? ChunkRenderTypeSet.of(RenderType.solid()) : ChunkRenderTypeSet.of(types);
+    }
+
+    /**
+     * 外壳这一帧要参与哪些渲染层（<b>缺 {@link #SHELL_LAYERS_PROPERTY} 时的现算版</b>）。
+     *
+     * <p>与 {@code gatherModelData} 里那段阶段化计算逐条同义：材质为空 / K 键切到「只显示框架」时
+     * 用框架模型自己的层，否则用<b>材质方块自己的模型</b>报的层。这里只做纯模型查表
+     * （{@code modelOf(...)} 读的是烘焙结果表），不碰世界、不读坐标，因此与
+     * {@link #getRenderTypes} 一样可以跑在区块烘焙线程上。</p>
+     */
+    private ChunkRenderTypeSet shellLayers(final RsccCamouflage.Camo camo, final RandomSource rand,
+                                           final ModelData data) {
+        final BlockState material = camo.material();
+        final Boolean pinned = data.get(MATERIAL_HIDDEN_PROPERTY);
+        if (material == null || (pinned != null ? pinned : RsccCamouflage.isMaterialHidden())) {
+            return frameModel.getRenderTypes(frameState(), rand, ModelData.EMPTY);
+        }
+        return modelOf(material).getRenderTypes(material, rand, wrappedData(data));
     }
 
     /**
@@ -272,6 +313,8 @@ public class CamouflageShellModel extends BakedModelWrapperWithData {
     @Override
     public TextureAtlasSprite getParticleIcon(final ModelData data) {
         final ModelData base = data == null ? null : data.get(BASE_DATA_PROPERTY);
-        return originalModel.getParticleIcon(base == null ? ModelData.EMPTY : base);
+        // 与 getQuads 同一条兜底：模型数据不是本类阶段化产出的（物理化单格 / 第三方路径）时，
+        // 把 data 原样转交给被裹模型，粒子才不会退回「空模型」的默认贴图。
+        return originalModel.getParticleIcon(base != null ? base : (data == null ? ModelData.EMPTY : data));
     }
 }

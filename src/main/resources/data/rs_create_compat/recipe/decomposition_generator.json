@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QHQ",
+    "CMC",
+    "QPQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "H": {
+      "item": "minecraft:hopper"
+    },
+    "C": {
+      "item": "minecraft:copper_block"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "P": {
+      "item": "minecraft:composter"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:decomposition_generator"
+  }
+}

@@ -147,3 +147,33 @@ adventure Texture/
 # 会把 `icon/` 目录一并吞掉，导致 icon/ 下的图标与脚本无法被 git 跟踪。
 # 只反忽略这一个目录，不影响其它规则。
 !icon/
+
+# ==================== 第 129 轮（提交 1.2.0-beta.30 测试版）补充 ====================
+# Python 字节码缓存：以前 tools/__pycache__/*.pyc 被误提交过（第 129 轮已 git rm --cached）。
+__pycache__/
+*.pyc
+
+# 本机凭据 / SFTP 工具：**绝不能入库**（含服务器地址与加密口令）。
+# 这些文件只存在于开发机，部署脚本运行时才读；仓库里只需要 deploy_rscc*.py 与 sftp_probe_lib.py。
+sftp_credentials.enc
+.sftp_key
+sftp_skill.py
+sftp_manager.py
+
+# 本地工作目录（抓取 / 检索 / mcmod 词条 / 服务端日志 / 根目录解包的游戏资源），
+# 都是"开发机上的中间产物"，不属于模组源码；注意全部用前导 / 锚定根目录，
+# 否则 `assets/` 会误伤 src/main/resources/assets/（新贴图/新语言文件会静默不入库）。
+/recipedumper-py/
+/_mcmod_work/
+/mcmod/
+/_skills/
+/diag/
+/assets/
+
+# 根目录残留的第三方运行期文件（从别的 jar 里解出来看的，不是本工程资源）
+/nul
+/_probe_root.txt
+/pack.mcmeta
+/kubejs.classfilter.txt
+/ftbultimine-common.mixins.json
+/ftb-ultimine-common-refmap.json

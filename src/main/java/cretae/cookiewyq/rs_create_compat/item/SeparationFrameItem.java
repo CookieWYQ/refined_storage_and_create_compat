@@ -6,6 +6,7 @@ import cretae.cookiewyq.rs_create_compat.support.SeparationFrameGuard;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -148,7 +149,8 @@ public class SeparationFrameItem extends RsccHelpBlockItem {
         // 「这一次是否真的会扣掉 1 个」必须在扣之前算好并记进记录：取下 / 被拆时按它决定还不还，
         // 于是「创造模式下套上（没扣）→ 生存玩家取下」也不会凭空产出一个框架（与伪装框架同一条守恒规则）。
         final boolean paid = !infinite && !player.hasInfiniteMaterials();
-        if (!RsccSheaths.add(level, pos, infinite, paid)) {
+        // 成就只记给「这一次真正按右键的玩家」：拿不到 ServerPlayer 就不发，绝不散给附近的人
+        if (!RsccSheaths.add(player instanceof final ServerPlayer actor ? actor : null, level, pos, infinite, paid)) {
             player.displayClientMessage(HINT_REMOVE_HINT, true);
             return InteractionResult.SUCCESS;
         }

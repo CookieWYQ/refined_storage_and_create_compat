@@ -1,6 +1,7 @@
 package cretae.cookiewyq.rs_create_compat.client;
 
 import cretae.cookiewyq.rs_create_compat.network.CompletionBannerPayload;
+import cretae.cookiewyq.rs_create_compat.support.RsccClientText;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -70,7 +71,9 @@ public class CompatCompletionToast implements Toast {
             return Component.empty();
         }
         if (raw.charAt(0) != CompletionBannerPayload.LANG_MARKER) {
-            return Component.literal(raw);
+            // 单个段也可能<b>直接</b>是「嵌套参数」（产物名 / 缺料名 / 配方名单独占一段时）：
+            // 统一交给协议的唯一定义处解析，其余情况仍按字面量。
+            return RsccClientText.resolveSegment(raw);
         }
         final String[] parts = raw.substring(1)
             .split(String.valueOf(CompletionBannerPayload.LANG_ARG_SEP), -1);
@@ -78,7 +81,11 @@ public class CompatCompletionToast implements Toast {
             return Component.translatable(parts[0]);
         }
         final Object[] args = new Object[parts.length - 1];
-        System.arraycopy(parts, 1, args, 0, args.length);
+        // 参数可能是「嵌套语言键 / 配方类型 id」（产物名 / 缺料名 / 配方名，见 RsccClientText#argument）：
+        // 由协议的唯一定义处解码，绝不在服务端把名字 getString() 后送过来（专服只有 en_us）。
+        for (int i = 1; i < parts.length; i++) {
+            args[i - 1] = RsccClientText.argument(parts[i]);
+        }
         return Component.translatable(parts[0], args);
     }
 

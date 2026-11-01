@@ -75,8 +75,8 @@ has(chamber, "- machineHeldItem(entry.getKey()) - autocraftInFlight(resource);",
     "锚点①: 缺口再扣「机器侧压着的那一份」与「RS 已在合成的在途量」（用户第 1 条：网络+本仓+机器侧+在制/在途）")
 has(chamber, "private long autocraftInFlight(final ResourceKey resource) {",
     "锚点②: 在途量（TaskStatus.Item#crafting 汇总）只有一份实现")
-has(chamber, "final long requestBatch = pipelineUsesChance()",
-    "锚点③: 旧口径的分批量仍在（默认档 = 与变更前逐字一致）")
+has(chamber, "final long requestBatch = chancePipeline",
+    "锚点③: 旧口径的分批量仍在（冷档 / 默认档 = 与变更前逐字一致；热档另按台数发）")
 has(chamber, "autocrafting.ensureTask(resource, Math.min(deficit, requestBatch),",
     "锚点④: 旧口径请求式仍在（确定性一次一份 / 概率性按 allowedConcurrentUnits 分批）")
 has(chamber, "final boolean gapRefill = RsccRefillPolicy.gapRefill(getLevel());",
@@ -84,7 +84,8 @@ has(chamber, "final boolean gapRefill = RsccRefillPolicy.gapRefill(getLevel());"
 check("锚点⑥: 「按缺口补发」只在<b>确定性配方</b>上追加一次「至少 deficit」的请求（概率配方不追加 ⇒ 不烧料）",
       "if (gapRefill && deterministicPipeline) {" in chamber
       and chamber.count("autocrafting.ensureTask(resource, deficit,") == 2
-      and "final boolean deterministicPipeline = !pipelineUsesChance();" in chamber)
+      and "final boolean deterministicPipeline = !chancePipeline;" in chamber
+      and "final boolean chancePipeline = pipelineUsesChance();" in chamber)
 
 
 def request_amount(deficit, chance, refill_on):

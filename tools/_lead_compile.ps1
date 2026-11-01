@@ -18,7 +18,9 @@ $root = "D:\MODS\refined_storage_and_create_compat"
 $javac = "D:\java21\bin\javac.exe"
 $outDir = "$root\build\lead_compile"
 $logFile = "$root\build\lead_compile.$PID.log"
-$argfile = "$root\build\lead_javac_args.txt"
+# argfile 按 PID 隔离（2026-10-25 修）：多个 agent 并发跑本脚本时，共用同一个
+# build\lead_javac_args.txt 会互相截断，javac 报「找不到源 / argfile 截断」的假故障。
+$argfile = "$root\build\lead_javac_args.$PID.txt"
 
 if (!(Test-Path $javac)) { Write-Output "LEAD_COMPILE_FAILED javac missing"; exit 1 }
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null

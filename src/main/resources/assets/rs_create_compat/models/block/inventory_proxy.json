@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/cube_column",
+  "textures": {
+    "particle": "rs_create_compat:block/inventory_proxy_side",
+    "side": "rs_create_compat:block/inventory_proxy_side",
+    "end": "rs_create_compat:block/inventory_proxy_top"
+  }
+}

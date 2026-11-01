@@ -1,7 +1,11 @@
 package cretae.cookiewyq.rs_create_compat.client.jade;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
+import cretae.cookiewyq.rs_create_compat.block.InventoryProxyBlock;
+import cretae.cookiewyq.rs_create_compat.block.NetworkResourceReceiverBlock;
 import cretae.cookiewyq.rs_create_compat.compat.jade.RsccBusJadeServerData;
+import cretae.cookiewyq.rs_create_compat.compat.jade.RsccReceiverJadeServerData;
+import cretae.cookiewyq.rs_create_compat.support.InventoryProxyJadeServerData;
 import cretae.cookiewyq.rs_create_compat.support.RsccCamouflageDisplay;
 import com.refinedmods.refinedstorage.common.exporter.ExporterBlock;
 import com.refinedmods.refinedstorage.common.importer.ImporterBlock;
@@ -22,7 +26,7 @@ import snownee.jade.api.ui.IElement;
 import snownee.jade.api.ui.IElementHelper;
 
 /**
- * <b>Jade（指向信息模组）的可选接入</b>。本插件有两条互不干扰的接入：
+ * <b>Jade（指向信息模组）的可选接入</b>。本插件有三条互不干扰的接入：
  *
  * <ol>
  *     <li><b>被伪装的方块</b>：让它在瞄准提示里显示成 <b>图标 = 填充方块</b>、
@@ -34,7 +38,19 @@ import snownee.jade.api.ui.IElementHelper;
  *     输入总线是否全自动。数据由 {@link RsccBusJadeServerData} 从<b>服务端</b>方块实体取
  *     （客户端读不到，见那个类的说明），文案与分组在
  *     {@code compat/jade/RsccBusJadePayload}，客户端只按配置决定显不显示
- *     （{@code client/jade/RsccBusJadeProvider}）。</li>
+ *     （{@code client/jade/RsccBusJadeProvider}）；</li>
+ *     <li><b>网络资源接收器的名字</b>（用户硬规则：指向它时能看见内部存储 —— 但第 95 轮起
+ *     内容物**不再由本模组自己拼**）：接收器方块实体暴露了
+ *     {@code Capabilities.ItemHandler.BLOCK} / {@code FluidHandler.BLOCK}，Jade 的
+ *     {@code UniversalPlugin} 会自动显示容器内容，因此本模组只补一行「名字 / 未命名（不可用）」。
+ *     用户原话：「你的作用只是把这一个接口暴露出去，并不需要你自己写……按下 Shift 显示详情
+ *     什么的这玩意 Jade 已经帮你实现了」。数据由服务端方块实体采集
+ *     （{@link RsccReceiverJadeServerData}），载荷只在 {@code compat/jade/RsccReceiverJadePayload}。</li>
+ *     <li><b>容器代理器的「内容物形态」</b>（第 108 轮用户第 108 条）：内容物本身仍由 Jade 按
+ *     代理器暴露的两路能力自己显示；本条只补 Jade 结构上取不到的<b>事实</b> ——
+ *     「实际认到几路、每路多少格」（{@link RsccProxyJadeProvider} + {@link InventoryProxyJadeServerData}）。
+ *     用户投诉的「只显示有流体、物品不显示」在没有这一行时是一句没有解释的沉默，玩家无法区分
+ *     「真的没物品」和「物品那路读不到」。</li>
  * </ol>
  *
  * <h2>为什么客户端注册与服务端注册要分成两个方法（专服安全）</h2>
@@ -80,6 +96,15 @@ public class RsccJadePlugin implements IWailaPlugin {
         final RsccBusJadeProvider bus = new RsccBusJadeProvider();
         registration.registerBlockComponent(bus, ImporterBlock.class);
         registration.registerBlockComponent(bus, ExporterBlock.class);
+        // 网络资源接收器：只补一行「名字 / 未命名（不可用）」；内容物由 Jade 的 UniversalPlugin
+        // 按方块实体暴露的 ItemHandler/FluidHandler capability 自己显示（用户第 4 条：不要自己写 Shift 详情）
+        registration.registerBlockComponent(new RsccReceiverJadeProvider(),
+            NetworkResourceReceiverBlock.class);
+        // 容器代理器（第 108 轮）：内容物同样交给 Jade 自己显示，本 provider 只补「代理器实际认到
+        // 几路、每路多少格」。用户第 108 条「只显示流体、物品不显示」时，没有这一行就只剩一句无声的
+        // “没有物品”，玩家无法区分「真没有」和「物品那路读不到」。见 RsccProxyJadeProvider 类注释。
+        registration.registerBlockComponent(new RsccProxyJadeProvider(),
+            InventoryProxyBlock.class);
     }
 
     /**
@@ -98,6 +123,14 @@ public class RsccJadePlugin implements IWailaPlugin {
         final RsccBusJadeServerData provider = new RsccBusJadeServerData();
         registration.registerBlockDataProvider(provider, ImporterBlock.class);
         registration.registerBlockDataProvider(provider, ExporterBlock.class);
+        // 网络资源接收器：服务端权威的「名字 / 是否已命名」（客户端方块实体没有同步缓存内容，
+        // 因此仍要这条数据通道；内容物不在这里发，交给 Jade 的 capability 通道）
+        registration.registerBlockDataProvider(new RsccReceiverJadeServerData(),
+            NetworkResourceReceiverBlock.class);
+        // 容器代理器（第 108 轮）：两路内容物的「格数 / 罐数 / 四态」只有服务端算得出来
+        // （客户端菜单不持有方块实体，也拿不到代理对象的物品能力），所以走 Jade 的官方数据通道。
+        registration.registerBlockDataProvider(new InventoryProxyJadeServerData(),
+            InventoryProxyBlock.class);
     }
 
     /**

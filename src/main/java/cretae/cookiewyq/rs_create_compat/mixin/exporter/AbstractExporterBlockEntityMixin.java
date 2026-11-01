@@ -869,16 +869,49 @@ public abstract class AbstractExporterBlockEntityMixin implements RsccExporterEx
         }
         if (rscc$linkedExecutor() == null) {
             // 诊断：未绑定（或刚从绑定掉下来）时打一条「状态翻转」日志，说明本总线已退回原版输出总线行为。
-            // 原因分三种，便于区分「单纯没接执行舱」与「接多了 / 探查不穷尽导致归属未确定被停用」。
+            //
+            // 【第 95 轮修正｜用户实机日志里的 `linked=- reason=no_chamber reachable=1`】
+            // 旧实现只看「报告是不是 disabled()」，把「过滤槽非空 / 强制普通总线」这两种
+            // **玩家主动选择退回普通总线**的情形也报成 `no_chamber`（字面意思 = 够不到执行舱），
+            // 并且把一份**过期的**报告数字（reachable=1）一起打出来 —— 日志自相矛盾
+            // （可达 1 台却怪「没有执行舱」），用户导出日志后把它当成了「自动归属坏了」的证据。
+            // 真相是：`rscc$linkedExecutor()` 在「过滤槽有东西」「强制普通总线」时<b>刻意短路</b>、
+            // 连 `rscc$resolveLink()` 都不跑（见该方法的注释），因此 `rscc$linkReport` 停在上一次
+            // 判定结果上 —— 而那一次判定完全可能算出 reachable=1。
+            // 现在把两个短路原因<b>各自</b>命名，且只有真的「一台都够不到」才叫 no_chamber；
+            // 不变量（自检 tools/selfcheck_round95_clipboard_assembly.py 钉住）：
+            //     reason=no_chamber ⇒ reachable 恒为 0
             if (RsccAssemblyDebug.isEnabled()) {
                 final BlockPos selfPos = self.getBlockPos();
-                final String reason = !rscc$linkReport.disabled() ? "no_chamber"
-                    : (rscc$linkReport.truncated() && rscc$linkReport.reachableCount() == 1
-                        ? "ownership_not_exhaustive" : "ownership_ambiguous");
+                final int reachable = rscc$linkReport.reachableCount();
+                final String reason;
+                final String extra;
+                if (rscc$forceNormalBus) {
+                    // 玩家把「强制普通总线」打开了：这是显式选择，不是归属判定失败
+                    reason = "force_normal";
+                    extra = " (「强制普通总线」开关已开 ⇒ 按普通输出总线处理)";
+                } else if (rscc$hasFilterEntries()) {
+                    // 过滤槽非空：按既有规则（用户第 9 条）本条总线就是普通总线，不参与延长型归属
+                    reason = "filter_non_empty";
+                    extra = " (过滤槽非空 ⇒ 按普通输出总线处理)";
+                } else if (rscc$linkReport.disabled()) {
+                    reason = rscc$linkReport.truncated() && reachable == 1
+                        ? "ownership_not_exhaustive" : "ownership_ambiguous";
+                    extra = "";
+                } else if (reachable == 0) {
+                    reason = "no_chamber";
+                    extra = "";
+                } else {
+                    // reachable>0 却仍然拿不到执行仓对象：缓存里的那一台已经不是「总线输出」模式执行舱
+                    // （拆了 / 切成面输出 / 区块卸载）。旧实现把它也报成 no_chamber，同样自相矛盾。
+                    reason = "chamber_gone";
+                    extra = " (可达集合里的执行仓已不是总线输出模式)";
+                }
                 RsccAssemblyDebug.transition("exporterlink@" + RsccAssemblyDebug.at(selfPos), "unlinked",
                     RsccAssemblyDebug.machine("exporter", selfPos)
                         + " linked=- reason=" + reason
-                        + " reachable=" + rscc$linkReport.reachableCount()
+                        + " reachable=" + reachable
+                        + extra
                         + " (退回 RS 原版「网络→目标」策略)");
             }
             return; // 未绑定 / 归属未确定：保留 RS 原版策略，下次 tick 再试（内部 20 tick 缓存，不会疯狂重搜）

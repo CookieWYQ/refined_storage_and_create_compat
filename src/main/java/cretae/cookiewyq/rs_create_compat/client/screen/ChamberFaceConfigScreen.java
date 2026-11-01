@@ -241,10 +241,12 @@ public class ChamberFaceConfigScreen extends ChildConfigScreen {
             // 面名（上）＋ 模式短名（下）：正常字号 + 半透明白底条 → 任何模式色上都清晰
             final Component dirName = Component.translatable(directionKey(direction));
             guiGraphics.fill(x + 1, y + 3, x + CELL - 1, y + 12, COLOR_TEXT_PLATE);
+            // rscc:no-tooltip 固定短标签：面名是 16 个方向键之一（1~2 字），格宽固定、不存在被缩字号的自由文本
             guiGraphics.drawString(font, dirName, x + (CELL - font.width(dirName)) / 2, y + 4,
                 COLOR_CELL_TEXT, false);
             final Component modeName = Component.translatable(shortKey(mode));
             guiGraphics.fill(x + 1, y + CELL - 13, x + CELL - 1, y + CELL - 4, COLOR_TEXT_PLATE);
+            // rscc:no-tooltip 固定短标签：模式短名（如「供」「收」）由语言文件钉死，宽度恒定
             guiGraphics.drawString(font, modeName, x + (CELL - font.width(modeName)) / 2,
                 y + CELL - 12, COLOR_CELL_TEXT, false);
         }

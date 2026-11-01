@@ -100,9 +100,15 @@ public class AdvancedQuantityKeeperMenu extends AbstractContainerMenu
 
     // ==================== ContainerData 读取 ====================
 
+    /**
+     * 某行目标数量（第 118 轮：低 / 高两个 16 位拼回完整 int）。
+     * <p>ContainerData 线上是 short，int 目标 > 32767 会被截断（流体按 mB，> 32.7 桶即中招）。</p>
+     */
     public int getTarget(final int row) {
-        return data.get(row * AdvancedQuantityKeeperBlockEntity.DATA_PER_SLOT
-            + AdvancedQuantityKeeperBlockEntity.DATA_SLOT_TARGET);
+        final int low = data.get(row * AdvancedQuantityKeeperBlockEntity.DATA_PER_SLOT
+            + AdvancedQuantityKeeperBlockEntity.DATA_SLOT_TARGET) & 0xFFFF;
+        final int high = data.get(AdvancedQuantityKeeperBlockEntity.DATA_TARGET_HIGH_BASE + row) & 0xFFFF;
+        return (high << 16) | low;
     }
 
     /** 标记形态：0 物品 / 1 流体 / 2 气体（空槽按 0 处理）。 */
@@ -337,11 +343,12 @@ public class AdvancedQuantityKeeperMenu extends AbstractContainerMenu
     /**
      * 第一个<b>真正空</b>的标记行（既无物品标记也无流体 / 气体标记）。
      *
-     * <p><b>为什么不能只看 {@code slots.get(i).getItem().isEmpty()}</b>：流体 / 气体标记
-     * 不存进 inventory（存于 {@code fluidMarkerIds[]}），所以流体槽的 inventory 物品也是 EMPTY。
-     * 若只判空 inventory，会把「已标岩浆的槽」误判为空槽，进而用物品标记覆盖掉流体标记。
-     * 这里改为读同步过来的 {@code DATA_SLOT_HAS_MARKER}（物品 / 流体 / 气体标记统一为 1），
-     * 客户端 / 服务端口径一致。</p>
+     * <p><b>为什么不能只看 {@code slots.get(i).getItem().isEmpty()}</b>：流体 / 气体标记槽里放的是
+     * <b>该流体的桶（展示物）</b>，而「标记类型」并不由物品类型决定 —— 判据在方块实体的
+     * {@code fluidMarkerIds[]}（见 {@code hasDirectFluidMarker}）。若按「槽里有没有物品 / 物品是什么」
+     * 来判空，就会把「已标岩浆的槽（槽里是岩浆桶）」误判成物品标记 / 空槽，进而用物品标记覆盖掉
+     * 流体标记。这里改为读同步过来的 {@code DATA_SLOT_HAS_MARKER}（物品 / 流体 / 气体标记统一为 1），
+     * 客户端 / 服务端口径一致，也与槽里的展示物（桶）彻底解耦。</p>
      */
     private int firstEmptyMarkerRow() {
         for (int i = 0; i < MARKER_SLOTS; i++) {

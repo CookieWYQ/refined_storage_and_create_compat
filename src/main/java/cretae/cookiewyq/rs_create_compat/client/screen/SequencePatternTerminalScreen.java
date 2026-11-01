@@ -8,6 +8,7 @@ import cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptGuiTextures;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RecipeTypeMachines;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
@@ -97,7 +98,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     private static final int CARD_H = 18;
     /** 卡片内文字。 */
     private static final int ROW_TEXT_X = 29;
-    /** 第 1 行操作名最大宽度（右侧还要放 ×N，超出由 trimToWidth 截断）。 */
+    /** 第 1 行操作名最大宽度（右侧还要放 ×N；放不下时按 RsccTextFit 缩字号，绝不截断）。 */
     private static final int ROW_OP_W = 100;
     /** ×N 次数文本右边界（比卡片右内边留 3px，不与卡片边框相贴）。 */
     private static final int ROW_COUNT_RIGHT = 149;
@@ -239,6 +240,12 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     private static final int COLOR_ROW_COUNT = 0xFFFFE3A8;
     private static final int COLOR_CHANCE = 0xFFFFE066;
     private static final int COLOR_NO_MACHINE = 0xFFFF6A6A;
+    /**
+     * 「附加标注」的颜色（深绿，与 RS「自动合成预览」界面那行提示同色）。
+     * <p>用途：把<b>策略</b>（优先使用中间产物）与<b>身份</b>（原料 / 成品 / 废料这类分类）在视觉上分开 ——
+     * 分类用 {@link #COLOR_LABEL} 的深灰，策略只用这一种颜色的附加标注表达。</p>
+     */
+    private static final int COLOR_ANNOTATION = 0xFF2E7D32;
     /** 翻页按钮字形（可用 / 不可用）。 */
     private static final int COLOR_PAGE_GLYPH = 0xFF2E2E2E;
     private static final int COLOR_PAGE_GLYPH_OFF = 0xFF7A7A7A;
@@ -267,13 +274,21 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
      * 界面实例上（构造时新建），于是<b>每次按快捷键开终端都要重建一遍</b>：逐个配方类型去配方表里
      * 反查机器（还要探 32 条配方的 {@code getToastSymbol()}），以及逐步骤按配方解析候选组 / 过渡件。
      * 这些结果只取决于「客户端世界 + 配方表」，与界面实例无关，缓存跨实例复用是纯赚。
-     * 失效维度只有「客户端世界」：{@link #ensureCacheOwner()} 发现世界换了就整批清空。</p>
+     * 失效维度只有「客户端世界」：{@link #ensureCacheOwner()} 发现世界换了就整批清空。
+     * <p><b>第 82 轮补充</b>：这里<b>只缓存非空结果</b>。空结果可能是「JEI 催化剂尚未就绪 / 客户端配方表
+     * 尚未加载」造成的<b>暂时</b>结论，若也写进这张只随世界失效的缓存就再也不会重查；空结果的短周期
+     * 重试由 {@link RecipeTypeMachines} 内部带 JEI 代际的 1 秒负缓存负责（见 {@link #machinesFor}）。</p>
      */
     private static final java.util.Map<String, java.util.List<RecipeTypeMachines.Machine>> machineCache =
         new java.util.HashMap<>();
     /** 序列装配配方 ingredient 的候选缓存（键 = 配方 id）：跨界面实例复用，见 {@link #machineCache}。 */
     private static final java.util.Map<String, List<ItemStack>> assemblyInputCache = new java.util.HashMap<>();
-    /** 「优先复用中间产物」打开时，该配方过渡件的解析结果缓存（键 = 候选缓存键）：跨界面实例复用。 */
+    /**
+     * 「优先使用中间产物」开关为开时，该配方过渡件（= 会被优先取用的中间产物）的解析结果缓存
+     * （键 = 候选缓存键）：跨界面实例复用。
+     * <p><b>只服务附加标注</b>（见 {@code reuseAnnotation()}）：它是一份「配方 → 过渡件」的配方事实缓存，
+     * 不参与任何分类判定、也不决定任何绘制内容。</p>
+     */
     private static final java.util.Map<String, ItemStack> reuseIntermediateCache = new java.util.HashMap<>();
     /** 每步处理配方 ingredient 的候选缓存（键 = 配方 id + '#' + 步序）：跨界面实例复用。 */
     private static final java.util.Map<String, List<ItemStack>> stepInputCache = new java.util.HashMap<>();
@@ -320,6 +335,19 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     @Override
     protected void init() {
         super.init();
+
+        // 【本轮修：旧控件残留 / 两套几何】{@code init()} 会在每次 {@code rebuildWidgets()} 时再跑一遍 ——
+        // 窗口缩放、改 GUI 缩放、以及「进子界面再返回」都走这条路（原版 {@code setScreen(parent)} →
+        // {@code Screen#init(Minecraft,int,int)}，第二次进这里时它改走 {@code repositionElements()} →
+        // {@code rebuildWidgets()} = {@code clearWidgets()} + {@code init()}）。
+        // 原版只清「自己那几个控件列表」，清不到本类自己维护的这条 {@code scrollbars}；于是每重建一次
+        // 就往里多塞 4 个已失效的滚动条实例，而这些实例<b>同时又参与绘制与命中</b>：
+        //   · 绘制：{@code render()} 遍历整条列表全部画一遍 ⇒ 旧实例按它当时的 leftPos/topPos 与旧滑块偏移
+        //     再画一份（用户看到的「框还停留在原来那里 / 多出来一条」）；
+        //   · 命中：{@code mouseClicked/mouseMoved/mouseDragged/mouseReleased} 也遍历整条列表，而且旧实例排在
+        //     前面 ⇒ 点到的和看到的是<b>不同实例</b>（用户体感的「点击位置与画出来的位置不一致」）。
+        // 因此这里必须像原版一样「先清后建」：控件集合与几何永远只对应本次 init。
+        scrollbars.clear();
 
         // 搜索框：只过滤流程编排（不再过滤单元样板库）
         searchBox = new EditBox(font, leftPos + SEARCH_X, topPos + SEARCH_Y, SEARCH_W, SEARCH_H,
@@ -972,24 +1000,59 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     }
 
     /**
-     * 「优先复用网络中的中间产物」打开时，该配方对应的<b>过渡件</b>（= 中间产物，例如未完成的黑曜石板）；
-     * 开关为关 / 解析不到配方时返回<b>空栈</b>（调用方走老路径）。
+     * <b>附加标注（策略层）</b>：「优先使用中间产物」开关为开、且本配方确实有可优先取用的中间产物
+     * （过渡件）时，返回那一句「优先使用中间产物」；否则返回 {@link Optional#empty()}。
      *
-     * <h2>为什么这里必须改（用户实测的「误导」）</h2>
-     * <p>顶部「输入原料」那一格显示的是总装配的<b>起步原料</b>（{@link #assemblyInputCandidates()}，
-     * 例如 {@code create:powdered_obsidian} 黑曜石粉）。而开关打开后，新的一件是从<b>过渡件</b>起步的
-     * （执行仓优先把网络里已有的中间产物取来当起点，跳过前面几步），此时再把起步原料摆在那一格就是错的：
-     * 玩家会以为还缺黑曜石粉。因此开关打开时这一格改画过渡件，标题也随之换成「中间产物」。</p>
+     * <h2>语义（2026-10-17 修正：身份与策略分离）</h2>
+     * <p>用户原话：「<i>如果说开启优先使用中间产物，那么我指的是优先使用，并不是说原料就没有了。
+     * 所以说这个中间产物、就是这个原料，这个时候不要显示成中间产物，还是正常显示，
+     * 但是旁边需要标注『优先使用中间产物』。</i>」⇒</p>
+     * <ul>
+     *     <li><b>分类按「它本身是什么」</b>：本格是输入原料格 ⇒ 恒显示原料自己、恒标「输入原料」。
+     *     开关<b>不参与任何分类判定</b>（旧实现正是拿它当分类开关，把原料改写成了「中间产物」）。</li>
+     *     <li><b>策略只用附加标注表达</b>：开关为开时，在旁边（tooltip 另起一行 / 标题右侧）多一句
+     *     「优先使用中间产物」。<b>它就是一句标注，绝不替代、也不改写任何分类文案。</b></li>
+     * </ul>
      *
-     * <p><b>开关为关时逐字保持现状</b>：本方法第一句就返回空栈，渲染 / tooltip / 标题全部走老路径
-     * （起步原料 + 候选轮播），一个像素都不变。</p>
+     * <h2>判据（为什么这样最紧）</h2>
+     * <p>两个条件同时成立才有这个标注：</p>
+     * <ol>
+     *     <li><b>开关为开</b>（{@code menu.isReuseIntermediates()}，服务端权威的客户端镜像）：为关时第一句就返回空，
+     *     渲染 / tooltip / 标题全部走老路径，<b>一个像素、一个字都不变</b>；</li>
+     *     <li><b>该配方真的会被优先取用中间产物</b>：解析得到 Create 序列装配配方、且它的
+     *     {@code getTransitionalItem()} 非空。解析不到配方（老样板 / 别家样板 / 配方表未就绪）⇒ 返回空，
+     *     绝不无条件写一句「优先使用中间产物」。</li>
+     * </ol>
+     * <p>过渡件取自 Create 配方自己的 {@code getTransitionalItem()}（与执行仓、缺料提示、RS 预览界面
+     * 同一口径），因此「哪些是中间产物」全工程只有一个答案，不靠物品名猜。配方按与主原料候选
+     * <b>同一条解析链</b>取（① 单元样板记的配方 id → ② 主产物 → ③ 主原料）。</p>
      *
-     * <p>过渡件来自 Create 配方自己的 {@code getTransitionalItem()}（与执行仓、缺料提示同一口径），
-     * 因此「哪些是中间产物」全工程只有一个答案，不靠物品名猜。配方按与主原料候选<b>同一条解析链</b>
-     * 取（① 单元样板记的配方 id → ② 主产物 → ③ 主原料），老样板 / 重新生成的样板都能解析出来；
-     * 真的解析不到就退回老显示，绝不显示一个空槽。</p>
+     * <p><b>边界（刻意不做的判定）</b>：这里<b>不查</b>网络里此刻是否真有该中间产物。
+     * 样板终端界面拿不到网络的实时存量（没有同步通道），而服务端真正的取材判据是
+     * {@code RsccIntermediateReusePolicy.reuseIntermediates(level) &amp;&amp; 网络里存量 &gt; 0}
+     * （见 {@code SequenceExecutionChamberBlockEntity} 的备料闸门）——存量不足时服务端自己就
+     * 退回「从起步原料做起」。因此这句标注回答的是「<b>开关已开、且本配方有可优先取用的中间产物</b>」，
+     * 与 RS「自动合成预览」界面那一行同口径，不承诺「下一件一定会复用」。
+     * 宁可把话说宽一点、也绝不在客户端按物品名 / 缓存池瞎猜。</p>
+     *
+     * <p><b>只读</b>：本方法不写任何状态（缓存只存「配方 → 过渡件」这一份配方事实，与服务端无关）。</p>
      */
-    private ItemStack reuseIntermediate() {
+    private Optional<Component> reuseAnnotation() {
+        final ItemStack transitional = reusableIntermediate();
+        return transitional.isEmpty()
+            ? Optional.empty()
+            : Optional.of(Component.translatable(LANG + "reuse.annotation"));
+    }
+
+    /**
+     * 「优先使用中间产物」打开时，该配方会被优先取用的{@link ItemStack}（过渡件 = 中间产物，
+     * 例如未完成的黑曜石板）；开关为关 / 解析不到配方时返回<b>空栈</b>。
+     *
+     * <p><b>2026-10-17 语义修正后本方法只服务「附加标注」</b>：调用方是 {@link #reuseAnnotation()}，
+     * 用来判断「该不该写那句标注」。它<b>不再</b>被任何绘制 / 分类判定使用 ——
+     * 「哪些是中间产物」是配方事实，「本格显示什么 / 标什么分类」由物品本身决定，两者永不互相替代。</p>
+     */
+    private ItemStack reusableIntermediate() {
         if (!menu.isReuseIntermediates()) {
             return ItemStack.EMPTY;
         }
@@ -1317,31 +1380,17 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         return input == null || input.isEmpty() ? List.of() : List.of(input);
     }
 
-    /** 按像素宽截断字符串（尾部补省略号）。 */
-    private static String trimToWidth(final Font font, final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
-    }
-
-    /** 以 0.5 缩放绘制“小字”；maxFontWidth <= 0 表示不做宽度截断。 */
+    /**
+     * 以 0.5 缩放绘制“小字”（槽角序号 / 概率）。
+     * <p><b>第 104 轮</b>：不再接收「最大宽度」参数 —— 这些字都很短（数字 / 百分比），
+     * 真正的宽度约束由卡片正文那段 {@link RsccTextFit} 负责，这里不做任何截断。</p>
+     */
     private void drawSmallText(final GuiGraphics guiGraphics,
                                final Component text,
                                final float x,
                                final float y,
-                               final int color,
-                               final int maxFontWidth) {
-        final Component shown = maxFontWidth > 0
-            ? Component.literal(trimToWidth(font, text.getString(), maxFontWidth))
-            : text;
+                               final int color) {
+        final Component shown = text;
         final var pose = guiGraphics.pose();
         pose.pushPose();
         pose.translate(x, y, 0.0);
@@ -1411,16 +1460,19 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
      * （与流程编排行共用 {@link GhostMarkerRenderer#cycleCandidate}，因此两处轮播完全同步）。
      * <p>单选 / 无候选时走原版渲染（与改动前一模一样），槽内真实内容一个字节都不动 ——
      * 这里只改「画什么」，不参与任何写入。</p>
+     *
+     * <h2>「优先使用中间产物」开关为开时，这一格为什么不改画过渡件（2026-10-17 语义修正）</h2>
+     * <p><b>用户原话</b>：「如果说开启优先使用中间产物，那么我指的是<i>优先使用</i>，并不是说原料就没有了。
+     * 所以说这个中间产物、就是这个原料，这个时候不要显示成中间产物，还是正常显示，但是旁边需要标注
+     * 『优先使用中间产物』。」</p>
+     * <p>⇒ 两条规则：<b>①分类按「它本身是什么」来</b>（是原料就显示原料）；
+     * <b>②策略只用【附加标注】表达</b>（旁边加一句「优先使用中间产物」）。
+     * 身份（分类）与策略（偏好）必须<b>分离</b> —— 开关只影响取材优先级，<b>绝不影响分类，也不改画本格内容</b>。</p>
+     * <p>旧实现正是在这里用 {@code reuseIntermediate()} 把本格改画成过渡件（未完成件），于是
+     * 「原料」被渲染层改写成了「中间产物」。现在这一格<b>恒画它自己</b>，策略只由
+     * {@link #reuseAnnotation()} 在 tooltip / 标题旁附加一句 —— 开关为开为关，本方法逐字一致。</p>
      */
     private void renderInputSlot(final GuiGraphics guiGraphics, final Slot slot) {
-        // 「优先复用中间产物」打开时这一格画的是<b>过渡件</b>（中间产物）：它不在槽里（槽里存的仍是
-        // 起步原料，一个字节都不动），因此必须显式画出来。开关为关时 reuseIntermediate() = 空栈，
-        // 直接落到下面的老路径（与改动前一模一样）。
-        final ItemStack intermediate = reuseIntermediate();
-        if (!intermediate.isEmpty()) {
-            guiGraphics.renderItem(intermediate, slot.x, slot.y);
-            return;
-        }
         final List<ItemStack> candidates = assemblyInputCandidates();
         if (candidates.size() > 1) {
             guiGraphics.renderItem(GhostMarkerRenderer.cycleCandidate(candidates), slot.x, slot.y);
@@ -1441,7 +1493,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             return;
         }
         drawSmallText(guiGraphics, Component.literal(Integer.toString(global + 1)), x + 1, y + 1,
-            0xFFFFD24A, -1);
+            0xFFFFD24A);
         if (!rowMatches(global)) {
             return;
         }
@@ -1503,12 +1555,19 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         guiGraphics.drawString(font, title, TITLE_X, TITLE_Y, COLOR_TITLE, false);
         guiGraphics.drawString(font, Component.translatable(LANG + "arrangement"), ARR_TITLE_X, ARR_TITLE_Y,
             COLOR_TITLE, false);
-        // 输入原料标签（唯一操作口）：标题必须跟着格子里的东西走 —— 「优先复用中间产物」打开时
-        // 这一格画的是过渡件（中间产物），标签就写「中间产物」；开关为关时仍是「输入原料」（逐字不变）。
-        // 两种文案都是 4 个汉字宽，因此标签几何 / 不压边框的约束一字未改。
-        guiGraphics.drawString(font, Component.translatable(LANG
-            + (reuseIntermediate().isEmpty() ? "op.input" : "op.intermediate")),
+        // 输入原料标签（唯一操作口）：<b>恒为「输入原料」</b> —— 分类按「它本身是什么」来，开关不参与分类判定
+        // （2026-10-17 语义修正：旧实现在开关为开时把这行换成「中间产物」，等于用策略改写了身份）。
+        // 「优先使用中间产物」这一策略只在<b>紧挨着</b>它的地方补一句附加标注（见下），两者永不互相替代。
+        guiGraphics.drawString(font, Component.translatable(LANG + "op.input"),
             INPUT_LABEL_X, OP_LABEL_Y, COLOR_LABEL, false);
+        // 附加标注：开关为开、且本配方确实有可优先取用的中间产物（过渡件）时，紧挨着原料标签右侧补一句
+        // 「优先使用中间产物」。放不下就整句不画（标签几何 / 不越出面板由构造保证），本行不参与分类。
+        reuseAnnotation().ifPresent(hint -> {
+            final int hintX = INPUT_LABEL_X + font.width(Component.translatable(LANG + "op.input")) + 4;
+            if (hintX + font.width(hint) < BG_W - 4) {
+                guiGraphics.drawString(font, hint, hintX, OP_LABEL_Y, COLOR_ANNOTATION, false);
+            }
+        });
         // 产物 / 废料小标题
         guiGraphics.drawString(font, Component.translatable(LANG + "results.short"), RESULT_TITLE_X,
             RESULT_TITLE_Y, COLOR_LABEL, false);
@@ -1577,8 +1636,10 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             final int countW = font.width(countText);
             final int countRight = rowCountRight();
             final int opMaxW = Math.min(ROW_OP_W, countRight - ROW_TEXT_X - countW - 2);
-            guiGraphics.drawString(font, Component.literal(trimToWidth(font, op, Math.max(4, opMaxW))),
-                ROW_TEXT_X, lineY1, COLOR_ROW_OP, false);
+            // 第 104 轮：操作名完整显示（放不下整体缩字号、下限 0.6 倍），绝不再切成「机械…」；
+            // 机器全名另在卡片悬停提示里（键 card.machine_kind / card.machine）。
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(op),
+                ROW_TEXT_X, lineY1, Math.max(4, opMaxW), COLOR_ROW_OP);
             guiGraphics.drawString(font, countText, countRight - countW, lineY1,
                 COLOR_ROW_COUNT, false);
             // 行内「跳过重复样板」开关：文字显示该步的机器 / 样板是否已就位（链级），底色是本步开关，
@@ -1606,8 +1667,10 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             guiGraphics.drawString(font, Component.literal("▶"),
                 textX + textW - font.width("▶"), lineY2, arrowColor, false);
             final int innerW = textW - 2 * (font.width("◀") + 1);
-            guiGraphics.drawString(font, Component.literal(trimToWidth(font, machine, innerW)),
-                textX + font.width("◀") + 1, lineY2, color, false);
+            // 机器名是自由文本（玩家给执行仓起的名字，最长 32 字）⇒ 完整显示：缩字号而不截断；
+            // 完整原名在卡片悬停提示的「Chamber: %s」（键 card.machine）里。
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(machine),
+                textX + font.width("◀") + 1, lineY2, innerW, color);
         }
     }
 
@@ -1664,7 +1727,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
 
     /**
      * 配方类型 → 「能执行它的机器」候选（客户端按配方类型懒加载并缓存）。
-     * <p>反查走 {@link RecipeTypeMachines}（Create 官方 JEI 催化剂 + 配方自带的 toast symbol）；
+     * <p>反查走 {@link RecipeTypeMachines}（显式机器表 + 配方自带的 toast symbol + JEI 催化剂）；
      * 查不到时返回空列表（调用方回退显示配方类型名，绝不退化成显示原料 / 产物）。</p>
      */
     private java.util.List<RecipeTypeMachines.Machine> machinesFor(final String recipeType) {
@@ -1672,7 +1735,19 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
             return java.util.List.of();
         }
         ensureCacheOwner(); // 换世界 ⇒ 整批作废（见 machineCache 的 javadoc）
-        return machineCache.computeIfAbsent(recipeType, RecipeTypeMachines::forRecipeType);
+        // 【第 82 轮修：空列表不缓存】旧实现用 computeIfAbsent，于是「JEI 还没就绪 / 配方表还没加载」时
+        // 算出来的空列表也被永久记住（这张缓存只随客户端世界失效）—— 等 JEI 就绪后没有任何入口再查一次，
+        // 用户看到的就是「机器列表一直空」。现在只缓存非空结果；空结果交给 RecipeTypeMachines 的
+        // 1 秒负缓存（带 JEI 代际）去重试：既不会每帧全量扫 JEI，也能在 JEI 就绪 / 资源重载后自愈。
+        final java.util.List<RecipeTypeMachines.Machine> cached = machineCache.get(recipeType);
+        if (cached != null) {
+            return cached;
+        }
+        final java.util.List<RecipeTypeMachines.Machine> computed = RecipeTypeMachines.forRecipeType(recipeType);
+        if (!computed.isEmpty()) {
+            machineCache.put(recipeType, computed);
+        }
+        return computed;
     }
 
     /** 该步「用到的机器」显示名（配方类型 → 机器方块；查不到回退配方类型名）。 */
@@ -1738,7 +1813,7 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         final Component text = Component.literal(
             cretae.cookiewyq.rs_create_compat.support.SequencedRecipeProbe.chanceNumber(chance) + "%");
         drawSmallText(guiGraphics, text,
-            leftPos + slot.x + 16 - font.width(text) * 0.5F, topPos + slot.y + 10, COLOR_CHANCE, -1);
+            leftPos + slot.x + 16 - font.width(text) * 0.5F, topPos + slot.y + 10, COLOR_CHANCE);
     }
 
     @Override
@@ -1959,10 +2034,26 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
         // 2) 产物 / 废料可见槽：一份 tooltip = 物品自身提示（有物品时）+ 概率 / 数量 / 操作说明
         final Slot sectionSlot = sectionSlotAt(mouseX, mouseY);
         if (sectionSlot != null) {
+            // <b>同一帧同一格只画一份</b>：本节后面的分支全部按<b>几何矩形</b>命中（与 hoveredSlot 不同源），
+            // 因此这里必须显式互斥 —— 原版 {@code renderTooltip} 已经为「鼠标下那个有物品的槽」画过一份时，
+            // 我们只允许在「它 <i>就是</i> 本节这一格」的前提下继续（那一路已由 {@link #renderTooltip} 的槽位
+            // 下标守卫挡掉了原版那份）；否则两份 tooltip 行数不同 ⇒ DefaultTooltipPositioner 贴边时反算出的 y
+            // 不同 ⇒ 两套文字互相压（用户实机反馈的「文本堆叠」）。
+            if (cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers
+                .vanillaSlotTooltipWillDraw(hoveredSlot) && hoveredSlot != sectionSlot) {
+                return;
+            }
             renderSectionTooltip(guiGraphics, sectionSlot, mouseX, mouseY);
             return;
         }
         // 3) 控制行按钮提示：生成按钮（含<b>不可生成的原因</b>：缺几样 / 先取走总样板 / 流程无效）
+        // 3.1) 只读循环次数：显示当前值 + 「来自配方、不可修改」
+        // 这两处都是<b>几何矩形</b>命中（与 hoveredSlot 不同源）：原版这一帧若已为某个有物品的槽画过一份，
+        // 就绝不再画第二份（几何上这两块矩形与任何槽位都不相交，因此本守卫只会挡住不可能发生的叠画）。
+        if (cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers
+            .vanillaSlotTooltipWillDraw(hoveredSlot)) {
+            return;
+        }
         if (isHoveringRect(GEN_X, CONTROL_Y, GEN_W, CONTROL_H, mouseX, mouseY)) {
             renderLines(guiGraphics, generateTooltipLines(), mouseX, mouseY);
             return;
@@ -1983,15 +2074,17 @@ public class SequencePatternTerminalScreen extends AbstractContainerScreen<Seque
     private void renderInputSlotTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         final List<Component> always = new ArrayList<>(4);
         final List<RsccTooltipLayers.Line> layered = new ArrayList<>(4);
-        // 「优先复用中间产物」打开时这一格画的是过渡件：常显 = 它自己的物品提示 + 一行角色说明
-        // （用户要求「要能看出这是中间产物」—— 因此这一行放在<b>常显层</b>，不需要按 Shift）。
-        final ItemStack intermediate = reuseIntermediate();
-        if (!intermediate.isEmpty()) {
-            always.addAll(itemTooltipLines(intermediate));
-            always.add(Component.translatable(LANG + "input_slot.intermediate")
-                .withStyle(net.minecraft.ChatFormatting.GRAY));
-            renderWithItemLines(guiGraphics, always, layered, mouseX, mouseY);
-            return;
+        // 附加标注（策略层）：「优先使用中间产物」开关为开、且本配方确实有可优先取用的中间产物时，
+        // 在物品自身 tooltip 之后<b>另起一行</b>补一句「优先使用中间产物」。
+        // <b>2026-10-17 语义修正</b>：这里以前是「开关为开 ⇒ 本格的物品 tooltip 整个换成过渡件的 tooltip，
+        // 并在末尾写一行『中间产物（优先复用）』」—— 那等于把【原料】的<b>分类</b>用开关改写成了【中间产物】。
+        // 现在分类恒按「它本身是什么」（本格是输入原料格 ⇒ 显示原料自己），策略只用<b>附加标注</b>表达。
+        // 开关为关 / 该配方没有过渡件 ⇒ 本行不存在，tooltip 与改动前逐字一致。
+        final Optional<Component> reuseHint = reuseAnnotation();
+        if (reuseHint.isPresent()) {
+            // copy() 不是多余的：reuseAnnotation() 返回的是只读接口 Component，
+            // 而 withStyle(...) 只声明在 MutableComponent 上 —— 直接对 Component 调用会「找不到符号」。
+            always.add(reuseHint.get().copy().withStyle(net.minecraft.ChatFormatting.DARK_GREEN));
         }
         // 注：这里原来还有一行无条件的 {@code input_slot.tip}（「本步消耗的主原料，由配方导入决定」），
         // 与下面多候选分支里那句<b>完全重复</b>（同一句话出现两次）。2026-10-05 删掉这一行，

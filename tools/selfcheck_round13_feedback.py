@@ -275,7 +275,10 @@ section("④ 拔线缆后必须挂起并弹横幅：两条离线路径 + 分类�
 
 has(watchdog, "private static boolean servableByRecipeType(",
     "锚点①: 「本网络里有没有一台仓能承担这一步」只有一份实现（与「更换机器」候选同一判据）")
-has(watchdog, "result.add(new SyncAssemblyAlertsPacket.OfflineStep(step, RecipeTypeNames.of(unassignedType),",
+# 第 74 轮（第 2 批）口径变更：OfflineStep 的「配方名」不再在服务端解析成 String
+# （专服上只有 en_us，固化后横幅永远是英文），改为送配方类型 id 的参数编码
+# （RsccClientText.argRecipeType），由客户端按玩家语言解析。锚点随之改为新写法。
+has(watchdog, "RsccClientText.argRecipeType(unassignedType)",
     "锚点②: 未指派机器的步骤也参与掉线判定（旧实现整条跳过 ⇒ 断缝判不出来 ⇒ 没有横幅）")
 has(watchdog, "private int offlineStrikes;",
     "锚点③: 连续确认计数（不再要求两次报的是「同一批」步骤）")
@@ -371,12 +374,15 @@ check("④d 断缝不会被「缺料可推进」短路：offline 确认在算 ne
 section("⑤ 数量快速增减无条件禁止：任何情形下都不出现「整批拉出 → 整批退回」")
 
 check("锚点①: 概率性配方的自动合成请求量也经 allowedConcurrentUnits（不再在「读不到剩余件数」时整批 64）"
-      "——第 29 轮新增第三档后，这条旧口径整段保留在「未启用第三档」分支里，表达式一字未改",
-      "final long requestBatch = pipelineUsesChance()" in chamber
+      "——第 29 轮新增第三档、2026-10-17 新增热档之后，这条旧口径整段保留在「没有批量上限」分支里，"
+      "表达式一字未改",
+      "final long requestBatch = chancePipeline" in chamber
       and ": Math.max(1L, Math.min(BUS_AUTOCRAFT_BATCH, allowedConcurrentUnits())))" in chamber)
-check("锚点②: 确定性配方仍然一次一份（business as before，本轮未改）"
-      "——第 29 轮的三元式在未启用第三档（machineRefill=false）时仍然落到这个 1L 分支",
-      ": (machineRefill ? machineRefillBatch : 1L);" in chamber)
+check("锚点②: 确定性配方在「冷档 + 未启用第三档」时仍然一次一份（batchCeiling=0 ⇒ 仍落到 1L 分支）；"
+      "热档（机器正在工作）另按「每台在工作的机器各一份」发，上界仍是 allowedConcurrentUnits",
+      ": (batchCeiling > 0L ? batchCeiling : 1L);" in chamber
+      and "final long hotBatch = hot ? Math.max(1L, Math.min(BUS_AUTOCRAFT_BATCH, machineSupplyBatch())) : 0L;" in chamber
+      and "final long batchCeiling = Math.max(machineRefillBatch, hotBatch);" in chamber)
 has(chamber, "final long machineRefillBatch = machineRefill ? machineSupplyBatch() : 0L;",
     "锚点②b: 第三档（默认关）的分量在未启用时恒为 0 ⇒ 上面两条旧口径的行为逐字不变；"
     "第三档自己的请求量另有上限，见 tools/selfcheck_round29_refill_machine_mode.py")

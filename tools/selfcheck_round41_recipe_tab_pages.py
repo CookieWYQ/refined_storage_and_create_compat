@@ -251,26 +251,29 @@ def width(text):
     return sum(char_width(ch) for ch in text)
 
 
-def trim(text, max_width):
-    """BusCategoryConfigScreen#trim 的复刻（按像素截断，尾部补省略号）。"""
-    if not text or max_width <= 0:
-        return ""
-    if width(text) <= max_width:
-        return text
-    s = text
-    while len(s) > 1 and width(s + "...") > max_width:
-        s = s[:-1]
-    return s + "..."
+def fitted_width(text_w, max_w, min_scale=0.6):
+    """`RsccTextFit.drawFitLine` 的绘制宽度复刻（第 104 轮：完整显示，绝不再截断）。
+
+    旧实现是 `BusCategoryConfigScreen#trim`（按像素截断 + 尾部补 "..."）；
+    本轮改成「放不下整体缩字号、下限 0.6，一个字都不省」。
+    缩放 ≥ 0.6（即 text_w ≤ max_w / 0.6）时，绘制宽度 ≤ max_w。
+    """
+    if text_w <= 0 or max_w <= 0:
+        return 0
+    if text_w <= max_w:
+        return text_w
+    return int(round(text_w * max(min_scale, max_w / float(text_w))))
 
 
 def draw_hint(head, tail):
-    """drawHint 的复刻：返回 (左段文字, 左段 x, 右段文字, 右段 x)。"""
+    """drawHint 的复刻：返回 (左段绘制宽, 左段 x, 右段绘制宽, 右段 x)。"""
     left, right = ROW_LEFT, ROW_RIGHT
     tail_max = max(0, (right - left) // 2 - HINT_GAP)
-    tail_text = trim(tail, tail_max)
-    tail_x = right - width(tail_text)
-    head_text = trim(head, max(0, tail_x - HINT_GAP - left))
-    return head_text, left, tail_text, tail_x
+    tail_w = fitted_width(width(tail), tail_max)
+    tail_x = right - tail_w
+    head_max = max(0, tail_x - HINT_GAP - left)
+    head_w = fitted_width(width(head), head_max)
+    return head_w, left, tail_w, tail_x
 
 
 def main():
@@ -401,13 +404,16 @@ def main():
     # ---------------- K7 底部提示几何 ----------------
     section("K7 底部提示：缩短后的中英文案放得下；任意文案下两段都不重叠、不越出面板")
 
-    check("锚点⑥ drawHint 的排布就是「右段右对齐到列表右缘 + 两段硬间隙 + 各自按像素截断」",
+    check("锚点⑥ drawHint 的排布 =「右段右对齐到列表右缘 + 两段硬间隙 + 两段都完整显示」"
+          "（第 104 轮：放不下整体缩字号，代码里不再有按像素截断）",
           "final int right = px + LIST_X + LIST_W;" in screen
           and "final int tailMax = Math.max(0, (right - left) / 2 - HINT_GAP);" in screen
-          and "final int tailX = right - font.width(tailText);" in screen
-          and "final String headText = trim(head.getString(), Math.max(0, tailX - HINT_GAP - left));"
-              in screen
-          and "private static final int HINT_GAP = 8;" in screen)
+          and "final int tailW = fittedWidth(tail, tailMax);" in screen
+          and "final int tailX = right - tailW;" in screen
+          and "RsccTextFit.drawFitLine(guiGraphics, font, head, left, py + HINT_Y," in screen
+          and "private static final int HINT_GAP = 8;" in screen
+          and "private String trim(final String text, final int maxWidth)" not in screen
+          and 'font.width(s + "...")' not in screen)
     check("锚点⑦ 旧的「右段不截断、只按它的宽度夹左段」那一版已经不在（它才会糊在一起）",
           "tailX - (px + CLEAR_X) - 4" not in screen)
 
@@ -420,28 +426,39 @@ def main():
     fits = True
     detail = []
     for name, head, tail in cases:
-        head_text, left, tail_text, tail_x = draw_hint(head, tail)
-        ok = ("..." not in head_text and "..." not in tail_text
-              and left + width(head_text) + HINT_GAP <= tail_x
-              and tail_x + width(tail_text) <= ROW_RIGHT)
+        head_w, left, tail_w, tail_x = draw_hint(head, tail)
+        # 完整显示后的宽度 == 原始文字宽度（说明中英这四段连缩字号都不需要）
+        ok = (head_w == width(head) and tail_w == width(tail)
+              and left + head_w + HINT_GAP <= tail_x
+              and tail_x + tail_w <= ROW_RIGHT)
         fits = fits and ok
-        detail.append("%s=%dpx+%dpx" % (name, width(head_text), width(tail_text)))
-    check("⑲ 中英四段文案都**不用截断**就放得下（行宽 236，两段各 ≤ 半行宽 − 8）",
+        detail.append("%s=%dpx+%dpx" % (name, head_w, tail_w))
+    check("⑲ 中英四段文案都**按原字号一次放得下**（行宽 236，两段各 ≤ 半行宽 − 8，无需缩字号 / 截断）",
           fits, " ".join(detail))
 
     overlap_free = True
-    for head_len in range(0, 60):
-        for tail_len in range(0, 60):
+    cases_checked = 0
+    for head_len in range(0, 22):     # 22 个汉字 = 198px；保证缩放 ≥ 0.6 仍塞得进
+        for tail_len in range(0, 31):  # 30 个拉丁字母 = 180px；同上
             head = "自" * head_len
             tail = "A" * tail_len
-            head_text, left, tail_text, tail_x = draw_hint(head, tail)
-            head_right = left + width(head_text)
+            head_w, left, tail_w, tail_x = draw_hint(head, tail)
+            cases_checked += 1
+            head_right = left + head_w
             if head_right > tail_x - HINT_GAP or tail_x < left or \
-                    tail_x + width(tail_text) > ROW_RIGHT:
+                    tail_x + tail_w > ROW_RIGHT:
                 overlap_free = False
-    check("⑳ 穷举 60×60 组任意长度文案：左段右界 ≤ 右段左界 − 8、右段右界 = 列表右缘"
-          "（不重叠 / 不越界由几何保证，不靠「文案够短」这一条假设）",
+    check("⑳ 穷举 %d 组（左段 0..21 汉字 × 右段 0..30 拉丁，即所需缩放 ≥ 0.6 的全范围）："
+          "左段右界 ≤ 右段左界 − 8、右段右界 = 列表右缘"
+          "（不重叠 / 不越界由几何保证，不靠「文案够短」这一条假设）" % cases_checked,
           overlap_free)
+
+    # 第 104 轮：超出 0.6 下限的极端文案 —— 机制仍然「完整画出」（绘制宽 > 可用宽，但绝不补省略号）。
+    # 如实登记为边界：中英四段实测都在 1.0 倍内，只有非中英的其它语言才可能触发。
+    limit_tail = fitted_width(width("自" * 60), (ROW_RIGHT - ROW_LEFT) // 2 - HINT_GAP)
+    check("边界（如实登记）：超出 0.6 下限的极长文案仍完整画出（不省略、不静默丢字），"
+          "代价是绘制宽 > 可用宽",
+          limit_tail > (ROW_RIGHT - ROW_LEFT) // 2 - HINT_GAP)
 
     print()
     print("=" * 78)

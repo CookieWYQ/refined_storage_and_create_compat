@@ -14,7 +14,9 @@ import cretae.cookiewyq.rs_create_compat.network.QuantityKeeperNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.KeeperOverflow;
 import cretae.cookiewyq.rs_create_compat.support.KeeperTarget;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
+import cretae.cookiewyq.rs_create_compat.support.MarkerBudget;
 import cretae.cookiewyq.rs_create_compat.support.MultiFluidCache;
+import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -67,6 +69,21 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
     /** 同类存储：流体/气体总容量（mB，128 桶）。 */
     public static final long FLUID_STORAGE_CAPACITY = 128_000L;
 
+    /**
+     * ContainerData 里「目标数量」的<b>低 16 位</b>下标（第 118 轮；原来是唯一的 index 0）。
+     * <p>为什么必须拆成两个：MC 1.21.1 的 {@code ClientboundContainerSetDataPacket} 线上就是
+     * <b>short</b>（{@code writeShort(value)} / {@code readShort()}）。目标数量是 int，
+     * 一旦 > 32767 就会被截断 —— 流体目标按 <b>mB</b> 计，> 32.7 桶就中招：界面回填 0，
+     * 玩家再点 ± 就会把服务端目标静默改小（开「过量销毁」时 = 按错误目标销毁真实资源）。</p>
+     */
+    public static final int DATA_TARGET_LOW = 0;
+
+    /** ContainerData 里「目标数量」的<b>高 16 位</b>下标（第 118 轮新增；追加在末尾，不动既有下标）。 */
+    public static final int DATA_TARGET_HIGH = 9;
+
+    /** ContainerData 总长度（0..9）。 */
+    public static final int DATA_COUNT = DATA_TARGET_HIGH + 1;
+
     private static final String TAG_FLUID_MARKER_ID = "FluidMarkerId";
     private static final String TAG_FLUID_MARKER_NBT = "FluidMarkerNbt";
     private static final String TAG_MARKER_FORM = "MarkerForm";
@@ -84,6 +101,8 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
     private CompoundTag fluidMarkerNbt = new CompoundTag();
     /** 当前标记形态：{@link #FORM_ITEM} / {@link #FORM_FLUID} / {@link #FORM_GAS}。 */
     private int markerForm = FORM_ITEM;
+    /** 第 115 轮：标记「太大」告警只打一次（改包者被拒后可能反复重发，日志不许被刷）。 */
+    private boolean markerTooLargeWarned;
 
     // ===== 同类存储（任务 3）：只存放与标记同一种资源 =====
     /** 物品同类存储：只接受被标记的那一种物品（不匹配时 {@code insertItem} 原样返回 = 堵塞）。 */
@@ -292,6 +311,13 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
             clearFluidMarker();
             return;
         }
+        // 第 115 轮（独立复核 H3）：本入口的 nbt 是 C2S 包带来的不透明负载，以前直接 copy() 落盘、
+        // 又原样随 SyncQuantityFluidMarkerPacket 回传 —— 与区域标记同一类风险（改包塞 KB 级 NBT
+        // ⇒ 存档膨胀 + 每次开界面重发）。只挡「新增 / 放大」：null / 空标签照常通过。
+        if (MarkerBudget.isTagTooBig(nbt)) {
+            warnMarkerTooLarge("流体 / 气体标记", nbt == null ? 0 : nbt.sizeInBytes());
+            return; // 拒绝：旧标记原样保留（不落盘、不同步放大、不清物品标记）
+        }
         this.markerForm = form == FORM_GAS ? FORM_GAS : FORM_FLUID;
         this.fluidMarkerId = id;
         this.fluidMarkerNbt = nbt == null ? new CompoundTag() : nbt.copy();
@@ -312,8 +338,16 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
 
     /**
      * 设置物品标记（同时清除直接流体标记），用于「手持/Shift/JEI 拖入物品」的统一入口。
+     * <p>第 115 轮（独立复核 H3）：JEI 拖入走的是 {@code SetQuantityMarkerPacket}（C2S，ItemStack 由
+     * 客户端给）。标记槽只关心「是哪件物品」，但物品的全部数据组件会落盘、随槽位同步、每次开界面重发；
+     * 改包可以把一本成书当成标记。这里按区域标记同一把单条尺拒收，超限时旧标记保持不变。</p>
      */
     public void setItemMarker(final ItemStack stack) {
+        if (!stack.isEmpty() && MarkerBudget.isStackTooBig(stack,
+                level == null ? null : level.registryAccess())) {
+            warnMarkerTooLarge("物品标记", 0);
+            return; // 拒绝：旧标记原样保留（不落盘、不清流体标记）
+        }
         if (stack.isEmpty()) {
             inventory.setItem(0, ItemStack.EMPTY);
         } else {
@@ -324,6 +358,21 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
         this.fluidMarkerNbt = new CompoundTag();
         updateBlockedState();
         setChanged();
+    }
+
+    /**
+     * 标记「太大」的统一告警（节流：同一台机器只打一次，避免改包者刷包刷日志）。
+     * <p>UI 约定沿用既有 ghost 槽「失败即静默」的口径（不新增语言键 / 不弹屏），日志里给足证据。</p>
+     */
+    private void warnMarkerTooLarge(final String what, final int heapBytes) {
+        if (markerTooLargeWarned) {
+            return;
+        }
+        markerTooLargeWarned = true;
+        LOGGER.warn("[rs_create_compat] 定量保持器（{}）：{}超过单条上限（堆估算 {} B > {} B，≈ 线上 {} KB）"
+                + " ⇒ 本次设置被拒绝，原标记保持不变。正常物品不会触发；若是改包，本条日志即证据",
+            worldPosition, what, heapBytes, MarkerBudget.MAX_ENTRY_BYTES,
+            MarkerBudget.MAX_ENTRY_WIRE_BYTES / 1024);
     }
 
     /** 该物品是否与当前物品标记完全相同（形态为物品、标记槽非空、同物品）。 */
@@ -567,16 +616,24 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
     }
 
     /**
-     * 每秒销毁的过量数量：<b>无升级时很慢（基础 1 个/秒，逐个消失），升级越多越快，
+     * 本机销毁速率（<b>每秒</b>，不是每 tick）：<b>无升级时很慢（基础 1 个/秒，逐个消失），升级越多越快，
      * 满级（速度/堆叠堆满）时批量销毁、几乎瞬间清完</b>。
      * 速度升级每个翻倍；堆叠升级是高级版（1 个 = 3 个速度升级，×8）。
+     *
+     * <p><b>R5 · 口径必须写清（只统一命名与注释，数值一个字节都不改）</b>：消费端就是把它当「每秒」用的 ——
+     * {@code QuantityKeeperNetworkNode} 里的变量名直接叫 {@code ratePerSecond}，并交给
+     * {@link KeeperOverflow#cooldownTicks(int)}（{@code 20 / ratePerSecond}）与
+     * {@link KeeperOverflow#batchSize(int)}（{@code ratePerSecond / 20}），而 {@code TICKS_PER_SECOND = 20}。
+     * 方法名保留 {@code getDestroyRate()} 是为了不动 {@code network/} 里的调用点；
+     * 配置项 {@code Config.quantityKeeperDestroyRate} 的注释写「每 tick」是<b>错的</b>，已在本次一并改正
+     * ——否则读代码的人会把这个值算错 20 倍。</p>
      */
     public int getDestroyRate() {
-        final int speed = Math.min(countUpgrades(SPEED_UPGRADE), 6);
-        final int stack = Math.min(countUpgrades(STACK_UPGRADE), 6);
-        // 指数上限钳到 2^24，避免 int 移位溢出后行为异常
-        final int power = Math.min(speed + stack * 3, 24);
-        return Config.quantityKeeperDestroyRate << power;
+        // 指数曲线（每级 ×2、堆叠 1 个 = 3 级）保留：只把可能溢出的 `<<` 换成统一工具的饱和移位。
+        // 旧写法 Config.quantityKeeperDestroyRate（上限 1_000_000）<< power（上限 24）会溢出成负数，
+        // 负数会让 KeeperOverflow.batchSize 退化成「每次只销毁 1 个」（见设计文档 R6）。
+        return RsccRateLimiter.rateSaturating(Config.quantityKeeperDestroyRate,
+            countUpgrades(SPEED_UPGRADE), countUpgrades(STACK_UPGRADE));
     }
 
     private int countUpgrades(final ResourceLocation upgradeId) {
@@ -683,9 +740,9 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
         setChanged();
     }
 
-    /** 供菜单同步的实时数据：0 = 目标数量，1 = 销毁开关，2 = 速度升级数，3 = 自动合成升级数，
+    /** 供菜单同步的实时数据：0 = 目标数量的低 16 位，1 = 销毁开关，2 = 速度升级数，3 = 自动合成升级数，
      *  4 = 标记形态（0 物品 / 1 流体 / 2 气体），5 = 自动合成开关，6 = 是否有直接流体标记，
-     *  7 = 是否堵塞。 */
+     *  7 = 是否堵塞，8 = 红石模式，9 = 目标数量的高 16 位（第 118 轮：绕开 ContainerData 的 short 截断）。 */
     public net.minecraft.world.inventory.ContainerData getContainerData() {
         return new net.minecraft.world.inventory.ContainerData() {
             @Override
@@ -703,6 +760,8 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
                     // 红石模式：走 RS 的 RedstoneModeSettings 映射（与 RS 原版机器同一套 0/1/2 编码）
                     case 8 -> com.refinedmods.refinedstorage.common.support.RedstoneModeSettings
                         .getRedstoneMode(getRedstoneMode());
+                    // 第 118 轮：目标数量的高 16 位（低位仍在 index 0；两者拼回完整 int）
+                    case DATA_TARGET_HIGH -> targetAmount >>> 16;
                     default -> 0;
                 };
             }
@@ -714,7 +773,7 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
 
             @Override
             public int getCount() {
-                return 9;
+                return DATA_COUNT;
             }
         };
     }
@@ -762,6 +821,18 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
 
     /** 从网络提取当前标记物品（simulate 只做模拟）。 */
     private long extractMarkerItemFromNetwork(final long amount, final boolean simulate) {
+        // 第 118 轮（只读复核 H2）：同线程重入保护 —— 见 KeeperNetworkReadGuard 的类注释。
+        if (!cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.enter()) {
+            return 0L;
+        }
+        try {
+            return extractMarkerItemFromNetworkRaw(amount, simulate);
+        } finally {
+            cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.exit();
+        }
+    }
+
+    private long extractMarkerItemFromNetworkRaw(final long amount, final boolean simulate) {
         final ItemStack marker = getMarkerStack();
         if (amount <= 0 || marker.isEmpty() || markerForm != FORM_ITEM) {
             return 0L;
@@ -780,6 +851,18 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
 
     /** 从网络提取当前标记流体/气体（simulate 只做模拟）。 */
     private long extractMarkerFluidFromNetwork(final long amount, final boolean simulate) {
+        // 第 118 轮（只读复核 H2）：同线程重入保护 —— 见 KeeperNetworkReadGuard 的类注释。
+        if (!cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.enter()) {
+            return 0L;
+        }
+        try {
+            return extractMarkerFluidFromNetworkRaw(amount, simulate);
+        } finally {
+            cretae.cookiewyq.rs_create_compat.support.KeeperNetworkReadGuard.exit();
+        }
+    }
+
+    private long extractMarkerFluidFromNetworkRaw(final long amount, final boolean simulate) {
         if (amount <= 0 || !hasDirectFluidMarker()) {
             return 0L;
         }

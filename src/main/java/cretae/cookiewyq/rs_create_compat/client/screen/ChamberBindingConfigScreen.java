@@ -3,7 +3,7 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RecipeTypeMachines;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
-import cretae.cookiewyq.rs_create_compat.client.widget.ScrollSelectWidget;
+import cretae.cookiewyq.rs_create_compat.client.widget.RecipeTypeSelect;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
 import cretae.cookiewyq.rs_create_compat.network.RequestRecipeTypesPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetChamberBindingPacket;
@@ -18,6 +18,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
@@ -71,20 +72,22 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
 
     private static final int TITLE_X = 10;
     private static final int TITLE_Y = 10;
-    private static final int RECIPE_LABEL_Y = 30;
-    private static final int RECIPE_BOX_Y = 42;
+    private static final int RECIPE_LABEL_Y = 26;
+    private static final int RECIPE_BOX_Y = 36;
     private static final int RECIPE_BOX_W = 180;
+    /** 配方类型搜索框（紧贴选择框下方一行，16px 高；整块面板仍为 200×190，不破坏自绘贴图）。 */
+    private static final int RECIPE_SEARCH_Y = 54;
     /** 配方类型选择框下方的「机器方块」图标（16×16，与 tooltip / 点击判定范围同源）。 */
-    private static final int MACHINE_ICON_Y = 62;
+    private static final int MACHINE_ICON_Y = 74;
     private static final int MACHINE_ICON_SIZE = 16;
-    private static final int NAME_LABEL_Y = 84;
-    private static final int NAME_BOX_Y = 96;
+    private static final int NAME_LABEL_Y = 94;
+    private static final int NAME_BOX_Y = 104;
     private static final int NAME_BOX_W = 180;
     private static final int BOX_H = 16;
-    private static final int ACTION_Y = 118;
+    private static final int ACTION_Y = 126;
     private static final int ACTION_W = 88;
     /** 链状态行（只读展示：链台数 / 链头），紧随按钮行下方。 */
-    private static final int CHAIN_STATUS_Y = 142;
+    private static final int CHAIN_STATUS_Y = 148;
     private static final int CHAIN_STATUS_W = 180;
     private static final int STATUS_ROW_H = 9;
 
@@ -115,8 +118,8 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
     private final String headName;
     private final boolean chainUnits;
 
-    /** 配方类型滚轮选择控件（候选 = 任务二下发的全部已注册配方类型，已绑定的排前面）。 */
-    private ScrollSelectWidget<String> recipePicker;
+    /** 配方类型选择器（滚轮控件 + 搜索框；与单元样板配置界面共用同一实现，见 {@link RecipeTypeSelect}）。 */
+    private RecipeTypeSelect recipeSelect;
     /** 上一帧的候选快照：变化时才回填控件，避免每帧重建列表。 */
     private List<String> lastCandidates = List.of();
     /** 玩家是否手动改过配方类型：未改动前，候选到达后优先对齐服务端下发的当前绑定值。 */
@@ -160,12 +163,12 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
         super.init();
         machineCache.clear();
 
-        // 配方类型：滚轮选择控件（候选由服务端下发；打开界面时请求）
+        // 配方类型：滚轮选择控件 + 搜索框（候选由服务端下发；打开界面时请求）
         lastCandidates = SyncRecipeTypesPacket.getLastReceived();
         recipeTouched = false;
-        recipePicker = new ScrollSelectWidget<String>(font,
-            px + TITLE_X, py + RECIPE_BOX_Y, RECIPE_BOX_W, BOX_H)
-            .forOptions(lastCandidates)
+        recipeSelect = new RecipeTypeSelect(font,
+            px + TITLE_X, py + RECIPE_BOX_Y, RECIPE_BOX_W, BOX_H,
+            px + TITLE_X, py + RECIPE_SEARCH_Y, RECIPE_BOX_W, BOX_H)
             .titled(Component.translatable(LANG + "config.recipe_type"))
             // 行文字 = 该配方类型下当前选中机器的名称（找不到机器则回退配方类型名）
             .displaying(this::displayForRecipeType)
@@ -174,10 +177,16 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
             // 仓里还有单元样板 → 锁定配方类型：控件灰显且不响应滚轮 / 点击（服务端同样会拒绝）
             .selectable(!hasUnits)
             // 滚轮 tooltip 最底部追加当前选中项的原始配方类型 id（暗灰+斜体，低调）
-            .showingExtraTooltip(id -> List.of(RecipeTypeNames.idLine(id)));
-        recipePicker.setState(indexOfOption(initialRecipeType));
+            .showingExtraTooltip(id -> List.of(RecipeTypeNames.idLine(id)))
+            // 选择框当前项的机器方块图标（与下方那枚可点击轮询的图标同源，取当前选中的那一台）
+            .iconFor(this::currentMachineIcon);
+        recipeSelect.setOptions(lastCandidates);
+        recipeSelect.selectIfPresent(initialRecipeType);
         rebuildLabels();
-        addRenderableWidget(recipePicker);
+        // 仓里还有单元样板：配方类型整块锁定 —— 搜索框也只读（仍可滚动查看，但不能改选择）
+        recipeSelect.searchBox().setEditable(!hasUnits);
+        addRenderableWidget(recipeSelect.picker());
+        addRenderableWidget(recipeSelect.searchBox());
         PacketDistributor.sendToServer(new RequestRecipeTypesPacket());
 
         // 名字输入框（重名由本界面实时判定并置灰「确定」；服务端仍保留同一判据的最终校验）
@@ -320,7 +329,8 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
      */
     private void rebuildLabels() {
         labelById.clear();
-        final List<String> options = recipePicker == null ? List.of() : recipePicker.getOptions();
+        // 消歧必须按「全部候选」算（过滤只影响可见性，不该让同名消歧文案随搜索词变化）
+        final List<String> options = recipeSelect == null ? List.of() : recipeSelect.allOptions();
         final Map<String, Integer> nameCount = new HashMap<>();
         for (final String id : options) {
             final String base = machineNameOf(id);
@@ -345,40 +355,39 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
     /** 当前选中的配方类型 id（无候选返回 null）。 */
     @Nullable
     private String selectedRecipeType() {
-        return recipePicker == null ? null : recipePicker.getSelected();
+        return recipeSelect == null ? null : recipeSelect.selected();
     }
 
-    /** 在候选列表里定位当前绑定值（找不到回退 0）。 */
-    private int indexOfOption(final String recipeType) {
-        final List<String> options = recipePicker.getOptions();
-        for (int i = 0; i < options.size(); i++) {
-            if (options.get(i).equals(recipeType)) {
-                return i;
-            }
+    /** 选择框里当前显示的那台机器图标（与下方那枚大图标同一套下标，保证两处指向同一台）。 */
+    private ItemStack currentMachineIcon(final String recipeTypeId) {
+        final List<RecipeTypeMachines.Machine> machines = machinesOf(recipeTypeId);
+        if (machines.isEmpty()) {
+            return ItemStack.EMPTY;
         }
-        return 0;
+        return machines.get(machineIndex(recipeTypeId, machines)).icon();
     }
 
     /** 服务端候选到达后回填控件（保留原选择；候选未到达时控件显示「无可用选项」）。 */
     private void syncRecipeCandidates() {
-        if (recipePicker == null) {
+        if (recipeSelect == null) {
             return;
         }
         final List<String> candidates = SyncRecipeTypesPacket.getLastReceived();
         if (candidates.equals(lastCandidates)) {
             return;
         }
-        final String previous = recipePicker.getSelected();
+        final String previous = recipeSelect.selected();
         lastCandidates = candidates;
-        recipePicker.setOptions(candidates);
+        recipeSelect.setOptions(candidates);
         rebuildLabels(); // 候选变了：同名机器消歧文案随之重建
         if (!recipeTouched) {
             // 玩家还没动过控件：优先对齐服务端下发的当前绑定值（避免沿用上一张网络 / 上一次的陈旧选择）
-            final int initialIndex = candidates.indexOf(initialRecipeType);
-            recipePicker.setState(initialIndex >= 0 ? initialIndex : indexOfOption(previous));
+            if (!recipeSelect.selectIfPresent(initialRecipeType)) {
+                recipeSelect.select(previous);
+            }
             return;
         }
-        recipePicker.setState(previous == null ? 0 : indexOfOption(previous));
+        recipeSelect.select(previous);
     }
 
     private void confirmAndReturn() {
@@ -391,7 +400,7 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
         // 服务端同样会拒绝任何类型改动（双保险）。
         final String selected = hasUnits
             ? initialRecipeType
-            : (recipePicker == null ? null : recipePicker.getSelected());
+            : (recipeSelect == null ? null : recipeSelect.selected());
         PacketDistributor.sendToServer(new SetChamberBindingPacket(target,
             selected == null ? "" : selected, nameBox.getValue().trim()));
         returnToParent();
@@ -440,15 +449,19 @@ public class ChamberBindingConfigScreen extends ChildConfigScreen {
 
     /** 手动渲染 tooltip：判定范围与绘制范围完全一致（左闭右开）。 */
     private void renderTooltips(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
+        // 搜索框：命中 N / 共 M + 三键说明（与单元样板配置界面同一实现）
+        if (recipeSelect != null && recipeSelect.renderTooltip(guiGraphics, font, mouseX, mouseY)) {
+            return;
+        }
         // 配方类型滚轮控件：标题 + 16 行候选窗口（控件自绘，必须手动渲染 tooltip）
-        if (recipePicker != null && recipePicker.inBounds(mouseX, mouseY)) {
+        if (recipeSelect != null && recipeSelect.picker().inBounds(mouseX, mouseY)) {
             if (hasUnits) {
                 // 锁定态：只给一条简短原因，不铺开候选列表（用户要求 tooltip 精简）
                 guiGraphics.renderTooltip(font,
                     Component.translatable(LANG + "config.recipe_type.locked"), mouseX, mouseY);
                 return;
             }
-            recipePicker.renderTooltip(guiGraphics, mouseX, mouseY);
+            recipeSelect.picker().renderTooltip(guiGraphics, mouseX, mouseY);
             return;
         }
         // 链状态行（只读展示；状态行只有 9px 高，单独判定太难点中，故用整行宽）

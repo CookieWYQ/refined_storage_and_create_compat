@@ -333,10 +333,22 @@ def check_appearance_rendering():
           "C12 外壳模型与 Create 的 CopycatModel 同一个基类，且取数 = 被裹方块自己的方块实体（不是坐标反查）")
     for banned in ("SavedData", "mirrored", "renderCells", "getBlockState(", "LevelRenderer"):
         check(banned not in shell_src, "C13 外壳模型里没有「%s」（旧的坐标反查 / 独立渲染链路已删除）" % banned)
-    check("originalModel.getQuads(state, side, rand, base == null ? ModelData.EMPTY : base, renderType)"
-          in shell_src
-          and "frameModel.getQuads(" in shell_src,
-          "C14 一次产出两套几何：被裹方块自己的 + 外壳的（框架开口里看得见线缆的断开态）")
+    # 【2026-10-17 断言更新（有意的行为变更，不是放宽）】
+    # 旧断言只认 `base == null ? ModelData.EMPTY : base` 这一种转发写法。
+    # 但工作树里的「物理化单格」渲染路径**不回调 getModelData**，模型数据里没有
+    # BASE_DATA_PROPERTY，只有伪装记录本身；若仍按旧写法转发 EMPTY，RS 线缆会丢掉
+    # CABLE_CONNECTIONS（只剩一根光秃秃的芯柱，断开的连接臂也看不见）。
+    # 因此源码改为：base 存在 ⇒ 转发 base；否则把 data 本身原样转发（forwarded）。
+    # 这里把断言改成**同时钉住这两件事**（判定并未放宽：新增了「forwarded 的来源必须
+    # 恰好是 base 或 data」这一条，旧写法一旦回归仍然会判负）。
+    forwarded_ok = (
+        "final ModelData forwarded = base != null ? base : (data == null ? ModelData.EMPTY : data);"
+        in shell_src
+        and "originalModel.getQuads(state, side, rand, forwarded, renderType)" in shell_src
+    )
+    check(forwarded_ok and "frameModel.getQuads(" in shell_src,
+          "C14 一次产出两套几何：被裹方块自己的 + 外壳的（框架开口里看得见线缆的断开态；"
+          "物理化单格路径把 data 原样转发，保住 CABLE_CONNECTIONS）")
     check("ChunkRenderTypeSet.of(types)" in shell_src,
           "C15 渲染层取并集（被裹方块自己的 ∪ 外壳的），漏一层那层几何就永远不会被画")
 

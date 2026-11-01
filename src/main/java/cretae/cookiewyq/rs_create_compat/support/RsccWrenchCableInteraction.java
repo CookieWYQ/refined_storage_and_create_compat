@@ -136,7 +136,8 @@ public final class RsccWrenchCableInteraction {
         event.setCanceled(true);
         event.setCancellationResult(InteractionResult.SUCCESS);
         if (level instanceof final ServerLevel serverLevel) {
-            apply(serverLevel, pos, face, target);
+            // 把「是谁在转扳手」一路带到成就触发点：成就只记给这个人（见 RsccAdvancements 类注释）
+            apply(player instanceof final ServerPlayer actor ? actor : null, serverLevel, pos, face, target);
         }
     }
 
@@ -251,8 +252,10 @@ public final class RsccWrenchCableInteraction {
      * 服务端执行一次切换。<b>不做任何过程性播报</b>（用户明确要求删掉「已断开 / 已恢复 /
      * 这里没有可断开的连接 / 该面已停止（恢复）自动连接」这些动作栏复述）：状态本身在世界上
      * 看得到（连接臂变化），成就由 {@link RsccCableCuts} 内部发出，这里只改状态。
+     *
+     * @param actor 这一次转扳手的玩家；成就只记给他本人（{@code null} = 拿不到操作者，成就就不发）
      */
-    private static void apply(final ServerLevel level, final BlockPos pos,
+    private static void apply(@Nullable final ServerPlayer actor, final ServerLevel level, final BlockPos pos,
                               final Direction face, @Nullable final Direction seam) {
         final Mode mode = RsccCableCuts.modeFor(level);
         if (mode == Mode.SEAM) {
@@ -261,8 +264,10 @@ public final class RsccWrenchCableInteraction {
             if (seam == null) {
                 return;
             }
-            RsccCableCuts.toggleSeam(level, pos, seam);
+            RsccCableCuts.toggleSeam(level, pos, seam, actor);
         } else if (mode == Mode.FACE) {
+            // FACE 档位（面自动连接开关）不对应「一刀两断 / 破镜重圆」那两条成就
+            // —— 那两条讲的是「一道线缆缝」，措辞与动作都不同，不在这里蹭。
             RsccCableCuts.toggleFace(level, pos, face);
         }
     }

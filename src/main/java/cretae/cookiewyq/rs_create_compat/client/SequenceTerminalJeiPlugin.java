@@ -219,7 +219,9 @@ public class SequenceTerminalJeiPlugin implements IModPlugin {
                     cretae.cookiewyq.rs_create_compat.support.SequencedRecipeProbe.candidates(input));
             PacketDistributor.sendToServer(new cretae.cookiewyq.rs_create_compat.network.SetSequenceImportPacket(
                 container.containerId, holder.id(), machines, stepInputs, stepCandidates, stepFluids, stepCounts,
-                loops, ingredient, ingredientCandidates, results, resultChances, scraps, scrapChances));
+                loops, ingredient, ingredientCandidates, results, resultChances, scraps, scrapChances,
+                // truncated 只由服务端 decode 计算（第 117 轮）：客户端永远说自己没被截断。
+                false));
             return null;
         }
     }

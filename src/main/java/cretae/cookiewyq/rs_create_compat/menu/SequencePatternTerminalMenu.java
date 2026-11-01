@@ -51,6 +51,8 @@ import java.util.List;
  * 流程完全由配方生成，行次数 ± / 删除该步 / 上移下移等按钮 id 一律不再处理。</p>
  */
 public class SequencePatternTerminalMenu extends AbstractContainerMenu {
+    /** 第 115 轮：导入步数裁剪的告警通道（`machines` 由 C2S 包带来，超限只打一条）。 */
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
     /** 流程编排滚动窗口高度（可见行数）。 */
     public static final int ARRANGEMENT_WINDOW = SequencePatternTerminalBlockEntity.ARRANGEMENT_WINDOW;
     /** 产物/废料可见窗口（4 列 × 3 行）。 */
@@ -459,8 +461,11 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
 
     /**
      * 「优先复用网络中的中间产物」是否打开（客户端镜像，服务端权威）。
-     * <p>界面据此把顶部「输入原料」那一格改画成<b>中间产物（过渡件）</b>，并换掉它的标题 ——
-     * 开关为关时本方法恒为 {@code false}，界面走的是与改动前<b>逐字一致</b>的老路径。</p>
+     * <p><b>2026-10-17 语义修正</b>：这个开关<b>只表达取材的优先级</b>（开新件时优先拿网络里
+     * 已有的中间产物当起点），<b>不参与任何分类判定</b> —— 界面不得再据此改写「这一格是什么」，
+     * 也不得把原料标成中间产物。界面只允许用它决定「要不要在旁边附一句『优先使用中间产物』」
+     * （见 {@code SequencePatternTerminalScreen#reuseAnnotation()}）。</p>
+     * <p>开关为关时本方法恒为 {@code false}，界面上的附加标注一行都不出现，显示与改动前逐字一致。</p>
      */
     public boolean isReuseIntermediates() {
         return data.get(IDX_REUSE_INTERMEDIATES) != 0;
@@ -629,7 +634,16 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
             scraps, scrapChances);
         terminal.setLoops(Math.max(1, loops));
         // 流程编排：每步生成一张单元样板
-        final int steps = Math.max(1, machines.size());
+        // 第 115 轮（独立复核 H2）：步数由客户端给的 machines 列表长度决定，以前直接 Math.max(1, size)，
+        // 一个约 2 MB 的包（每项空串 1 字节）就能让服务端生成上百万张单元样板 + 扩容 + 写 NBT。
+        // 解码阶段已有同值暂存上限，这里再 clamp 一次（纵深防御；1024 不会拦住任何合法配方）。
+        final int steps = Math.max(1, Math.min(machines.size(),
+            SequencePatternTerminalBlockEntity.MAX_IMPORT_STEPS));
+        if (machines.size() > SequencePatternTerminalBlockEntity.MAX_IMPORT_STEPS) {
+            LOGGER.warn("[rs_create_compat] 序列终端导入：machines 给了 {} 步，超过上限 {} ⇒ 已裁剪"
+                    + "（正常 JEI 转移不会触发；若是改包，本条日志即证据）",
+                machines.size(), SequencePatternTerminalBlockEntity.MAX_IMPORT_STEPS);
+        }
         final List<ItemStack> units = new java.util.ArrayList<>(steps);
         final List<Integer> counts = new java.util.ArrayList<>(steps);
         for (int i = 0; i < steps; i++) {
@@ -1097,10 +1111,10 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
         if (terminal.getLevel() == null) {
             return true;
         }
-        // 终端物品（高级远程终端）打开时使用虚拟方块实体（位置 BlockPos.ZERO，未放置在世界中）
-        final boolean isVirtual = terminal.getBlockPos().equals(net.minecraft.core.BlockPos.ZERO)
-            && terminal.getLevel().getBlockEntity(net.minecraft.core.BlockPos.ZERO) != terminal;
-        if (isVirtual) {
+        // 终端物品（高级远程终端）打开时使用虚拟方块实体：判据是唯一的哨兵坐标
+        // （见 RsccVirtualTerminalBe —— 旧写法比 BlockPos.ZERO 并回查世界，会让「界面能不能
+        //  保持打开」取决于原点那一格的方块实体与区块加载，也就是取决于玩家有没有走动）。
+        if (cretae.cookiewyq.rs_create_compat.support.RsccVirtualTerminalBe.isVirtual(terminal)) {
             return true;
         }
         return terminal.getLevel().getBlockEntity(terminal.getBlockPos()) == terminal
@@ -1457,8 +1471,13 @@ public class SequencePatternTerminalMenu extends AbstractContainerMenu {
 
         @Override
         public boolean mayPlace(final ItemStack stack) {
+            // 第 118 轮：除「是本模组单元样板」之外，还要过库的<b>合计体积预算</b>。
+            // 放在这里而不是只在服务端写入口拦：原版点击逻辑先问 mayPlace，返回 false ⇒ 物品原样留在光标/背包，
+            // 玩家看到的是「放不进去」，而不是「放进去了又弹回来」这种诡异状态。
+            // 取出 / 换小永远允许（canAcceptMore 对空栈恒 true，判据本身只拦增长）。
             return inRange() && !stack.isEmpty()
-                && stack.is(RS_Create_Compat.SEQUENCE_UNIT_PATTERN.get());
+                && stack.is(RS_Create_Compat.SEQUENCE_UNIT_PATTERN.get())
+                && terminal.unitLibrary.canAcceptMore(stack);
         }
 
         @Override

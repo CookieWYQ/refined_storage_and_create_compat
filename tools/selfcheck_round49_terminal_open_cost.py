@@ -86,7 +86,7 @@ def section(title):
 # ------------------------------------------------------------------ A：打开调用链
 section("A. 打开调用链（快捷键 → C2S → 服务端开界面 → S2C 快照）")
 kb = read("keybind")
-kb_body = java_body(kb, "public static void onKeyInput")
+kb_body = java_body(kb, "public static void onClientTick")
 check("TerminalOpenIntent.mark()" in kb_body
       and "sendToServer(OpenAdvancedRemoteTerminalPacket.INSTANCE)" in kb_body,
       "A1 快捷键按下：置位打开意图 + 发一条空负载 C2S")

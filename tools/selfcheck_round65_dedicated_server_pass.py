@@ -60,8 +60,11 @@ FAILURES = []
 CHECKS = [0]
 
 
-def check(name, ok, detail=""):
+def check(name, ok, detail="", hard=True):
     CHECKS[0] += 1
+    if not ok and not hard:
+        print("INFO %s%s" % (name, (" | " + detail) if detail else ""))
+        return ok
     print("%s %s%s" % ("PASS" if ok else "FAIL", name, (" | " + detail) if detail else ""))
     if not ok:
         FAILURES.append("%s %s" % (name, detail))
@@ -122,16 +125,47 @@ def load_head_checker():
     """把 git HEAD 版的校验器导出到 build/ 下并作为模块加载（不改工作区文件）。
 
     返回模块对象；拿不到（没有 git / 没有 HEAD 版本）时返回 None。
+
+    <p><b>前提失效时返回 None（2026-10-17 修）</b>：本脚本的 ②③ 两组的**全部说服力**都来自
+    「HEAD 版（= 1.1.0 线上那一版）在这些反例上报 0 问题、放行」。一旦本轮的修复已经**提交**，
+    HEAD 与工作区就是<b>同一份文件</b>，那个前提自动消失 —— 此时旧检查同样会判负，
+    ②③ 的「0 问题」断言必然失败，让人误以为「本轮改动破坏了检查」，而真实原因只是
+    基线随提交一起前移（实证：两者 md5 完全相同 `05f62b1fc96e32be38b5a6b05b260db9`，
+    且失败输出正是新规则的 `[专服 dist 违规]`）。因此这里显式比对两份文件的哈希：
+    只有它们在**修复前后确实不同**时，才把它当作「旧检查」加载。
     """
     src = subprocess.run(["git", "show", "HEAD:tools/verify_mixin_shadows.py"],
                          cwd=ROOT, capture_output=True, text=True,
                          encoding="utf-8", errors="replace")
     if src.returncode != 0 or not src.stdout.strip():
         return None
+    head_text = src.stdout
+    try:
+        with io.open(CHECKER, "r", encoding="utf-8") as handle:
+            work_text = handle.read()
+    except OSError:
+        work_text = ""
+    if work_text and work_text == head_text:
+        print("[info] HEAD 版的 tools/verify_mixin_shadows.py 与工作区**逐字节相同**"
+              "（修复已提交 ⇒ 基线前移）⇒ 「旧检查放行」这一反例无法复现，"
+              "②③ 的旧检查断言按前提失效跳过；新检查的两遍断言照常执行。")
+        return None
+    # 判据 2（2026-10-24 补）：**直接问 HEAD 版里有没有新规则**，而不是靠两份文件是否逐字节相同。
+    # 为什么不靠哈希：只要工作区对校验器做了任何注释级 / 健壮性级改动（例如给 javap 加
+    # kill+重试，见 verify_mixin_shadows.py 的 run_javap），两份文件就不再相同，但 HEAD 里
+    # 的新规则**仍然存在** —— 此时把 HEAD 当「1.1.0 的旧检查」用是错的：它一样会判负，
+    # ②③ 的「旧检查 0 问题」断言必然失败，看上去像「本轮改动破坏了检查」。
+    # 实证：本轮 HEAD 已含 `DIST_SERVER`（提交 5a25047「服务端校验一遍」），旧检查在
+    # fixture A/B 上同样退出码 1。真正的前提是「HEAD 还没有新规则」。
+    if "DIST_SERVER" in head_text or "专服 dist 违规" in head_text:
+        print("[info] HEAD 版的校验器**已经包含**「专用服务端 dist」规则（修复已提交 ⇒ 基线前移）"
+              "⇒ 「旧检查放行」这一反例在 HEAD 上无法复现，②③ 的旧检查断言按前提失效跳过；"
+              "新检查的两遍断言（对照 / fixture A / fixture B）照常执行。")
+        return None
     os.makedirs(WORK, exist_ok=True)
     head_path = os.path.join(WORK, "head_checker.py")
     with open(head_path, "w", encoding="utf-8") as handle:
-        handle.write(src.stdout)
+        handle.write(head_text)
     # _gradle_cache 在 tools/ 下；HEAD 版会 sys.path.insert(自己的目录)，这里先补上。
     if TOOLS not in sys.path:
         sys.path.insert(0, TOOLS)
@@ -141,9 +175,20 @@ def load_head_checker():
     return module
 
 
-def run_head_checker(module, mixin_dir):
-    """跑 HEAD 版校验器（把 MIXIN_DIR 指到 fixture），返回 (退出码, 输出)。"""
+def run_head_checker(module, mixin_dir, json_path):
+    """跑 HEAD 版校验器（把 MIXIN_DIR / MIXINS_JSON 都指到 fixture），返回 (退出码, 输出)。
+
+    <p><b>为什么必须同时指 json（2026-10-24 修）</b>：HEAD 版是用模块内直接调 `main()` 的方式跑的
+    （因为 `--mixin-dir` 之类参数走不到），而 `main()` 的 `--mixins-json` 默认值指向**本仓库真实的**
+    `rs_create_compat.mixins.json`；新校验器却是以子进程 + `--mixin-dir/--mixins-json` 跑的。
+    只改 `MIXIN_DIR` 会让两边**输入不同**（旧检查器读真实 json、新检查器读 fixture json），
+    于是「旧检查器 0 问题」这条对照断言测的不再是「旧规则放行」，而是「两个不同的输入谁报错」——
+    一旦有人先改了校验器（工作区与 HEAD 不同），这条断言就会翻车（实测：第 354 轮把 javap
+    改成 kill+重试后，②③ 的旧检查断言全部 FAIL，原因就是旧检查器拿真实 json 去比 fixture 文件，
+    报「登记了但文件不存在」）。这里把两边输入对齐：都只看 fixture 的 mixin 目录与 fixture json。
+    """
     module.MIXIN_DIR = mixin_dir
+    module.MIXINS_JSON = json_path
     buf = io.StringIO()
     code = 0
     old_argv = sys.argv
@@ -183,8 +228,13 @@ def main():
     print("=" * 100)
 
     head = load_head_checker()
-    check("⓪ 能拿到 git HEAD 版的旧校验器（1.1.0 发布时线上那一版）", head is not None,
-          "拿不到就无法证明「旧检查放行」；与旧检查相关的断言会跳过")
+    # ⓪ 是**前提**断言而非判据断言：HEAD 与工作区逐字节相同时（修复已提交 ⇒ 基线前移），
+    # 「旧检查放行」这一反例在定义上就无法复现，此时按 INFO 跳过，不计入失败
+    # —— 新检查的判据断言（① 对照 / ② A / ③ B）仍然全量执行，规则本身照样被证伪过。
+    check("⓪ 能拿到与工作区**不同**的 git HEAD 版旧校验器（1.1.0 发布时线上那一版）",
+          head is not None,
+          "HEAD == 工作区（修复已提交）⇒ 无可复现的「旧检查放行」基线；与旧检查相关的断言跳过",
+          hard=False)
 
     # ---------------- ① 对照：段位与真实工程一致 ⇒ 必须 0 问题（不误报） ----------------
     c_dir, c_json = build_fixture("control", {SLOT_REL: "mixins", CLIENT_REL: "client"})
@@ -195,7 +245,7 @@ def main():
     check("① 对照：服务端一遍 0 问题（client 段的 Mixin 被跳过，不误报）",
           pass_problems(out, "server") == 0, "实际 %s" % pass_problems(out, "server"))
     if head:
-        rc_c_old, _ = run_head_checker(head, c_dir)
+        rc_c_old, _ = run_head_checker(head, c_dir, c_json)
         check("① 对照：旧校验器同样 0 问题（两边基线一致）", rc_c_old == 0,
               "旧校验器退出码 %s" % rc_c_old)
 
@@ -213,7 +263,7 @@ def main():
           "[专服 dist 违规]" in out_a and "net.minecraft.client." in out_a,
           excerpt(out_a, "[专服 dist 违规]"))
     if head:
-        rc_a_old, _ = run_head_checker(head, a_dir)
+        rc_a_old, _ = run_head_checker(head, a_dir, a_json)
         check("② fixture A：**旧校验器 0 问题、退出码 0（放行）** —— 这就是 1.1.0 的假绿",
               rc_a_old == 0, "旧校验器退出码 %s" % rc_a_old)
 
@@ -240,7 +290,7 @@ def main():
           "[签名不符]" in out_b and "Slot" in out_b and "PatternSlot" in out_b,
           excerpt(out_b, "[签名不符]"))
     if head:
-        rc_b_old, _ = run_head_checker(head, b_dir)
+        rc_b_old, _ = run_head_checker(head, b_dir, b_json)
         check("③ fixture B：**旧校验器 0 问题、退出码 0（放行）** —— 发布 1.1.0 时就是这一版",
               rc_b_old == 0, "旧校验器退出码 %s" % rc_b_old)
 

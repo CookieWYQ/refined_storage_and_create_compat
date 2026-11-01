@@ -17,6 +17,18 @@ import net.neoforged.neoforge.event.level.ChunkEvent;
  * 版本对不上就重建，因此<b>漏掉某个显式钩子也不会读到旧值</b>（显式清理做不到这一点：
  * 漏一个调用点就等于永久冻结，正是 RS 自己那份「弱键 + 永不失效」的样板缓存 {@code patternCache} 的坑）。</p>
  *
+ * <h2>谁会推版本（第 75 轮补全：配置写入也算）</h2>
+ * <ul>
+ *     <li><b>方块事件</b>：放置 / 破坏 / 被替换 / 扳手拆线 / 套壳 → {@link BlockEvent.NeighborNotifyEvent}；</li>
+ *     <li><b>区块事件</b>：加载 / 卸载 → {@code ChainMembers} 依赖「区块是否加载」，必须重算；</li>
+ *     <li><b>执行仓配置写入</b>：{@code SequenceExecutionChamberBlockEntity} 的
+ *     {@code setRecipeType} / {@code setChamberName} / 链自愈归位 / 拆链移交 —— 这些写入
+ *     <b>不经过任何方块事件</b>，而它们会改变「哪些执行仓可用」、并且改配方类型还会改变
+ *     「同配方才成链」的成员集合。旧实现漏了这一类 ⇒ {@code chainMembers()} 的每 tick 备忘
+ *     在写入的那一个 tick 内仍返回旧成员（虽然下一 tick 会自愈，但「同一 tick 内先写后读」是真实路径：
+ *     服务端包处理与列表请求都在主线程的同一拍里排队）。</li>
+ * </ul>
+ *
  * <h2>为什么只 +1、不在这里做任何计算</h2>
  * <p>本类刻意<b>不持有任何世界数据</b>、不做搜索、不取方块实体：事件回调发生在世界正被修改的过程中，
  * 在这里做重活会踩「搜索期加载邻块 → 递归触发事件」那类崩溃（工程已被该问题坑过，见

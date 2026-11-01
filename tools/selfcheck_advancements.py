@@ -11,19 +11,20 @@ selfcheck_advancements.py - 成就（advancements）自检。
 「同主题就硬挂父子」「一条子线串到底」的过死依赖（第一版就是这么坏的）。
 
 检查项：
-  1. 成就清单与验收一致（36 条，不多不少）；每个文件 json.load 通过，且**与生成器渲染结果逐字节一致**
+  1. 成就清单与验收一致（44 条，不多不少）；每个文件 json.load 通过，且**与生成器渲染结果逐字节一致**
      （生成器 ↔ 产物一致：JSON 不许手改）；
   2. criteria 非空；requirements 指向存在的 criterion；
   3. display.icon.id 真实存在于本模组注册表；root 的 background 贴图真实存在且 16x16；
-  4. 树结构：只有 root 没 parent；挂在 root 下的只有「入口清单」（11 个）；无孤儿、无环；
+  4. 树结构：只有 root 没 parent；挂在 root 下的只有「入口清单」（17 个）；无孤儿、无环；
      全部节点从 root 可达；最大深度 ≤4 条边（防「一路串死」）；
   5. 依赖必要性（核心断言，逐条独立验证，不看生成器的说法）：
      - entry   ：必须在本模组的入口清单里；
      - recipe  ：子项 recipe/*.json 的原料里**真的**含父成就物品谓词里的某件物品（父为机器或磁盘集合）；
+     - component：方向相反 —— **父成就物品的配方原料里真的含子项物品**（子项是那台机器的部件）；
      - machine ：子项是玩法事件，且事件所属机器 == 父（机器表 + Java 触发点方法名都在下面硬编码）；
      - output  ：子项物品**没有任何配方**（由父机器产出）；
      - compose / prereq / pipeline：白名单逐条列出，每条附理由（这类因果机检不了，只能声明式断言）；
-     任何一条边都不在这 7 类里 → 失败（这就是「没必要的前置」的兜底闸门）；
+     任何一条边都不在这 8 类里 → 失败（这就是「没必要的前置」的兜底闸门）；
   6. 用户点名的「过死依赖」不得复活（FORBIDDEN_EDGES）；
   7. 成对的基础 / 高级：高级的 parent 必须是基础（对齐原版「钻石在铁锭后面」的进度顺序）；
   8. 磁盘绝不按等级拆分：只有「任意等级」+「最高级」两条，且任意等级那条列全所有等级；
@@ -33,6 +34,11 @@ selfcheck_advancements.py - 成就（advancements）自检。
      取更严的旧标准；root 标题例外，它必须等于模组名）；文案黑名单（上一轮删掉的废话）不得回流；
  12. JSON 里用到的自定义 criterion 都在 RsccAdvancements.java 注册、每个注册的都被用到、
      每个语义触发点都在源码里有调用（防止「注册了却没人 fire」）。
+  13. 触发口径（上一轮实测 bug：拿扳手转线缆时旁边的人白拿「一刀两断」）：
+      玩家动作类触发点（onSheathApplied / onSheathChained / onSeamToggled）的参数表里必须有
+      ServerPlayer 操作者、方法体里**不得**出现 fireNearby(（只记给操作者本人）；
+      机器自发的触发点必须**仍用** fireNearby(、且不得改成 fire(单个玩家)（别把机器事件的语义也改坏）；
+      且 RsccCableCuts.toggleSeam / RsccSheaths.add / RsccSheaths.addAll 必须把 actor 透传进去。
 
 用法：python tools/selfcheck_advancements.py   退出码 0 = 全部通过。
 """
@@ -62,12 +68,14 @@ GRADLE_PROPS = os.path.join(ROOT_DIR, "gradle.properties")
 _UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 _SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "f": "\f"}
 
-# ---- 验收清单：36 = 1 根 + 35 环 ----
+# ---- 验收清单：44 = 1 根 + 43 环 ----
 MACHINES = [
-    "range_charger", "quantity_keeper", "advanced_quantity_keeper", "schematic_loader",
+    "range_charger", "fe_energy_cube", "decomposition_generator", "quantity_keeper",
+    "advanced_quantity_keeper", "schematic_loader",
     "advanced_schematic_loader", "sequence_pattern_terminal", "sequence_assembly_executor",
     "sequence_execution_chamber", "unit_pattern_manager", "collection_cache", "intermediate_cache",
-    "separation_frame", "infinite_separation_frame", "camouflage_frame",
+    "advanced_collection_cache", "network_resource_receiver", "network_resource_requester",
+    "inventory_proxy", "separation_frame", "infinite_separation_frame", "camouflage_frame",
 ]
 DISKS = [
     "universal_storage_disk_1k", "universal_storage_disk_4k", "universal_storage_disk_16k",
@@ -107,6 +115,8 @@ ENTRY_HEADS = [
     "range_charger", "quantity_keeper", "collection_cache", "intermediate_cache",
     "sequence_pattern_terminal", "separation_frame", "camouflage_frame", "seam_cut",
     "schematic_loader", "universal_storage_disk", "advanced_remote_terminal",
+    "network_resource_receiver", "network_resource_requester", "inventory_proxy", "area_selector",
+    "electric_jetpack", "decomposition_generator",
 ]
 # 成对的基础 / 高级（高级 parent 必须是基础）
 PAIRS = [
@@ -114,6 +124,7 @@ PAIRS = [
     ("schematic_loader", "advanced_schematic_loader"),
     ("separation_frame", "infinite_separation_frame"),
     ("universal_storage_disk", "universal_storage_disk_max"),
+    ("collection_cache", "advanced_collection_cache"),
 ]
 PLAYSTYLE = sorted(HOOKS)
 EXPECTED = set(MACHINES) | set(ENTRY_HEADS) | set(PLAYSTYLE) | {
@@ -121,8 +132,8 @@ EXPECTED = set(MACHINES) | set(ENTRY_HEADS) | set(PLAYSTYLE) | {
 }
 
 # ---- 依赖必要性：声明的 (子 → 父, 前置类型, 理由)；与生成器必须逐条一致 ----
-ENTRY, RECIPE, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE = (
-    "entry", "recipe", "machine", "output", "compose", "prereq", "pipeline")
+ENTRY, RECIPE, COMPONENT, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE = (
+    "entry", "recipe", "component", "machine", "output", "compose", "prereq", "pipeline")
 EXPECTED_EDGES = {
     # 入口：本模组里没有前置（机器配方只用 RS / Create / 原版材料；线缆缝只需线缆 + 扳手）
     "range_charger": ("root", ENTRY, "配方只有 RS/Create/原版材料"),
@@ -136,11 +147,25 @@ EXPECTED_EDGES = {
     "schematic_loader": ("root", ENTRY, "配方只有 RS/Create/原版材料"),
     "universal_storage_disk": ("root", ENTRY, "磁盘是物品，各等级可独立做出"),
     "advanced_remote_terminal": ("root", ENTRY, "配方只有 RS/Create/原版材料"),
+    "network_resource_receiver": ("root", ENTRY, "配方只有 RS/Create/原版材料，本模组里没有它的前置"),
+    "network_resource_requester": ("root", ENTRY,
+                                   "配方只有 RS/Create/原版材料，与接收器无合成依赖，可独立做出"),
+    "inventory_proxy": ("root", ENTRY,
+                        "配方只有 RS 构造核心 / 机器外壳 / 潜影盒 / 漏斗，本模组里没有它的前置"),
+    "area_selector": ("root", ENTRY, "配方只有 RS 石英铁 / 玻璃 / 木棍，本模组里没有它的前置"),
+    "electric_jetpack": ("root", ENTRY,
+                         "配方只有 RS 构造核心 / 精密构件 / 活塞 / 皮革，本模组里没有它的前置"),
+    "decomposition_generator": ("root", ENTRY,
+                                "配方只有 RS 石英铁 / 机器外壳 / 铜块 / 漏斗 / 堆肥桶，本模组里没有它的前置"),
+    # 反向配方依赖：父机器（范围充电器）的配方里真的用到这个子项（FE 能量立方 = 储能部件）
+    "fe_energy_cube": ("range_charger", COMPONENT,
+                       "范围充电器的配方里直接用到 FE 能量立方（中心储能部件）"),
     # 配方前置：机检 recipe/*.json
     "advanced_quantity_keeper": ("quantity_keeper", RECIPE, "高级保持器配方里用到定量保持器"),
     "unit_pattern_manager": ("sequence_execution_chamber", RECIPE, "管理舱配方里用到序列执行仓"),
     "infinite_separation_frame": ("separation_frame", RECIPE, "无限框架配方里用到分隔框架"),
     "advanced_schematic_loader": ("schematic_loader", RECIPE, "高级装填器配方里用到装填器"),
+    "advanced_collection_cache": ("collection_cache", RECIPE, "高级归流缓存仓配方里用到归流缓存仓"),
     "universal_storage_disk_max": ("universal_storage_disk", RECIPE, "64M 由 4 个 16M 合成，16M 属于「任意等级」"),
     # 机内事件：事件必须发生在父机器上
     "keeper_autocraft": ("quantity_keeper", MACHINE, "补货事件发生在定量保持器上"),
@@ -180,6 +205,25 @@ FORBIDDEN_EDGES = {
 # 文案黑名单：上一轮删掉的废话 / 一眼可见的补语，不许回流
 FLAVOR_BLACKLIST = ["远水可解渴", "多退少补", "四路精算", "军火库", "整整", "随处可见", "非常"]
 ZH_TITLE_MAX, ZH_DESC_MAX, ZH_ABS_MAX = 6, 14, 40
+
+# ---- 触发口径：玩家动作只记给操作者本人，机器自发事件才散给附近玩家（上一轮真人实测 bug） ----
+# 用户实测：自己拿扳手转线缆，旁边站着的新人白拿了「一刀两断」——根因是玩家动作也走 fireNearby（64 格）。
+# 因此这里把两类触发点分开钉死：
+#   玩家动作（套壳 / 连锁套壳 / 断缝）：参数里必须有 ServerPlayer 操作者，方法体里不得出现 fireNearby(；
+#   机器事件（打印 / 吸取 / 补货 / 换盘 / 样板入库）：仍然必须用 fireNearby(（别把语义改坏）。
+PLAYER_ACTION_HOOKS = ["onSheathApplied", "onSheathChained", "onSeamToggled"]
+MACHINE_EVENT_HOOKS = [
+    "onBlueprintPrinted", "onCollectedFromWorld", "onCollectedFluid", "onCollectedExperience",
+    "onSharedCacheDiskChanged", "onAssemblyPatternLoaded", "onAutocraftRequested",
+    "onAdvancedAutocraftRequested",
+]
+SUPPORT_JAVA = os.path.join(JAVA_DIR, "cretae", "cookiewyq", "rs_create_compat", "support")
+# (文件, 调用点所在方法, 方法体里必须出现的调用文本（去空白后比较）, 说明)
+ACTOR_CALLS = [
+    ("RsccCableCuts.java", "toggleSeam", "RsccAdvancements.onSeamToggled(actor,", "断开 / 接回线缆缝"),
+    ("RsccSheaths.java", "add", "RsccAdvancements.onSheathApplied(actor,", "单格套壳"),
+    ("RsccSheaths.java", "addAll", "RsccAdvancements.onSheathChained(actor,", "批量套壳"),
+]
 
 problems = []
 
@@ -222,6 +266,119 @@ def mod_registry_ids():
 def registered_triggers():
     return {"%s:%s" % (MODID, m)
             for m in re.findall(r'TRIGGERS\.register\(\s*"([^"]+)"', read(TRIGGER_JAVA))}
+
+
+def java_clean(source):
+    """去掉 Java 注释与字符串 / 字符字面量。
+
+    为什么要去：方法体注释里写一句「以前用 fireNearby(」就会骗过「方法体不得含 fireNearby(」的断言，
+    而字符串里的花括号也会把方法体的花括号配对带偏 —— 所以先把噪声剥干净再解析。
+    """
+    out = []
+    index, length = 0, len(source)
+    while index < length:
+        char = source[index]
+        pair = source[index:index + 2]
+        if pair == "//":
+            end = source.find("\n", index)
+            index = length if end < 0 else end
+        elif pair == "/*":
+            end = source.find("*/", index + 2)
+            index = length if end < 0 else end + 2
+        elif char in ('"', "'"):
+            index += 1
+            while index < length:
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == char:
+                    index += 1
+                    break
+                index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def java_method(source, name):
+    """取出 public static 方法 name 的 (参数表, 方法体)；找不到返回 (None, None)。
+
+    只看源码本身，不看生成器或注释的说法（与第 5 条依赖断言同一原则：机检、不采信声明）。
+    """
+    clean = java_clean(source)
+    match = re.search(r"public\s+static\s+[^{;=]*?\b%s\s*\(" % re.escape(name), clean)
+    if not match:
+        return None, None
+    depth, index = 1, match.end()
+    while index < len(clean) and depth:
+        if clean[index] == "(":
+            depth += 1
+        elif clean[index] == ")":
+            depth -= 1
+        index += 1
+    params = clean[match.end():index - 1]
+    brace = clean.find("{", index)
+    if brace < 0:
+        return params, None
+    depth, index = 1, brace + 1
+    while index < len(clean) and depth:
+        if clean[index] == "{":
+            depth += 1
+        elif clean[index] == "}":
+            depth -= 1
+        index += 1
+    return params, clean[brace + 1:index - 1]
+
+
+def check_trigger_scope():
+    """第 13 条：玩家动作只记给操作者本人、机器事件才散附近玩家，且调用链把 actor 透传到底。"""
+    checks = 0
+    source = read(TRIGGER_JAVA)
+    for name in PLAYER_ACTION_HOOKS:
+        params, body = java_method(source, name)
+        checks += 1
+        if params is None:
+            problem("玩家动作触发点 %s 在 RsccAdvancements 里找不到" % name)
+            continue
+        checks += 1
+        if "ServerPlayer" not in params:
+            problem("玩家动作触发点 %s 的参数表里没有 ServerPlayer 操作者（成就只该记给他本人）：%s"
+                    % (name, " ".join(params.split())))
+        checks += 1
+        if body is not None and "fireNearby(" in body:
+            problem("玩家动作触发点 %s 的方法体里还有 fireNearby( —— 会把成就散给附近玩家"
+                    "（用户实测「旁边站着的新人也拿到一刀两断」）；只许 fire(actor, …)" % name)
+    for name in MACHINE_EVENT_HOOKS:
+        params, body = java_method(source, name)
+        checks += 1
+        if params is None:
+            problem("机器事件触发点 %s 在 RsccAdvancements 里找不到" % name)
+            continue
+        checks += 1
+        if body is None or "fireNearby(" not in body:
+            problem("机器事件触发点 %s 不再用 fireNearby( —— 机器自发事件会漏发" % name)
+        checks += 1
+        if body is not None and re.search(r"\bfire\s*\(", body):
+            problem("机器事件触发点 %s 改成了 fire(单个玩家) —— 机器事件没有操作者语义，"
+                    "应当继续散给附近玩家" % name)
+    for file_name, method_name, call, label in ACTOR_CALLS:
+        params, body = java_method(read(os.path.join(SUPPORT_JAVA, file_name)), method_name)
+        checks += 1
+        if params is None:
+            problem("%s 里找不到 %s（actor 透传调用链断了？）" % (file_name, method_name))
+            continue
+        checks += 1
+        if "ServerPlayer" not in params:
+            problem("%s.%s 的参数表里没有 ServerPlayer actor，无法把操作者透传给成就"
+                    % (file_name, method_name))
+        checks += 1
+        if body is None or call not in re.sub(r"\s+", "", body):
+            problem("%s.%s（%s）没有把 actor 透传给成就：方法体里找不到 %s"
+                    % (file_name, method_name, label, call))
+    info("触发口径：玩家动作 %d 个只发本人（参数含 ServerPlayer、方法体无 fireNearby），"
+         "机器事件 %d 个仍用 fireNearby，调用链 actor 透传 %d 处（共 %d 项断言）"
+         % (len(PLAYER_ACTION_HOOKS), len(MACHINE_EVENT_HOOKS), len(ACTOR_CALLS), checks))
 
 
 def items_of(payload):
@@ -334,7 +491,7 @@ def check_dependencies(parents, data, recipes):
     if sorted(parents) != sorted(EXPECTED):
         problem("成就清单与验收不一致：多出 %s / 缺少 %s"
                 % (sorted(set(parents) - EXPECTED), sorted(EXPECTED - set(parents))))
-    counts = {kind: 0 for kind in (ENTRY, RECIPE, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE)}
+    counts = {kind: 0 for kind in (ENTRY, RECIPE, COMPONENT, MACHINE, OUTPUT, COMPOSE, PREREQ, PIPELINE)}
     for adv_id in sorted(a for a in parents if a != "root"):
         actual_parent = parents[adv_id]
         declared = EXPECTED_EDGES.get(adv_id)
@@ -364,6 +521,22 @@ def check_dependencies(parents, data, recipes):
             if not (parent_items & ingredients):
                 problem("%s 声明为配方前置，但它的配方没用 %s 的物品谓词：原料 %s"
                         % (adv_id, want_parent, sorted(ingredients)))
+        elif kind == COMPONENT:
+            # 方向与 RECIPE 相反：**父成就物品的配方**里必须真的出现子项物品（子项 = 那台机器的部件）。
+            # 之所以单列一类：把「A 的配方用到 B」硬写成 RECIPE 会把 A/B 方向搞反，
+            # 而复用 RECIPE 的判据（查子项配方）又永远查不到 —— 那等于这条边没有机检。
+            parent_items = set(items_of(data[want_parent])) or {
+                "%s:%s" % (MODID, ((data[want_parent].get("display") or {}).get("icon") or {})
+                           .get("id", "").split(":")[-1])}
+            child_items = set(items_of(data[adv_id])) or {
+                "%s:%s" % (MODID, ((data[adv_id].get("display") or {}).get("icon") or {})
+                           .get("id", "").split(":")[-1])}
+            ingredients = set()
+            for item in parent_items:
+                ingredients |= recipes.get(item, set())
+            if not (child_items & ingredients):
+                problem("%s 声明为「父机器配方用到它」的部件前置，但 %s 的配方原料 %s 里没有它"
+                        % (adv_id, want_parent, sorted(ingredients)))
         elif kind == MACHINE:
             machine = HOOKS.get(adv_id, (None, []))[0]
             allowed = {machine} if adv_id not in MACHINE_OF_CHAIN else {machine, "infinite_separation_frame"}
@@ -377,9 +550,9 @@ def check_dependencies(parents, data, recipes):
     for adv_id, old_parent in sorted(FORBIDDEN_EDGES.items()):
         if parents.get(adv_id) == old_parent:
             problem("过死依赖复活：%s 又挂回了 %s" % (adv_id, old_parent))
-    info("依赖：入口 %d、配方 %d、机内事件 %d、机器产出 %d、编排 %d、前提 %d、流水线 %d（共 %d 条边）"
-         % (counts[ENTRY], counts[RECIPE], counts[MACHINE], counts[OUTPUT], counts[COMPOSE],
-            counts[PREREQ], counts[PIPELINE], sum(counts.values())))
+    info("依赖：入口 %d、配方 %d、部件 %d、机内事件 %d、机器产出 %d、编排 %d、前提 %d、流水线 %d（共 %d 条边）"
+         % (counts[ENTRY], counts[RECIPE], counts[COMPONENT], counts[MACHINE], counts[OUTPUT],
+            counts[COMPOSE], counts[PREREQ], counts[PIPELINE], sum(counts.values())))
     # 生成器 ↔ 产物一致（同一渲染器重算一遍，逐字节比对）
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import gen_advancements as gen
@@ -522,6 +695,9 @@ def main():
                 problem("触发器 %s 的语义触发点 %s 在 RsccAdvancements 里找不到" % (trigger, hook))
     info("自定义 criterion：注册 %d 个，JSON 使用 %d 个，触发点齐备" % (len(declared), len(used)))
 
+    # ---- 触发口径：玩家动作只记操作者本人，机器事件才散附近玩家 ----
+    check_trigger_scope()
+
     # ---- 语言键：成对 + 长度上限 + 废话黑名单 + 根标题 == 模组显示名 ----
     lang = {}
     for name in ("zh_cn.json", "en_us.json"):
@@ -592,7 +768,8 @@ def main():
         return 1
     print("[result] 自检通过：%d 条成就 / %d 个入口，parent 成树无环无孤儿且全部可达，"
           "每条前置都有类型与理由（过死依赖未复活），成对高级挂在低级后，磁盘未拆分，"
-          "语言键成对且无废话，自定义触发器有注册点与触发点"
+          "语言键成对且无废话，自定义触发器有注册点与触发点，"
+          "玩家动作只记操作者本人 / 机器事件仍散附近玩家"
           % (len(EXPECTED), len(ENTRY_HEADS)))
     return 0
 

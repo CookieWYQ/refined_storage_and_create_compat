@@ -7,6 +7,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipComponent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.world.inventory.Slot;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -33,6 +34,14 @@ import java.util.List;
  * <h2>唯一实现（硬约束）</h2>
  * <p><b>所有</b>附加 tooltip 一律经本类过滤后再渲染 / 追加，各处<b>不得</b>自行判断 Shift / Ctrl / Alt。
  * 这样「不按键 = 全隐藏 + 一条提示行」「多键同按 = 多层同显」只可能有一份语义。</p>
+ *
+ * <h2>同一帧同一格只画一份（硬约束）</h2>
+ * <p>本模组界面是原版 {@code AbstractContainerScreen} 的子类：原版路径（槽位物品自身提示）与
+ * 本类的手绘路径若在同一帧对同一片像素各画一份，就会出现<b>两个背景框、两套文字互相压</b>。
+ * 因此：与 {@code hoveredSlot} <b>不同源</b>的自绘提示在渲染前必须问
+ * {@link #vanillaSlotTooltipWillDraw(Slot)}；与 {@code hoveredSlot} <b>同源</b>的提示则由界面在
+ * {@code renderTooltip} 覆写里 {@code return} 挡掉原版那一条路。两者合起来，
+ * 「同一格两份」在结构上不可能发生。</p>
  *
  * <h2>视觉</h2>
  * <p>提示行照抄机械动力的观感：<b>灰色正文 + 彩色按键名</b>（正文 {@code DARK_GRAY}、按键名 {@code AQUA}）。
@@ -124,6 +133,34 @@ public final class RsccTooltipLayers {
 
     public static List<Line> list(final Line... lines) {
         return List.of(lines);
+    }
+
+    // ==================== 「同一帧同一格只画一份」的唯一判据 ====================
+
+    /**
+     * <b>原版槽位路径这一帧会不会自己画一份 tooltip</b> —— 全工程唯一判据。
+     *
+     * <h2>为什么必须有这一条</h2>
+     * <p>本模组界面基于原版 {@link net.minecraft.client.gui.screens.inventory.AbstractContainerScreen}，
+     * 它的 {@code renderTooltip} 会为 {@code hoveredSlot} 的物品画一份原版 tooltip；而本模组所有自绘元素
+     * （流程编排行 / 标题 / 状态行 / 各类按钮 / 输入框旁的文字行…）的提示必须由界面<b>手动</b>渲染。
+     * 这两条路一旦在同一帧对同一片像素各画一份，就会得到<b>两个背景框、两套文字</b>：
+     * MC 的 {@code DefaultTooltipPositioner} 会在贴边时按 tooltip 高度反算 y
+     * （{@code y = max(4, mouseY - 16 - height)}），两份 tooltip 行数不同 ⇒ 锚点不同 ⇒
+     * 文字互相压在一起（用户实机反馈的「文本堆叠 / 互相压」）。</p>
+     *
+     * <h2>怎么用（硬规则）</h2>
+     * <p><b>凡是命中判定与 {@code hoveredSlot} <i>不同源</i>的自绘提示</b>（几何矩形命中、按界面数据命中…），
+     * 在真正渲染之前一律先问本方法：返回 {@code true} ⇒ 原版已经画过一份 ⇒ <b>直接放弃本次自绘</b>。
+     * 与 {@code hoveredSlot} <i>同源</i>的提示（按槽位下标判定）不需要问：调用方应当已经在
+     * {@code renderTooltip} 覆写里 {@code return} 挡掉了原版那一条路（见各界面里
+     * 「避免与自定义 prompt 叠两个框」的注释）。</p>
+     *
+     * @param hoveredSlot 当前帧的 {@code hoveredSlot}（可为 null）
+     * @return true = 原版这一帧一定会画一份槽位物品提示
+     */
+    public static boolean vanillaSlotTooltipWillDraw(@Nullable final Slot hoveredSlot) {
+        return hoveredSlot != null && hoveredSlot.hasItem();
     }
 
     // ==================== 统一出口 ====================

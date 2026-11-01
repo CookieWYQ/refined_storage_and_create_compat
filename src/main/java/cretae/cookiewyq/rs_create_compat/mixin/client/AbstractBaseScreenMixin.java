@@ -1,10 +1,6 @@
 package cretae.cookiewyq.rs_create_compat.mixin.client;
 
-import com.refinedmods.refinedstorage.common.importer.ImporterScreen;
-import com.refinedmods.refinedstorage.common.storage.FilterModeSideButtonWidget;
 import com.refinedmods.refinedstorage.common.support.AbstractBaseScreen;
-import com.refinedmods.refinedstorage.common.support.widget.AbstractSideButtonWidget;
-import com.refinedmods.refinedstorage.common.support.widget.FuzzyModeSideButtonWidget;
 import cretae.cookiewyq.rs_create_compat.support.RsccExporterBarHost;
 import cretae.cookiewyq.rs_create_compat.support.RsccImporterBarHost;
 import net.minecraft.client.gui.GuiGraphics;
@@ -15,20 +11,46 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 把「输出总线锁定条」的点击提前到 RS 槽位逻辑之前（用户需求：界面里的按钮点了没反应）。
+ * RS 总线界面（输入 / 输出总线共用基类 {@link AbstractBaseScreen}）的<b>两个「点击 / tooltip 接力」注入</b>。
  *
- * <p><b>为什么注入到 {@link AbstractBaseScreen} 的 {@code mouseClicked}</b>：
- * {@code mouseClicked} <b>声明在 {@code AbstractBaseScreen} 自身</b>（不是更上层的
- * {@code AbstractContainerScreen}），因此这里可以合法注入 —— 本项目硬规则是
- * 「{@code @Inject/@Shadow} 只能定位目标类自身的成员」，而 {@code ExporterScreen} 自己并不声明
- * {@code mouseClicked}（早期在它上面注入会直接抛 {@code InvalidInjectionException} 崩客户端）。</p>
+ * <h2>铁律：本模组只追加自绘控件，<b>绝不删除 RS 原生控件</b></h2>
+ * <p>本类<b>不</b>拦截「挂控件」的任何入口：既不拦截「挂侧边按钮」那个方法（它声明在
+ * {@link AbstractBaseScreen} 自身），也不拦截 {@code addRenderableWidget} / {@code addWidget}，
+ * 更不做 {@code clearWidgets()} 之后不重建。原生侧边按钮<b>一律保留</b> ——</p>
+ * <ul>
+ *     <li>输入总线（{@code ImporterScreen}）：过滤器模式（白 / 黑名单）+ 模糊模式 + 红石模式；</li>
+ *     <li>输出总线（{@code ExporterScreen}）：模糊模式 + 调度模式 + 红石模式。</li>
+ * </ul>
+ * <p>前两组分别由 {@code ImporterScreen#init} / {@code ExporterScreen#init} 自己挂，
+ * 红石模式由 {@code AbstractFilterScreen#init} 挂（RS 2.0.9 sources：
+ * {@code common/importer/ImporterScreen.java:21,26}、{@code common/exporter/ExporterScreen.java:20,24}、
+ * {@code common/support/AbstractFilterScreen.java:39}）。</p>
  *
- * <p><b>为什么必须抢在它最前面</b>：{@code AbstractBaseScreen#mouseClicked} 的第一段逻辑是
+ * <p><b>为什么这条铁律必须写在这里（历史教训）</b>：本类曾经有一个
+ * {@code rscc$hideImporterFilterButtons} 注入，在「挂侧边按钮」那个方法的 {@code HEAD} 处
+ * <b>无条件</b> {@code ci.cancel()} 掉「过滤器模式 / 模糊模式」两颗按钮 —— 于是输入总线界面上
+ * <b>只剩一颗红石模式按钮</b>，连「普通模式本该与 RS 原版逐像素一致」的场合也一起被删了 1.0.0 起七八个版本。
+ * 用户原话：「你貌似把输入总线输出总线……所有这样子的总线，它的黑名单那些按钮什么全都删了，
+ * 然后只剩下一个这一个红石开关了。我让你的是把我添加的那一些东西部分改一下，但你却把这都改。
+ * 这是个非常严重的问题。」</p>
+ * <p>结论：本模组对 RS 界面的所有改动都必须是<b>追加</b>（自绘控件挂在 children 末尾、
+ * 或用 {@code @Inject} 在 TAIL 处补一笔），任何「让原生控件不出现」的写法都是回归。
+ * 回归由 {@code tools/selfcheck_round97_bus_side_buttons.py} 钉住：全仓 {@code src/main/java}
+ * 必须<b>一次都不出现</b>那个方法名（连注释里也不写，这样任何人 grep 一眼就能判）。</p>
+ *
+ * <h2>本类实际只做两件事（都是「接力」，不改变任何原生控件是否存在）</h2>
+ *
+ * <p><b>① 把「输出总线锁定条」的点击提前到 RS 槽位逻辑之前</b>（用户需求：界面里的按钮点了没反应）。</p>
+ * <p>为什么注入到 {@link AbstractBaseScreen} 的 {@code mouseClicked}：{@code mouseClicked}
+ * <b>声明在 {@code AbstractBaseScreen} 自身</b>（不是更上层的 {@code AbstractContainerScreen}），
+ * 因此这里可以合法注入 —— 本项目硬规则是「{@code @Inject/@Shadow} 只能定位目标类自身的成员」，
+ * 而 {@code ExporterScreen} 自己并不声明 {@code mouseClicked}（早期在它上面注入会直接抛
+ * {@code InvalidInjectionException} 崩客户端）。</p>
+ * <p>为什么必须抢在它最前面：{@code AbstractBaseScreen#mouseClicked} 的第一段逻辑是
  * 「鼠标下是资源槽（过滤器槽）→ 处理并直接 {@code return true}」，它在 {@code super.mouseClicked}
  * 之前就返回了；而锁定条正盖在这些过滤器槽上，于是点击永远到不了挂在 {@code children} 里的自绘控件。
  * 这里在 HEAD 处先问一句「当前界面是不是输出总线锁定条的宿主」，是就把点击交给它。</p>
- *
- * <p><b>影响面</b>：只有实现了 {@link RsccExporterBarHost} 的界面（即输出总线界面）才有额外开销，
+ * <p>影响面：只有实现了 {@link RsccExporterBarHost} 的界面（即输出总线界面）才有额外开销，
  * 其余 RS 界面只多一次 {@code instanceof} 判断；非延长模式 / 点在条外一律放行原版逻辑。</p>
  */
 @Mixin(AbstractBaseScreen.class)
@@ -59,32 +81,6 @@ public abstract class AbstractBaseScreenMixin {
                                               final CallbackInfo ci) {
         if ((Object) this instanceof RsccImporterBarHost host
             && host.rscc$renderImporterBarTooltip(graphics, mouseX, mouseY)) {
-            ci.cancel();
-        }
-    }
-
-    /**
-     * 「输入总线」上两个语义不再适用的侧边按钮：<b>不再挂上</b>「过滤器模式（白 / 黑名单）」与
-     * 「模糊模式」。
-     *
-     * <p><b>为什么删（用户要求）</b>：本模组的输入总线在延长模式下要的是<b>精准匹配</b> ——
-     * 该收回什么由「非输入类」判定（全自动）或玩家勾选的类别决定（手动），
-     * 白 / 黑名单与模糊匹配在这里既帮不上忙、又会让玩家误以为要配。用户原话：删掉这两个按钮。</p>
-     *
-     * <p><b>为什么注入 {@code addSideButton}</b>：它<b>声明在 {@link AbstractBaseScreen} 自身</b>
-     * （因此可以合法注入），而且是「挂按钮」的唯一入口 —— 在这里<b>不挂</b>比挂上去再移除更干净：
-     * 原生实现会顺手登记一个排除区（{@code exclusionZones}）并推进 {@code sideButtonY}，
-     * 若先挂后删会留下坐标空洞 / 幽灵排除区。不再挂 = 不占位、不留空洞、
-     * 后续的「红石模式」按钮照旧紧跟其后（按钮画在面板左侧外面，因此面板内不可能有空位）。</p>
-     *
-     * <p><b>影响面</b>：只有 {@link ImporterScreen} 受影响，且只挡这两个类；其余 RS 界面
-     * （含输出总线）只多一次 {@code instanceof} 判断。</p>
-     */
-    @Inject(method = "addSideButton", at = @At("HEAD"), cancellable = true)
-    private void rscc$hideImporterFilterButtons(final AbstractSideButtonWidget button,
-                                                final CallbackInfo ci) {
-        if ((Object) this instanceof ImporterScreen
-            && (button instanceof FilterModeSideButtonWidget || button instanceof FuzzyModeSideButtonWidget)) {
             ci.cancel();
         }
     }

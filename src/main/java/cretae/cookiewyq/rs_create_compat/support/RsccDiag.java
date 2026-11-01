@@ -62,7 +62,9 @@ import java.util.regex.Pattern;
  * 「服务器启动时的锚点行」{@code [rscc] diag logging ON (default)}（各一条）。
  * <p>注意：喂给计数表的事件来自 {@link RsccAssemblyDebug} 的输出通道，而该通道自 2026-10-06 起
  * 默认关闭（配置 {@code devLogs=false}）⇒ 关闭状态下计数表不会有新数据；但
- * {@code /rs_create_compat diag run} 会先把开发日志打开再导出，一键诊断能力不受影响。</p>
+ * {@code /rs_create_compat diag run} 会为<b>本次导出这一小段</b>临时打开开发日志
+ * （{@code RsccAssemblyDebug#withEnabledTemporarily}，返回即恢复原状），一键诊断能力不受影响，
+ * 也不会留下「开关关不掉」的副作用。快照本身的三行分节标记不受该开关控制，永远输出。</p>
  * 快照文件本身按<b>固定插入顺序 + 显式排序</b>写出，同一状态两次导出除时间戳外逐字节一致。
  */
 public final class RsccDiag {

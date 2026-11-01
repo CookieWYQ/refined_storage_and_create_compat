@@ -91,20 +91,18 @@ def body(source, start, end):
     return source[source.index(start):source.index(end)]
 
 
-def trim_width(widths, max_w, ellipsis_w):
-    """复刻 Java trimToWidth 返回串的宽度（逐字符收，末尾再验一次）。"""
-    if not widths or max_w <= 0:
+def fitted_width(text_w, band_w, min_scale=0.6):
+    """复刻 drawHintLine 的绘制宽度（第 104 轮：完整显示，放不下整体缩字号，下限 0.6）。
+
+    旧实现是 `trimToWidth`（截断 + 补 "..."），本轮换成
+    `RsccTextFit.drawFitLine`：**一个字都不省**，放不下就整体缩小，
+    最小 0.6 倍；缩放 ≥ 0.6 时绘制宽度 ≤ 可用带。
+    """
+    if text_w <= 0 or band_w <= 0:
         return 0
-    total = sum(widths)
-    if total <= max_w:
-        return total
-    if max_w <= ellipsis_w:
-        return 0
-    kept = list(widths)
-    while len(kept) > 1 and sum(kept) + ellipsis_w > max_w:
-        kept.pop()
-    result = sum(kept) + ellipsis_w
-    return result if result <= max_w else 0
+    if text_w <= band_w:
+        return text_w
+    return int(round(text_w * max(min_scale, band_w / float(text_w))))
 
 
 def char_widths(text_w):
@@ -180,20 +178,27 @@ def main():
           "final int right = (convertible() && !forceNormal())" in widget
           and "if (convertible() && !forceNormal()) {\n            drawForceButton(guiGraphics, mouseX, mouseY);"
           in locked_bar)
-    check("逐行绘制 = 先 trimToWidth 再在带内居中（0 ≤ 文字宽 ≤ 带宽 ⇒ 左界 ≥ 带左、右界 ≤ 带右）",
-          "final String text = trimToWidth(font, raw, bandW);" in widget
-          and "guiGraphics.drawString(font, text, left + (bandW - font.width(text)) / 2, y, COLOR_TEXT, false);"
+    check("逐行绘制 = 完整显示（RsccTextFit.drawFitLine，放不下整体缩字号、下限 0.6）+ 带内居中；"
+          "代码里再无任何「按宽度截断」的实现（旧实现只剩注释里的历史说明）",
+          "RsccTextFit.drawFitLine(guiGraphics, font, text," in widget
+          and "final float scale = Math.max(RsccTextFit.MIN_SCALE, (float) bandW / (float) full);"
+          in widget
+          and "private static String trimToWidth(" not in widget
+          and "HINT_ELLIPSIS = " not in widget
+          and 'font.width(text + "...")' not in widget)
+
+    section("G2 完整显示：缩放下限 0.6；所需缩放 ≥ 0.6 时绘制宽度 ≤ 可用带（一个字都不省）")
+    check("空串 / 非正宽度 → 不画（不会画出比可用带更宽的一行）",
+          "if (raw == null || raw.isEmpty() || bandW <= 0) {" in widget)
+    check("放不下时按 bandW / 完整宽 整体缩小，下限 RsccTextFit.MIN_SCALE",
+          "final float scale = Math.max(RsccTextFit.MIN_SCALE, (float) bandW / (float) full);"
+          in widget
+          and "final int drawn = Math.round(full * scale);" in widget)
+    check("居中的 x 按「缩放后的实际绘制宽度」算（左界 = left + (bandW − drawn) / 2）",
+          "RsccTextFit.drawFitLine(guiGraphics, font, text, left + Math.max(0, (bandW - drawn) / 2),"
           in widget)
 
-    section("G2 trimToWidth：返回值恒满足 0 <= 宽度 <= maxWidth")
-    check("空串 / 非正宽度 / 放不下省略号 → 返回空串（宁可不画，也不画超出可用宽的一行）",
-          "if (text == null || text.isEmpty() || maxWidth <= 0) {" in widget
-          and "if (maxWidth <= ellipsisWidth) {" in widget
-          and "final String candidate = trimmed + HINT_ELLIPSIS;" in widget
-          and 'return font.width(candidate) <= maxWidth ? candidate : "";' in widget)
-
-    section("G3 几何穷举：任意文字宽（0..400）下两行都不重叠、不压按钮、不出条、不出带")
-    ellipsis_w = 3 * 6  # "..." 的保守上界（默认字体里 '.' 远窄于此）
+    section("G3 几何穷举：所需缩放 ≥ 0.6 的所有文字宽下，两行都不重叠、不压按钮、不出条、不出带")
     problems = []
     cases = 0
     for current_bar_w, current_bar_h in ((bar_w, bar_h), (exp_bar_w, exp_bar_h)):
@@ -201,9 +206,13 @@ def main():
             left = inset
             right = (force_x - gap) if force_drawn else (current_bar_w - inset)
             band_w = max(0, right - left)
+            # 第 104 轮：允许「缩字号」后，机制能保证不越界的范围是 文字宽 ≤ 带宽 / 0.6
+            guaranteed = int(band_w / 0.6)
             force_rect = rect(force_x, 0, force_w, force_h)
-            for head_w in range(0, 401):
-                for tail_w in (0, 1, 5, 17, 18, 45, 63, 90, 127, 128, 129, 200, 401):
+            tail_cases = tuple(x for x in (0, 1, 5, 17, 18, 45, 63, 90, 127, 128, 129, 200, 401)
+                               if x <= guaranteed)
+            for head_w in range(0, guaranteed + 1):
+                for tail_w in tail_cases:
                     for two_lines in (False, True):
                         cases += 1
                         if two_lines:
@@ -214,7 +223,7 @@ def main():
                             widths = (head_w,)
                         rects = []
                         for text_w, y in zip(widths, ys):
-                            drawn = trim_width(char_widths(text_w), band_w, ellipsis_w)
+                            drawn = fitted_width(text_w, band_w)
                             if drawn > band_w:
                                 problems.append("宽度超出可用带：band=%d drawn=%d" % (band_w, drawn))
                                 continue
@@ -232,8 +241,13 @@ def main():
                             for j in range(i + 1, len(rects)):
                                 if overlap(rects[i], rects[j]):
                                     problems.append("两行重叠：%s vs %s" % (rects[i], rects[j]))
-    check("穷举 %d 组（条宽 %d/%d × 按钮画/不画 × 文字宽 0..400 × 两行/一行）无重叠 / 无越界"
+    check("穷举 %d 组（条宽 %d/%d × 按钮画/不画 × 文字宽 0..带宽/0.6 × 两行/一行）无重叠 / 无越界"
           % (cases, bar_w, exp_bar_w), not problems, str(problems[:3]))
+    limit_band = force_x - gap - inset
+    beyond = int(limit_band / 0.6) + 60
+    check("边界（如实登记）：文字宽超过「可用带 / 0.6」时仍**完整画出**（绘制宽 > 可用带，"
+          "但绝不补省略号）—— 只有非中英的其它语言才可能触发；中英 8 句实测都无需缩字号",
+          fitted_width(beyond, limit_band) > limit_band)
     check("两行的垂直区间本来就不相交（%d..%d 与 %d..%d，行高 %d）"
           % (line1_y, line1_y + line_h - 1, line2_y, line2_y + line_h - 1, line_h),
           line1_y + line_h <= line2_y and line2_y + line_h <= bar_h)

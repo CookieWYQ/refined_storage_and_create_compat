@@ -3,6 +3,7 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.widget.GhostMarkerRenderer;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.network.SetCollectionMarkerConfigPacket;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
@@ -83,17 +84,16 @@ public class CollectionMarkerConfigScreen extends ChildConfigScreen {
     private static final int TAGS_BTN_X = 232;
     private static final int TAGS_BTN_Y = 108;
     /**
-     * 第四行「直接销毁」开关：画在<b>标题行右端留白</b>（标签 x150 / ✓✗ 按钮 x210，避开右上角资源图标 232）。
-     * <p>危险开关：点击第一次只进入「待确认」态（标签变红提示、预览行显示不可恢复警告），
-     * 第二次点击才真正开启并发包；关闭则一步到位（恢复安全状态，无需确认）。</p>
-     */
-    /**
      * 「直接销毁」开关：标签 + 紧贴它右侧的按钮。
      * <p>2026-10-05 用户反馈「直接销毁那几个字和那个按钮离的还是太远了，把按钮靠近直接销毁」
-     * ⇒ 按钮从 210 移到 184，标签右缘与按钮左缘只剩 {@value #DESTROY_LABEL_GAP} px。
-     * 同时标签按像素截断，英文 / 待确认态的红字也不会压到按钮上。</p>
+     * ⇒ 按钮从 210 移到 184，标签右缘与按钮左缘只剩 {@value #DESTROY_LABEL_GAP} px。</p>
+     * <p><b>第 104 轮（去省略号）</b>：上一版把标签带宽压到 32px（184-150-2），
+     * 于是中文「直接销毁」54px、英文 {@code Destroy} 40px、待确认态「确认销毁？」45px
+     * 一律被 {@code trimToWidth} 截成 {@code 直接销...}。标题行从标题文字（x=8 起）到
+     * 右上角资源图标（232）之间全是留白，因此<b>标签左移到 x=132</b>，带宽变 50px：
+     * 上面三句都完整显示（1.0 倍），按钮仍在 184，与标签只隔 2px。</p>
      */
-    private static final int DESTROY_LABEL_X = 150;
+    private static final int DESTROY_LABEL_X = 132;
     private static final int DESTROY_BTN_X = 184;
     private static final int DESTROY_BTN_Y = 5;
     /** 标签右缘与按钮左缘之间的间距（用户要求「靠近」）。 */
@@ -574,15 +574,16 @@ public class CollectionMarkerConfigScreen extends ChildConfigScreen {
             McGui.refreshToggle(tagsButton, tagMode);
         }
 
-        // 「直接销毁」开关（标题行右端留白）：待确认态用红字提示「确认销毁？」，按钮显示 ✓/✗
+        // 「直接销毁」开关（标题行右端留白）：待确认态用红字提示「确认销毁？」，按钮显示 ✓/✗。
+        // 第 104 轮：标签带宽 50px（132 → 184-2），中英与待确认态都完整显示；绝不再按像素截断。
         if (destroyButton != null) {
-            final String label = Component.translatable(destroyArmed
+            final Component label = Component.translatable(destroyArmed
                 ? "gui.rs_create_compat.collection_cache.destroy_marker.armed"
-                : "gui.rs_create_compat.collection_cache.destroy_marker.label").getString();
-            guiGraphics.drawString(font, Component.literal(trimToWidth(label,
-                    DESTROY_BTN_X - DESTROY_LABEL_X - DESTROY_LABEL_GAP)),
+                : "gui.rs_create_compat.collection_cache.destroy_marker.label");
+            RsccTextFit.drawFitLine(guiGraphics, font, label,
                 px + DESTROY_LABEL_X, py + 9,
-                destroy || destroyArmed ? 0xFFC02020 : COLOR_TEXT, false);
+                DESTROY_BTN_X - DESTROY_LABEL_X - DESTROY_LABEL_GAP,
+                destroy || destroyArmed ? 0xFFC02020 : COLOR_TEXT);
             destroyButton.setMessage(McGui.toggleLabel(destroy));
         }
 
@@ -637,29 +638,17 @@ public class CollectionMarkerConfigScreen extends ChildConfigScreen {
                 guiGraphics.fill(px + LIST_X, y, px + LIST_X + LIST_W, y + ROW_H, COLOR_ROW_HOVER);
             }
             final String mark = selected ? "[x] " : "[ ] ";
-            final String text = trimToWidth(mark + tag, LIST_W - 6);
             final int color = !tagMode ? COLOR_DIM
                 : (selected ? COLOR_ROW_TEXT_SEL : COLOR_TEXT);
-            guiGraphics.drawString(font, Component.literal(text), px + LIST_X + 3, y + 1, color, false);
+            // 第 104 轮（去省略号）：标签名是自由文本（第三方模组的标签可能有很长的路径），
+            // 放不下就整体缩字号（下限 0.6），绝不截断；完整标签名本来就在本行的 hover tooltip 里
+            // （见 renderTooltips：{@code #tag}），所以极端长的标签也不会丢信息。
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(mark + tag),
+                px + LIST_X + 3, y + 1, LIST_W - 6, color);
         }
         if (scrollbar != null && scrollbar.visible) {
             scrollbar.render(guiGraphics, mouseX, mouseY, 0.0F);
         }
-    }
-
-    /** 按像素宽截断字符串（尾部补省略号）。 */
-    private String trimToWidth(final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     /** 手动渲染 tooltip：图标 / 三个开关 / 列表行（判定与绘制同源）。 */

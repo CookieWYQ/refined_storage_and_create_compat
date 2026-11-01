@@ -16,7 +16,7 @@
       "item": "create:large_cogwheel"
     },
     "B": {
-      "item": "minecraft:iron_block"
+      "item": "rs_create_compat:fe_energy_cube"
     },
     "I": {
       "item": "minecraft:iron_block"

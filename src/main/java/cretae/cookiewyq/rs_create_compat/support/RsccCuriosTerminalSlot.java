@@ -185,6 +185,32 @@ public final class RsccCuriosTerminalSlot {
     }
 
     /**
+     * <b>指定饰品槽</b>里的存活物品栈（电动飞行背包只认 {@code back} / {@code chest} 两槽，第 99 轮新增）。
+     * <p>为什么不复用 {@link #allStacks(LivingEntity)}：那个是「所有槽位里的所有物品」，用于范围充电器
+     * 「凡是有电的都充」；而飞行背包必须知道<b>它到底戴在哪一槽</b>（背饰 / 胸饰才算数，
+     * 手部 / 戒指 / 腰带里的同一件物品不该给玩家飞行能力）。</p>
+     * <p>与 {@link #allStacks(LivingEntity)} 同一条铁律：<b>绝不抛异常</b>。未装 Curios、
+     * 反射失败、槽位不存在、槽位为空，一律返回空列表 —— 调用方不需要 try/catch，
+     * 也就不会因为「另一个模组改了 Curios 内部形状」把玩家 tick 崩掉。</p>
+     *
+     * @param slotId Curios 槽位 id（如 {@code back} / {@code chest}），大小写照 Curios 约定
+     * @return 该槽位里的非空物品栈；任何异常情况返回空列表（绝不为 null）
+     */
+    public static List<ItemStack> slotStacks(final LivingEntity player, final String slotId) {
+        final List<ItemStack> stacks = slots(player, slotId);
+        if (stacks == null || stacks.isEmpty()) {
+            return List.of();
+        }
+        final List<ItemStack> found = new ArrayList<>(stacks.size());
+        for (final ItemStack stack : stacks) {
+            if (stack != null && !stack.isEmpty()) {
+                found.add(stack);
+            }
+        }
+        return found;
+    }
+
+    /**
      * 本次扫描要看的饰品槽 id 列表。
      * <p><b>优先枚举玩家实际拥有的全部饰品槽</b>（Curios 的 {@code getCurios()} 返回「槽位 id → 处理器」映射）：
      * 本模组不再自建槽位，终端由<b>前置槽位</b>的物品标签接纳；但终端也可能被塞进<b>别的模组</b>的

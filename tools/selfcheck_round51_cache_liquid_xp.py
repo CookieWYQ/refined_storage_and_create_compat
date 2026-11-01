@@ -224,7 +224,9 @@ check("D6 流体分支写的就是本仓流体缓存（球 → 液态经验 → 
       "fluidCache.insert(fluidId, new CompoundTag(), mbOffered)" in absorb_src,
       "找不到 fluidCache.insert(fluidId, ...)")
 check("D7 缓存内容仍会回流网络（flushFluidCacheToNetwork → storage.insert）",
-      "flushFluidCacheToNetwork(storage, budget, transfer)" in cache_be
+      # 第 95 轮第 12 条把流体回写改成「独立预算 + 游标」（groups 取代旧的 budget 传参），
+      # 但「流体缓存里的东西必须真的写进网络」这条不变式不变。
+      "flushFluidCacheToNetwork(storage, groups, transfer)" in cache_be
       and "storage.insert(resource, attempt, Action.EXECUTE, Actor.EMPTY)" in cache_be)
 check("D8 流体缓存容量 = 512000 mB（用户说的「流体缓存剩余=512000mB」）",
       "FLUID_CACHE_CAPACITY = 512_000L" in cache_be)

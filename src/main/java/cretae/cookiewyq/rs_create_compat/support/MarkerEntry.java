@@ -72,7 +72,9 @@ public record MarkerEntry(boolean fluid,
             final long amount = ByteBufCodecs.VAR_LONG.decode(buf);
             final boolean matchNbt = ByteBufCodecs.BOOL.decode(buf);
             final int tagCount = Math.max(0, ByteBufCodecs.VAR_INT.decode(buf));
-            final List<ResourceLocation> tags = new ArrayList<>(tagCount);
+            // 第 115 轮（独立复核 L1）：不按对端计数预分配 —— 目前本编解码只用于 S2C，
+            // 但形状与第 114 轮 H1 完全同源，将来若被 C2S 复用就是「谎报计数即 OOME」。
+            final List<ResourceLocation> tags = new ArrayList<>(Math.min(tagCount, 32));
             for (int i = 0; i < tagCount; i++) {
                 tags.add(ResourceLocation.STREAM_CODEC.decode(buf));
             }

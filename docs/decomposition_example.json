@@ -1,0 +1,24 @@
+{
+  "replace": false,
+  "mod_loaded": "mymod",
+  "_comment": [
+    "【示范用数据包片段】放在 data/<你的命名空间>/decomposition/*.json 就生效（不需要注册任何东西）。",
+    "第 123 轮起支持 results（副产物）：每项独立掷骰，命中才产出 count 个 item。",
+    "result 是「只有一个副产物」的语法糖，写法等价于 results 里只有一项；两者同时出现 = 该条作废。",
+    "数值口径（内置默认表的 4 档，供参考）：T1 10t/25FE、T2 20t/50FE、T3 40t/100FE、T4 180t/450FE。",
+    "mod_loaded 门 = 没装 mymod 就整份跳过，不会因为引用了不存在的 id 在日志里刷警告。"
+  ],
+  "entries": [
+    { "item": "mymod:glow_berry_bush", "time": 20, "energy": 50,
+      "results": [ { "item": "mymod:glow_berry", "count": 1 } ] },
+
+    { "item": "mymod:rubber_sapling", "time": 40, "energy": 100,
+      "results": [
+        { "item": "mymod:rubber", "count": 1 },
+        { "item": "minecraft:stick", "count": 1, "chance": 0.5 }
+      ] },
+
+    { "tag": "mymod:plants", "time": 10, "energy": 25,
+      "results": [ { "item": "minecraft:bone_meal", "count": 1, "chance": 0.25 } ] }
+  ]
+}

@@ -203,11 +203,19 @@ else:
           "入口变了 ⇒ 本模组的读取方式需重查")
 
 # 本模组执行器把每轮投入物放回网络（因此 scheduled / processing 不能算成别人的预留）
+#
+# 第 121 轮（1.2.0-beta.23）：F2 真修法把 accept 从「逐条直连网络 insert」改成
+#   「先写**上游缓冲**（accept 只碰缓冲）→ 每 tick `doWork` drain 回网络」。
+#   判据的**原意没变**：每轮投入物最终仍然会回到网络（因此 RS 的 scheduled / processing
+#   仍然不能算成「别人的预留」），只是落点从「accept 内直接 insert」变成「缓冲 → drain」。
+#   故这里改为同时锚定三条：accept 存在 / 写缓冲入口 / drain 回网络入口。
 EXECUTOR = rel_read(os.path.join("block", "entity", "SequenceAssemblyExecutorBlockEntity.java"))
-check("本模组执行器 accept() 会把每轮投入物原样插回网络（故 scheduled / processing 不算预留）",
+check("本模组执行器 accept() 会把每轮投入物交回网络（写缓冲 → 每 tick drain；故 scheduled / processing 不算预留）",
       "public ExternalPatternSink.Result accept(" in EXECUTOR
-      and "storage.insert(resource, count, action, Actor.EMPTY)" in EXECUTOR,
-      "accept 的行为变了 ⇒ 「算不算预留」的口径必须重查")
+      and "writeIterationToBuffer(" in EXECUTOR
+      and "drainBufferedResources(" in EXECUTOR
+      and "storage.insert(" in EXECUTOR,
+      "accept / drain 的落点变了 ⇒ 「算不算预留」的口径必须重查")
 
 # =====================================================================================
 # ② Python 复刻的分配模型（存量 / 预留 / 可用量）

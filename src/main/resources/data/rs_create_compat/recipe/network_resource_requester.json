@@ -1,0 +1,31 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "EDE",
+    "BMB",
+    "QRQ"
+  ],
+  "key": {
+    "E": {
+      "tag": "c:ender_pearls"
+    },
+    "D": {
+      "item": "refinedstorage:destruction_core"
+    },
+    "B": {
+      "item": "create:brass_casing"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "R": {
+      "item": "minecraft:comparator"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:network_resource_requester"
+  }
+}

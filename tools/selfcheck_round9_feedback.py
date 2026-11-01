@@ -168,8 +168,11 @@ report("锚点: 「按标签阻塞」两个名单必须落盘（旧存档缺键 
        'TAG_BLOCKED_ITEM_TAGS = "BlockedItemTags"' in cache_be
        and 'TAG_BLOCKED_FLUID_TAGS = "BlockedFluidTags"' in cache_be
        and "readBlockedList(tag.getList(TAG_BLOCKED_ITEM_TAGS, Tag.TAG_STRING), blockedItemTags);" in cache_be)
-report("锚点: 服务端写入入口把「条目的标签集合」一起写进按标签阻塞名单",
-       "block.setBlockedTags(fluid, tags, blocked);" in menu_cache)
+report("锚点: 服务端写入入口把「条目的标签集合」一起写进按标签阻塞名单"
+       "（第 117 轮起走唯一写入口 applyBlockedEdit：id 与标签同一次原子写入 + 条数上限）",
+       "block.applyBlockedEdit(fluid, id, blocked, tags);" in menu_cache
+       and "public BlockEditResult applyBlockedEdit(" in cache_be
+       and "public boolean setBlockedTags(" in cache_be)
 report("锚点: 界面把条目的标签一起下发（主界面 Ctrl+左键 / 子界面开关同一条协议）",
        "sendBlockedToggle(entry.fluid(), entry.id(), entry.tags());" in
        read(os.path.join("client", "screen", "CollectionCacheScreen.java"))

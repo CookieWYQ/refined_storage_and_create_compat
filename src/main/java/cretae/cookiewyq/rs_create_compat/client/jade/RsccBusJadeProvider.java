@@ -24,6 +24,11 @@ import snownee.jade.api.config.IPluginConfig;
  * 免得玩家以为这台总线没有提示。判据走 {@link RsccTooltipLayers#held}
  * （本工程「按住 Shift」的唯一实现），因此这里的 Shift 与其它 tooltip 逐字同义。</p>
  *
+ * <p><b>未绑定 ⇒ 连提示行都不加</b>（用户第 79 轮）：服务端在归属执行仓为 {@code null} 时
+ * 不写根标签（见 {@link RsccBusJadePayload#write}），这里的 {@code hasData} 先短路，
+ * 因此「按住 Shift 查看总线状态」<b>也不会</b>出现 —— 没有内容可看时那句提示本身就是误导。
+ * 未绑定的总线在 Jade 里与普通 RS 总线逐字相同。</p>
+ *
  * <h2>为什么不覆盖 {@code getDefaultPriority()}</h2>
  * <p>本 provider 只<b>追加文字行</b>，不碰图标：既有「伪装方块」那条会用 {@code 9999}
  * （最高档）是为了<b>替换</b> Jade 内置的物品图标。Jade 内置的方块名 / 模组名那几条都在默认档，

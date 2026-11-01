@@ -11,6 +11,7 @@ import cretae.cookiewyq.rs_create_compat.network.SequenceExecutionChamberNetwork
 import cretae.cookiewyq.rs_create_compat.network.SequencePatternTerminalNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.GhostContent;
 import cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug;
+import cretae.cookiewyq.rs_create_compat.support.UnitLibraryLimits;
 import cretae.cookiewyq.rs_create_compat.support.UnitManagerSources;
 import cretae.cookiewyq.rs_create_compat.support.UnitPatternDedupe;
 import net.minecraft.core.BlockPos;
@@ -61,6 +62,17 @@ public class SequencePatternTerminalBlockEntity
      */
     public static final int COUNT_MIN = 1;
     public static final int COUNT_MAX = 100_000;
+    /**
+     * 单次「导入 / JEI 转移」最多接受的步数（第 115 轮，独立复核 H2）。
+     *
+     * <p><b>为什么必须有这个上界</b>：导入走 {@code SetSequenceImportPacket}（C2S），步数由客户端给的
+     * {@code machines} 列表长度决定，服务端据此<b>为每一步生成一张单元样板</b>并扩容器 / 写 NBT，
+     * 随后整表随 {@code SyncStepMachinesPacket} 回发。列表里每项可以是空串（1 字节），
+     * 于是一个约 2 MB 的包能换来上百万步 ⇒ 存档爆炸 + 每 tick 重发。
+     * 真实 Create 序列装配配方最多几十步，<b>1024 只是防爆</b>，不会拦住任何合法导入；
+     * 超出部分在菜单导入入口处按本值裁剪（解码阶段另有一个同值的暂存上限）。</p>
+     */
+    public static final int MAX_IMPORT_STEPS = 1024;
     /** 单元样板制作可选的 Create 机器类型（键见 lang machine.rs_create_compat.*，JEI 配方导入用）。 */
     public static final List<String> MACHINE_TYPES = List.of(
         "Pressing", "Cutting", "DeployerApplication", "Filling", "Spouting");
@@ -89,12 +101,73 @@ public class SequencePatternTerminalBlockEntity
      * 7 格会超宽（只能靠删标签或砍掉滚动条），因此取 6 格 —— 已满足「目标 ≥6 格」。</p>
      */
     public static final int UNIT_WINDOW = 6;
-    /** 单元样板库<b>初始</b>容量（旧上限 108；现无上限，越界写入自动扩容，仍用于旧存档默认尺寸）。 */
+    /** 单元样板库<b>初始</b>容量（旧上限 108；越界写入自动扩容到 {@link #MAX_UNIT_LIBRARY_SLOTS}）。 */
     public static final int UNIT_LIBRARY_SIZE = 108;
+
+    /**
+     * 单元样板库的<b>容量硬上限</b>（第 116 轮，独立只读复核 L3「库自动扩容无条数上限」）。
+     *
+     * <h2>为什么必须封顶</h2>
+     * <p>旧实现「库满即扩容、无上限」：每次「生成样板」都会把流程每一列的单元样板<b>追加</b>进库
+     * （只跳过重复开关打开的步），{@code pullUnitsFrom} 也会把执行仓里的样板搬回来 ——
+     * 于是反复生成 / 汇总就能让终端 NBT 无限变大，而这份 NBT 会随方块实体<b>每次同步</b>发给客户端。
+     * 一张单元样板约 150–300 B（复核口径按 150 B/张算 ⇒ 1024 格约 150–300 KB 堆估算），
+     * 已经是「玩家真正常用」的 10 倍以上
+     * （初始 108 格 = 18 页），因此这个上限<b>不会拦住任何正常玩法</b>。</p>
+     *
+     * <h2>纪律：只限制「增长」，绝不截断既有数据</h2>
+     * <p>旧存档若已经扩到超过本值：读档走 {@code GrowingUnitLibrary#rscc$resizeRaw}
+     * （<b>不判上限</b>、物品一张不丢），只有「增长」才会被 {@code rscc$resize} 拒绝
+     * （第 117 轮更正：旧注释写成「读档原样保留（rscc$resize 只拒绝增长）」，没说清读档真正走的是
+     * {@code rscc$resizeRaw}；另外 {@code serializeNBT} 只写「最后一个非空槽 + 1」，
+     * 所以<b>空尾槽不落盘、槽位数会被压缩</b> —— 条目本身不会丢，但「格数原样保留」的说法不成立）；
+     * 玩家既不会掉样板也不会被锁死；达到上限后新增写入一律「拒绝 + 保留原物」：
+     * {@code putUnitIntoLibrary} 返回 false、{@code pullUnitsFrom} 把样板<b>留在执行仓</b>、
+     * 「生成样板」在<b>扣材料之前</b>就报错返回（见 {@code generateAssemblyPattern} 的容量预检）。</p>
+     *
+     * <h2>第 118 轮：条数之外再加一道「合计体积预算」</h2>
+     * <p>1024 格 × 每格接近单条尺上限（线上意图 2 KB）≈ <b>2 MB 线上</b>，而这份 NBT 会落盘、
+     * 每次开界面 / 同步整库回发 —— 条数上限单独成立时合计体积仍然无界（第 117 轮复核遗留项 M1）。
+     * 现在由 {@link UnitLibraryLimits}（纯 JDK，自检可真跑）给出<b>整库 1 MiB 线上意图 / 8 MiB 堆估算</b>
+     * 的合计预算，唯一执行点是 {@code GrowingUnitLibrary} 的写入路径（含菜单格直写、生成、取回、新建包），
+     * 判据只有一份 {@link UnitLibraryLimits#fits}。<b>只拦增长</b>：读档不判、取出 / 存入执行仓（变小）永远允许；
+     * 判不了（保存异常等）一律不拒。</p>
+     */
+    public static final int MAX_UNIT_LIBRARY_SLOTS = 1024;
+
+    /**
+     * 一次「导入 / JEI 转移」里<b>所有客户端给的物品 + 流体标记</b>的合计体积上限（第 116 轮）。
+     *
+     * <p><b>为什么单条上限不够</b>：第 116 轮给 4 个写入面都加了「单条 ≈ 线上 2 KB」的尺
+     * （{@code MarkerBudget#MAX_ENTRY_BYTES}），但一次导入最多带
+     * {@code MAX_IMPORT_LIST = 4096} 条 × 每步候选组：只挡单条的话，
+     * 4096 × 2 KB ≈ 8 MB 仍能合法落盘 —— 这正是第 114 轮区域标记「整表预算」的同一条教训。
+     * 这里按<b>整包</b>再加一道闸：{@code 256 KB 线上}。</p>
+     *
+     * <p><b>为什么是 256 KB（而不是 64 KB）</b>：导入的负载里有「每步输入原料组的全部候选」
+     * （标签型 ingredient，如「任意台阶」整组），一条普通物品标记线上约 79 B，
+     * 256 KB ≈ <b>3300 条普通物品</b>；真实 Create 序列配方（几十步 × 每组几十个候选）远低于此，
+     * 因此<b>正常导入不会被拦</b>，而被拦下的包（改包场景）落盘体积也比包本身小得多。
+     * 超限时<b>整包拒绝（原子，不写任何一格）</b>并在日志留证。</p>
+     */
+    public static final int MAX_IMPORT_TOTAL_WIRE_BYTES = 256 * 1024;
+
+    /** {@link #MAX_IMPORT_TOTAL_WIRE_BYTES} 换算成 {@code sizeInBytes()} 堆估算口径（判据实际用的值）。 */
+    public static final int MAX_IMPORT_TOTAL_BYTES =
+        MAX_IMPORT_TOTAL_WIRE_BYTES * cretae.cookiewyq.rs_create_compat.support.MarkerBudget.WIRE_RATIO;
+
+    /**
+     * 单条「客户端给的字符串」（{@code machines} 里的机器 / 配方类型 id、单元样板自定义名）
+     * 允许的最大长度（第 116 轮）。
+     * <p>这些字符串以前直接写进单元样板 {@code CustomData} 并永久落盘，{@code readUtf} 只受包长限制；
+     * 合法值：配方类型 id 是命名空间路径（&lt; 100 字符），自定义名在界面上限 64 字符
+     * （{@code UnitPatternConfigScreen#nameBox.setMaxLength(64)}）。这里取 256，<b>对合法值零影响</b>。</p>
+     */
+    public static final int MAX_IMPORT_STRING_LENGTH = 256;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SequencePatternTerminalBlockEntity.class);
 
-    /** 单元样板库（可增长、无上限；按槽位顺序存放，不按种类合并）。 */
+    /** 单元样板库（可增长到 {@link #MAX_UNIT_LIBRARY_SLOTS}；按槽位顺序存放，不按种类合并）。 */
     public final GrowingUnitLibrary unitLibrary = new GrowingUnitLibrary(UNIT_LIBRARY_SIZE);
     /** 流程编排：可增长存储；容量只增不减（手动减步仅"收窄激活行数"，不删除已放单元）。 */
     public final GrowingStackHandler arrangement = new GrowingStackHandler(ARRANGEMENT_WINDOW);
@@ -162,6 +235,17 @@ public class SequencePatternTerminalBlockEntity
     /** 最近一次导出装配样板时的问题（null = 无问题）；供前端读取展示，不持久化。 */
     @org.jetbrains.annotations.Nullable
     private net.minecraft.network.chat.Component lastExportError;
+    /** 「单元样板库已到容量上限（{@link #MAX_UNIT_LIBRARY_SLOTS}）」的 WARN 是否已打过（第 116 轮，不持久化）。 */
+    private boolean unitLibraryFullWarned;
+    /** 「单元样板库已到<b>合计体积</b>上限（{@link UnitLibraryLimits}）」的 WARN 是否已打过（第 118 轮，不持久化）。 */
+    private boolean unitLibraryBytesWarned;
+    /**
+     * 最近一次「取回 / 存入」是否因单元样板库满（格数或合计体积）而提前停下（第 119 轮，不持久化）。
+     * <p>只用于给玩家一条可见提示（{@code TransferChamberUnitPacket}）：界面原本只在「一张都没搬」时
+     * 提示「没有样板 / 仓已满」，部分搬运被拒时完全静默。停止时原物一定还在原处，但玩家需要知道
+     * 「为什么只搬了一部分」。</p>
+     */
+    private boolean unitTransferBlockedByLibrary;
     /** 单元样板制作：输入标记槽（不消耗）。 */
     public final ItemStackHandler unitInputSlot = new ItemStackHandler(1);
     /** 单元样板制作：输出槽（生成的单元样板）。 */
@@ -546,7 +630,14 @@ public class SequencePatternTerminalBlockEntity
         return page * UNIT_WINDOW + cell;
     }
 
-    /** 单元样板库的条目数（最后一个非空槽 +1；空库 = 0）。 */
+    /**
+     * 单元样板库的<b>格</b>数（最后一个非空格 +1；空库 = 0）。
+     *
+     * <p><b>口径（第 119 轮明确）</b>：这是<b>按格计数</b>，用于分页窗口映射与「越界格不可交互」，
+     * <b>不是按张计数</b>。新语义下库内一格一张（{@code pullUnitsFrom} / {@code pushUnitsTo} 逐张搬运），
+     * 因此正常情况下「格数 == 张数」；但旧存档里确实可能存在同一格叠了多张的历史数据（那一格只算 1 格），
+     * 那些数据仍可<b>逐张</b>取出，绝不允许为了「数字好看」而在这里改口径（否则分页 / 槽位映射会错位）。</p>
+     */
     public static int unitLibraryEntries(final ItemStackHandler library) {
         return Math.max(0, highestUsedIndex(library) + 1);
     }
@@ -579,6 +670,9 @@ public class SequencePatternTerminalBlockEntity
         this.mainNetworkNode.setBlockEntity(this);
         java.util.Arrays.fill(resultChances, 1.0F);
         java.util.Arrays.fill(scrapChances, 1.0F);
+        // 第 118 轮：单元样板库的「合计体积预算」需要注册表上下文才能把一张样板保存成 NBT 并量体积；
+        // 只在写入路径（增长）量一次，读档完全不量（读档不判上限）。判不了时给它 EMPTY ⇒ 判据按「不超」处理。
+        this.unitLibrary.rscc$setRegistryProvider(this::unitLibraryRegistries);
         // 新建时流程编排为空（0 步）：导入配方后才按真实步骤数动态生成行
         // （旧存档的步数由 loadAdditional 读回，不受这里影响）。
         syncArrangementLength(0, false);
@@ -915,7 +1009,17 @@ public class SequencePatternTerminalBlockEntity
 
     // ========== 自动合成仓名称（单元样板制作） ==========
 
-    /** 网络中所有自动合成仓的名称（按位置排序）；未接入网络或无线缆连接时为空。 */
+    /**
+     * 网络中所有自动合成仓的名称（按位置排序）；未接入网络或无线缆连接时为空。
+     *
+     * <p><b>为什么取「语言键」而不是本地化文本</b>：自动合成仓（本模组的序列装配样板库）交给 RS 的
+     * 名字是<b>语言键</b>（见 {@code SequenceAssemblyExecutorBlockEntity#AUTOCRAFTER_NAME_KEY}），
+     * 因为 RS 会在服务端就把名字压成 {@code String}，而服务端没有中文语言表。
+     * 这里再压一次 {@code getString()} 只会得到那串键；它同时被当作<b>绑定数据</b>
+     * （单元样板的 {@code Crafter} 字段）落盘与比较，所以统一取键：跨语言稳定、换语言不会让旧绑定失效。
+     * 若某个仓返回的是已本地化文本（RS 原版自动合成仓 / 玩家自定义名），
+     * {@link cretae.cookiewyq.rs_create_compat.support.RsccClientText#keyOf} 会原样返回。</p>
+     */
     public List<String> getAutocrafterNames() {
         final com.refinedmods.refinedstorage.api.network.Network network = mainNetworkNode.getNetwork();
         if (network == null) {
@@ -925,7 +1029,8 @@ public class SequencePatternTerminalBlockEntity
             .getContainers(Autocrafter.class)
             .stream()
             .sorted(java.util.Comparator.comparing(Autocrafter::getLocalPosition))
-            .map(a -> a.getAutocrafterName().getString())
+            .map(a -> cretae.cookiewyq.rs_create_compat.support.RsccClientText
+                .keyOf(a.getAutocrafterName().getString()))
             .toList();
     }
 
@@ -965,6 +1070,19 @@ public class SequencePatternTerminalBlockEntity
     // ========== 新语义（v4）：执行仓列表 / 机器指派 ==========
 
     /**
+     * 只读：本终端当前所在的 RS 网络（未接入 / 没有线缆 → {@code null}）。
+     * <p><b>第 75 轮新增</b>：可用机器列表的「事件驱动推送」（
+     * {@code SyncChamberListPacket#pushAvailabilityChanged}）用它判断「这台终端与那台执行仓
+     * 是不是同一条网络」—— 只有同网络才推，避免把 A 网络的机器列表覆盖到 B 网络的终端上。
+     * 这也让「无线序列样板终端」的虚拟方块实体有一个明确的网络入口可查（此前没有该 getter，
+     * 虚拟方块实体漏绑网络时调用方连「为什么列表是空的」都问不出来）。</p>
+     */
+    @org.jetbrains.annotations.Nullable
+    public com.refinedmods.refinedstorage.api.network.Network getNetworkOrNull() {
+        return mainNetworkNode.getNetwork();
+    }
+
+    /**
      * 新语义：网络内某台执行仓的只读视图。
      * {@code name} 为执行仓显示名（自定义名非空时用之，否则回退坐标字符串）。
      */
@@ -976,6 +1094,23 @@ public class SequencePatternTerminalBlockEntity
      * <p><b>只列出「已设定类型 + 名字」的执行仓</b>（{@code chamber.isBound()}）：与执行仓自身
      * 「未绑定时不接收单元样板、也不参与引擎」的判定同源，避免 SPT 认为有机器、执行仓却拒收样板。
      * 未接入网络或无线缆连接时返回空列表。</p>
+     *
+     * <h2>第 75 轮：「可用机器集合」的唯一事实源，<b>刻意零缓存</b></h2>
+     * <p>每次调用都从 {@code network.getComponent(GraphNetworkComponent.class).getContainers()} 现枚举、
+     * 并逐台现读 {@code chamber.isBound()}（名字 / 配方类型都走链委托，每次重新推导链首）。
+     * 因此它<b>不可能</b>返回陈旧结果 —— 玩家看到的「没有可用机器」不来自这里的缓存。
+     * 那类现象只可能来自两个<b>入口条件</b>：</p>
+     * <ol>
+     *     <li>终端<b>没有网络</b>（{@code network == null}，本方法第一行就返回空列表）。典型例子：
+     *     无线「序列样板终端」的虚拟方块实体漏绑网络（第 75 轮已修，见
+     *     {@code AdvancedRemoteTerminalItem#openSequencePatternTerminal}）；</li>
+     *     <li>该步的配方类型与执行仓绑定的类型<b>不相等</b>（见 {@link #listChambersFor(String)}；
+     *     {@code create:deploying} 与 {@code create:item_application} 都显示成「机械手」，
+     *     配置界面已按配方类型名消歧）。</li>
+     * </ol>
+     * <p>写入侧（{@code setRecipeType} / {@code setChamberName} / 链自愈 / 拆链移交）改完之后会主动调用
+     * {@code SyncChamberListPacket#pushAvailabilityChanged} 把这里现算的结果推给开着终端的玩家，
+     * 因此「配置完成 → 界面显示」之间没有等待窗口，也不依赖客户端定时刷新。</p>
      */
     public List<ChamberInfo> listChambers() {
         final com.refinedmods.refinedstorage.api.network.Network network = mainNetworkNode.getNetwork();
@@ -1023,6 +1158,11 @@ public class SequencePatternTerminalBlockEntity
      * 新语义：一台执行仓的「单元样板汇总」只读视图。
      * {@code units} 为该仓单元样板槽内的实际物品（按槽位顺序），{@code name}/{@code recipeType}
      * 是本仓绑定的显示名与配方类型（前端据此显示「哪台机器、配方 id、机器图标」）。
+     *
+     * <p><b>计数口径（第 119 轮明确）</b>：{@code units} 是<b>一格一项</b>，每项的
+     * {@link ItemStack#getCount()} 可能大于 1（执行仓单元槽允许堆叠，旧存档 / Shift 整叠放入都可能出现）。
+     * 因此「张数」必须是把每项 {@code getCount()} 相加，而不是 {@code units.size()}；
+     * 后者只是「有样板的格数」。界面侧（{@code ChamberUnitsSummaryScreen}）已按这个口径显示。</p>
      */
     public record ChamberUnits(net.minecraft.core.BlockPos pos, String name, String recipeType,
                               List<ItemStack> units) {
@@ -1174,25 +1314,63 @@ public class SequencePatternTerminalBlockEntity
     }
 
     /**
-     * 汇总操作①「取回」：把某台执行仓里的单元样板全部搬回本终端的单元样板库
-     * （库可自动扩容，装不下时留在原处，绝不销毁）。
+     * 汇总操作①「取回」：把某台执行仓里的单元样板<b>逐张</b>搬回本终端的单元样板库
+     * （库可自动扩容到 {@link #MAX_UNIT_LIBRARY_SLOTS}，装不下时留在原处，绝不销毁）。
+     *
+     * <p><b>第 119 轮（F1 静默丢 N−1 张）</b>：执行仓的单元槽每格最多 64 张，而单元样板库的语义是
+     * <b>一格一张</b>。旧实现把整格 {@code stack.copy()} 原样写进库的一格（一格里叠了 N 张），
+     * 再整格清空；随后「存入」只 {@code copyWithCount(1)} 回 1 张却整格清空库 ⇒ N−1 张消失。
+     * 现在改为<b>逐张</b>写：写进 1 张、才从执行仓扣掉 1 张；库满 / 体积预算拒绝时，
+     * 剩下的样板原样留在执行仓（与第 116 / 118 轮「库满也不许销毁玩家物品」同一纪律）。</p>
      *
      * @return 实际取回的样板张数
      */
     public int pullUnitsFrom(final net.minecraft.core.BlockPos pos) {
+        unitTransferBlockedByLibrary = false;
         final SequenceExecutionChamberBlockEntity chamber = chamberAt(pos);
         if (chamber == null) {
             return 0;
         }
         int moved = 0;
         for (int i = 0; i < chamber.unitSlots.getContainerSize(); i++) {
-            final ItemStack stack = chamber.unitSlots.getItem(i);
-            if (stack.isEmpty()) {
+            final ItemStack whole = chamber.unitSlots.getItem(i);
+            if (whole.isEmpty()) {
                 continue;
             }
-            unitLibrary.setStackInSlot(unitLibrary.firstEmptySlot(), stack.copy());
-            chamber.unitSlots.setItem(i, ItemStack.EMPTY);
-            moved++;
+            boolean blocked = false;
+            // 第 119 轮：执行仓一格最多 64 张、库一格一张 ⇒ 必须逐张搬（整叠写一格会让「存入」丢 N−1 张）。
+            while (!whole.isEmpty()) {
+                // 第 116 轮：库到上限后返回 -1 ⇒ 剩下的样板<b>留在执行仓</b>（不销毁、不覆盖）。
+                final int empty = unitLibrary.firstEmptySlot();
+                if (empty < 0) {
+                    warnUnitLibraryFull();
+                    blocked = true;
+                    break;
+                }
+                // 第 119 轮：只拿「这一张」去判体积 / 去写；旧实现拿整叠去判、去写。
+                final ItemStack stack = whole.copyWithCount(1);
+                // 第 118 轮：格数够还要过合计体积预算 —— 不过就停，剩下的样板同样留在执行仓（绝不销毁）。
+                if (!unitLibrary.canAcceptMore(stack)) {
+                    warnUnitLibraryFullBytes();
+                    blocked = true;
+                    break;
+                }
+                // 第 119 轮：先确认能写、再写、最后才从执行仓扣掉这一张（中途失败不丢；顺序绝不能反过来）。
+                if (!unitLibrary.trySetStackInSlot(empty, stack)) {
+                    warnUnitLibraryFullBytes();
+                    blocked = true;
+                    break;
+                }
+                moved++;
+                whole.shrink(1);
+                if (whole.isEmpty()) {
+                    chamber.unitSlots.setItem(i, ItemStack.EMPTY);
+                }
+            }
+            if (blocked) {
+                unitTransferBlockedByLibrary = true;
+                break;
+            }
         }
         if (moved > 0) {
             chamber.setChanged();
@@ -1205,32 +1383,66 @@ public class SequencePatternTerminalBlockEntity
      * 汇总操作②「存入」：把本终端单元样板库里<b>配方类型匹配</b>的单元样板搬进某台执行仓
      * （类型不匹配的一律不动；仓满则留在库里，绝不销毁）。
      *
+     * <p><b>第 119 轮（F1 静默丢 N−1 张）</b>：旧实现把 {@code copyWithCount(1)} 放进执行仓后，
+     * 用 {@code setStackInSlot(i, EMPTY)} 把库里<b>整格</b>清空 —— 库里那格若叠了 N 张
+     * （历史上「取回」整叠写一格 / 手工堆叠的旧数据），N−1 张凭空消失。现在按张搬：
+     * 放进执行仓 1 张、才从库里扣 1 张；旧档同格多张也能逐张取出（能取几张取几张，剩下的留在库里）。</p>
+     *
      * @return 实际存入的样板张数
      */
     public int pushUnitsTo(final net.minecraft.core.BlockPos pos) {
+        unitTransferBlockedByLibrary = false;
         final SequenceExecutionChamberBlockEntity chamber = chamberAt(pos);
         if (chamber == null) {
             return 0;
         }
         int moved = 0;
         for (int i = 0; i < unitLibrary.getSlots(); i++) {
-            final ItemStack stack = unitLibrary.getStackInSlot(i);
-            if (stack.isEmpty() || !chamber.acceptsUnit(stack)) {
+            final ItemStack first = unitLibrary.getStackInSlot(i);
+            if (first.isEmpty() || !chamber.acceptsUnit(first)) {
                 continue;
             }
-            final int empty = rscc$firstEmptyUnitSlot(chamber);
-            if (empty < 0) {
-                break; // 仓满：剩下的留在库里
+            boolean chamberFull = false;
+            // 第 119 轮：逐张搬 —— 旧档里可能同格多张，能搬几张搬几张，绝不整格清空。
+            while (true) {
+                final ItemStack current = unitLibrary.getStackInSlot(i);
+                if (current.isEmpty()) {
+                    break;
+                }
+                final int empty = rscc$firstEmptyUnitSlot(chamber);
+                if (empty < 0) {
+                    chamberFull = true;
+                    break; // 仓满：剩下的留在库里
+                }
+                // 第 119 轮：先写执行仓、写入成功后才从库里扣这一张。顺序反过来（先清空库格再写）
+                // 正是 F1 丢物品的根因：中途任何失败都会让「没写进去的那些张」一起消失。
+                chamber.unitSlots.setItem(empty, current.copyWithCount(1));
+                final ItemStack removed = unitLibrary.extractItem(i, 1, false);
+                if (removed.isEmpty()) {
+                    // 理论上不可达：绝不留下「仓里放了一张、库里没扣」的双份（宁可回滚执行仓那一格）。
+                    chamber.unitSlots.setItem(empty, ItemStack.EMPTY);
+                    break;
+                }
+                moved++;
             }
-            chamber.unitSlots.setItem(empty, stack.copyWithCount(1));
-            unitLibrary.setStackInSlot(i, ItemStack.EMPTY);
-            moved++;
+            if (chamberFull) {
+                break;
+            }
         }
         if (moved > 0) {
             chamber.setChanged();
             setChanged();
         }
         return moved;
+    }
+
+    /**
+     * 最近一次 {@link #pullUnitsFrom} / {@link #pushUnitsTo} 是否因单元样板库满而停下（第 119 轮）。
+     * <p>供 {@code TransferChamberUnitPacket} 在「只搬了一部分」时给玩家一条可见提示；
+     * 停止时未搬的物品一定原样留在原处（本方法不表达任何「已销毁」语义）。</p>
+     */
+    public boolean lastUnitTransferBlockedByLibrary() {
+        return unitTransferBlockedByLibrary;
     }
 
     /** 该执行仓单元样板槽的第一个空格（全满返回 -1）。 */
@@ -1264,6 +1476,25 @@ public class SequencePatternTerminalBlockEntity
         }
     }
 
+    /**
+     * 机器指派显示名的上限（第 120 轮 F5，与 {@link #MAX_IMPORT_STRING_LENGTH} 同源）：
+     * C2S 字符串一律按 256 字符收口，避免「每步一个 64KB 名字」随步数线性撑大方块实体 NBT。
+     * <p>为什么夹在这里而不是只夹在包里：{@code stepMachineNames} 的<b>所有</b>写入点都经过
+     * {@link #setStepMachine}（{@code clearStepMachine} 也走它），夹在这一层才是「落盘值有界」的唯一保证。</p>
+     * <p>按<b>码点</b>截断而不是直接 {@code substring(0, 256)}：后者可能把一对代理对切成半个字符
+     * （BMP 字符 256 个、含代理对时字符数更少），截断结果仍可安全写入 NBT。</p>
+     */
+    static String clampStepMachineName(final String name) {
+        if (name == null) {
+            return "";
+        }
+        if (name.length() <= MAX_IMPORT_STRING_LENGTH) {
+            return name;
+        }
+        final int codePoints = name.codePointCount(0, name.length());
+        return name.substring(0, name.offsetByCodePoints(0, Math.min(codePoints, MAX_IMPORT_STRING_LENGTH)));
+    }
+
     /** 新语义：把某一步（全局下标）指派到某台机器（pos 为空 = 解绑）。 */
     public void setStepMachine(final int stepIndex, @org.jetbrains.annotations.Nullable final BlockPos pos,
                                final String name) {
@@ -1272,7 +1503,8 @@ public class SequencePatternTerminalBlockEntity
         }
         ensureStepMachineCapacity();
         stepMachinePos.set(stepIndex, pos);
-        stepMachineNames.set(stepIndex, name == null ? "" : name);
+        // 名字只是显示副本（权威名字在执行仓自己身上）：一律按 256 字符收口后再落盘（F5）
+        stepMachineNames.set(stepIndex, clampStepMachineName(name));
         setChanged();
     }
 
@@ -1900,14 +2132,68 @@ public class SequencePatternTerminalBlockEntity
 
     /**
      * 将单个 Create 操作步骤写入单元样板库的第一个空槽（不覆盖已占用格）；
-     * 库已满时追加到末尾（<b>自动扩容，不设上限</b>），不会丢弃样板。
+     * 库已满时追加到末尾（<b>自动扩容到 {@link #MAX_UNIT_LIBRARY_SLOTS}</b>），不会丢弃样板。
+     *
+     * @return true=已写入；false=<b>库已达容量上限</b>（第 116 轮：此时不写入、不销毁，由调用方决定提示）
      */
-    public void putUnitIntoLibrary(final ItemStack unitStack) {
+    public boolean putUnitIntoLibrary(final ItemStack unitStack) {
         if (unitStack.isEmpty()) {
-            return;
+            return false;
         }
-        unitLibrary.setStackInSlot(unitLibrary.firstEmptySlot(), unitStack.copy());
+        final int empty = unitLibrary.firstEmptySlot();
+        if (empty < 0) {
+            warnUnitLibraryFull();
+            return false;
+        }
+        // 第 118 轮：格数够之外还要过「合计体积预算」。两道闸各自独立：
+        // 条数满 = firstEmptySlot -1；体积满 = canAcceptMore false。任一不过都不写、不销毁。
+        if (!unitLibrary.canAcceptMore(unitStack)) {
+            warnUnitLibraryFullBytes();
+            return false;
+        }
+        if (!unitLibrary.trySetStackInSlot(empty, unitStack.copy())) {
+            // 理论上到不了这里（上面已判过），但写入入口自己还有一道判据；
+            // 以它的返回值兜底，避免「返回 true 但其实没写进去」。
+            warnUnitLibraryFullBytes();
+            return false;
+        }
         setChanged();
+        return true;
+    }
+
+    /** 「单元样板库已到容量上限」的 WARN（第 116 轮）：每台终端只打一条，避免刷日志。 */
+    private void warnUnitLibraryFull() {
+        if (!unitLibraryFullWarned) {
+            unitLibraryFullWarned = true;
+            LOGGER.warn("[rs_create_compat] 单元样板库已达容量上限 {} 格（{}）：本次新增写入已拒绝，"
+                    + "原有样板一张未动；请先取出一些单元样板",
+                MAX_UNIT_LIBRARY_SLOTS, getBlockPos());
+        }
+    }
+
+    /**
+     * 「单元样板库已到<b>合计体积</b>上限」的 WARN（第 118 轮）：每台终端只打一条。
+     * <p>带上真实用量（KB）与上限（KB）：玩家 / 我们在日志里能直接看出「是格数满还是体积满」，
+     * 不必再猜 —— 这两种满的处理动作一样（取出一些样板），但原因不同。</p>
+     */
+    private void warnUnitLibraryFullBytes() {
+        if (!unitLibraryBytesWarned) {
+            unitLibraryBytesWarned = true;
+            LOGGER.warn("[rs_create_compat] 单元样板库已达合计体积上限 ≈ {} KB 线上（当前已用 ≈ {} KB，{} 格，{}）："
+                    + "本次新增写入已拒绝，原有样板一张未动；请先取出一些单元样板",
+                UnitLibraryLimits.MAX_LIBRARY_WIRE_KB,
+                UnitLibraryLimits.usedWireKb(unitLibrary.usedHeapBytes()),
+                unitLibrary.getSlots(), getBlockPos());
+        }
+    }
+
+    /**
+     * 单元样板库算体积时用的注册表上下文（第 118 轮）。
+     * <p>判不了 / 方块还没挂到世界（{@code level == null}）时返回 {@code RegistryAccess.EMPTY}：
+     * 那不是「库已满」，是「量不出来」 —— 判据按「不超」处理，绝不让一次测不准把玩家挡在门外。</p>
+     */
+    private HolderLookup.Provider unitLibraryRegistries() {
+        return level != null ? level.registryAccess() : net.minecraft.core.RegistryAccess.EMPTY;
     }
 
     /** 单元库中是否已存在相同机器类型的单元样板。 */
@@ -2215,6 +2501,31 @@ public class SequencePatternTerminalBlockEntity
             // ingredient 才能显示 / 认下整组候选（2026-10-05）。没有它那一格永远只有代表物。
             ingredientCandidates()
         );
+        // 第 116 轮：单元样板库有容量上限，这里在<b>写总样板 / 让菜单扣 RS 样板之前</b>先确认放得下。
+        // 否则「生成成功 → 菜单扣了材料 → 新样板却写不进库」= 扣了没给（正是本轮要避免的）。
+        final java.util.List<ItemStack> unitsToStore = new java.util.ArrayList<>();
+        for (int i = 0; i < arrangementSize; i++) {
+            if (!skipStep[i]) {
+                final ItemStack generated = arrangementUnit(i);
+                if (!generated.isEmpty()) {
+                    unitsToStore.add(generated);
+                }
+            }
+        }
+        // 第 116 轮：格数上限（1024）预检；第 118 轮：同一处再预检「合计体积预算」。
+        // 两道闸都在<b>写总样板 / 让菜单扣 RS 样板之前</b>判，保证「扣了材料却丢样板」不可能发生。
+        if (!unitLibrary.canAcceptUnits(unitsToStore)) {
+            if (!unitLibrary.canAccept(unitsToStore.size())) {
+                lastExportError = net.minecraft.network.chat.Component.translatable(
+                    "gui.rs_create_compat.sequence_pattern_terminal.generate.library_full", MAX_UNIT_LIBRARY_SLOTS);
+            } else {
+                // 体积满：提示带真实上限（KB），与格数满区分开 —— 处理动作一样，但原因不同。
+                lastExportError = net.minecraft.network.chat.Component.translatable(
+                    "gui.rs_create_compat.sequence_pattern_terminal.generate.library_full_bytes",
+                    UnitLibraryLimits.MAX_LIBRARY_WIRE_KB);
+            }
+            return false;
+        }
         final ItemStack pattern = new ItemStack(RS_Create_Compat.SEQUENCE_ASSEMBLY_PATTERN.get());
         SequencePatternData.writeAssembly(pattern, assembly, registries);
         // 总样板 → 唯一的那格总样板槽（上方已确认它为空）
@@ -2310,16 +2621,16 @@ public class SequencePatternTerminalBlockEntity
         if (highestUsedIndex(displayArrangement) >= 0) {
             tag.put("DisplayArrangement", displayArrangement.serializeNBT(registries));
         }
-        // 起步原料候选：与 DisplayArrangement 同一层写出。客户端镜像靠同一份 NBT 拿到它，
-        // 顶部「输入原料」格才能在没有配方回查结果时仍然轮播整组（「任意台阶」那一格）。
+        // 起步原料的全部候选（「任意台阶」一类；2026-10-05）。用统一的 InputCandidates 键读写，
+        // 与单元样板里的候选组同一格式 ⇒ 老存档缺键读回空表，行为与改动前一字不差。
+        // 客户端镜像靠同一份 NBT 拿到它，顶部「输入原料」格才能在没有配方回查结果时仍然轮播整组。
+        // 【第 120 轮 F8】旧实现把这一句连写了两遍（同一个键、同一份数据，第二遍纯覆盖）。
+        // 已删掉重复的那一处，只留这一个唯一写入点 —— 否则下次只改一处就会出现「两份不同源的数据」。
         SequencePatternData.writeCandidates(tag, ingredientCandidates, registries);
         tag.put("UnitInput", unitInputSlot.serializeNBT(registries));
         tag.put("UnitOutput", unitOutputSlot.serializeNBT(registries));
         tag.put("AssemblyPattern", assemblyPatternSlot.serializeNBT(registries));
         tag.put("Ingredient", ingredientSlot.serializeNBT(registries));
-        // 起步原料的全部候选（「任意台阶」一类；2026-10-05）。用统一的 InputCandidates 键读写，
-        // 与单元样板里的候选组同一格式 ⇒ 老存档缺键读回空表，行为与改动前一字不差。
-        SequencePatternData.writeCandidates(tag, ingredientCandidates, registries);
         tag.put("Results", resultSlots.serializeNBT(registries));
         tag.put("Scraps", scrapSlots.serializeNBT(registries));
         tag.putInt("Loops", loops);
@@ -2572,44 +2883,233 @@ public class SequencePatternTerminalBlockEntity
     }
 
     /**
-     * <b>可增长、无上限</b>的单元样板库：保留「按槽位顺序摆放、可取出、可 shift 移入」语义
-     * （不像 {@code RsccUnboundedItemStorage} 那样按种类合并），仅在容量不足时自动开槽。
+     * 单元样板库：保留「按槽位顺序摆放、可取出、可 shift 移入」语义
+     * （不像 {@code RsccUnboundedItemStorage} 那样按种类合并），容量不足时自动开槽，
+     * 但<b>第 116 轮起有硬上限 {@link #MAX_UNIT_LIBRARY_SLOTS} 格</b>。
      * <ul>
-     *     <li>{@link #setStackInSlot(int, ItemStack)} 越界自动扩容；</li>
-     *     <li>始终保留一个末尾空槽，使外部按 {@code getSlots()} 找空位的调用方（导入/生成/首空位写入）
-     *     总能成功，不会因为库满而丢样板；</li>
-     *     <li>{@link #serializeNBT} 保存前去掉尾部空槽（按实际条目数落盘），
-     *     {@link #deserializeNBT} 读档后补回末尾空槽（旧 108 格存档可正常读入）。</li>
+     *     <li>{@link #setStackInSlot(int, ItemStack)} 越界自动扩容到上限为止；</li>
+     *     <li>未到上限时始终保留一个末尾空槽，使外部按 {@code getSlots()} 找空位的调用方
+     *     （导入 / 生成 / 首空位写入）总能成功；<b>到上限后 {@link #firstEmptySlot()} 返回 {@code -1}，
+     *     调用方必须拒绝写入</b>（见 {@code putUnitIntoLibrary} / {@code pullUnitsFrom} /
+     *     {@code CreateUnitPatternPacket}：一律「拒绝 + 保留原物」，绝不覆盖或销毁）；</li>
+     *     <li>{@link #serializeNBT} 保存前去掉尾部空槽（<b>第 117 轮更正：按「最后一个非空槽 + 1」落盘，
+     *     不是「按实际条目数」</b> —— 中间的空槽会原样保留），
+     *     {@link #deserializeNBT} 读档后补回末尾空槽（旧 108 格存档可正常读入）；
+     *     <b>读档不判上限</b>：旧实现无上限扩容留下的超限旧库原样读回、绝不截断（上限只约束将来的增长）。</li>
      *     <li>落盘格式与 NeoForge 21.1 的 {@code ItemStackHandler} 一致（entry 即 stack 的 NBT，{@code Slot} 同层）；
      *     读档额外兼容历史 {@code {Slot, Item:<stack>}} 旧格式并就地迁移，绝不因格式不匹配而清空整库。</li>
      * </ul>
      */
     public static final class GrowingUnitLibrary extends ItemStackHandler {
+        /**
+         * 全库合计体积的<b>缓存</b>（堆估算，{@link UnitLibraryLimits} 口径；第 118 轮）。
+         * <p>{@code -1} = 缓存失效，下次查询时整库重算一遍。写入 / 取出走增量维护，
+         * 只有读档、结构重建、{@code insertItem} 这类不常走的路径才置 -1。</p>
+         */
+        private long rscc$usedHeapBytes = -1L;
+        /**
+         * 算一张样板体积用的注册表上下文（由方块实体在构造时注入；默认 EMPTY ⇒ 量不出来）。
+         * <p>不能用 {@code this} 里的东西代替：{@code ItemStack#save} 需要 {@code HolderLookup.Provider}
+         * 才能把依附注册表的组件（附魔 / 药水…）序列化出来。</p>
+         */
+        private java.util.function.Supplier<HolderLookup.Provider> rscc$registryProvider =
+            () -> net.minecraft.core.RegistryAccess.EMPTY;
+
         public GrowingUnitLibrary(final int size) {
             super(Math.max(1, size));
         }
 
-        /** 第一个空槽位；全满时返回 {@code getSlots()}（调用方写入该下标即自动扩容追加）。 */
+        /** 由方块实体注入注册表上下文（第 118 轮；只影响「量体积」，不影响任何读写语义）。 */
+        void rscc$setRegistryProvider(final java.util.function.Supplier<HolderLookup.Provider> provider) {
+            if (provider != null) {
+                rscc$registryProvider = provider;
+                rscc$usedHeapBytes = -1L;
+            }
+        }
+
+        /** 一张样板保存成 NBT 后的堆估算字节数；空栈 / 量不出来 = 0（判据按「不增长」处理）。 */
+        private int rscc$bytesOf(final ItemStack stack) {
+            return cretae.cookiewyq.rs_create_compat.support.MarkerBudget.stackBytes(stack, rscc$registryProvider.get());
+        }
+
+        /** 已用合计体积（堆估算；懒计算，缓存 -1 时整库重算一次）。 */
+        public long usedHeapBytes() {
+            if (rscc$usedHeapBytes < 0) {
+                final HolderLookup.Provider provider = rscc$registryProvider.get();
+                long total = 0;
+                for (int i = 0; i < getSlots(); i++) {
+                    total += cretae.cookiewyq.rs_create_compat.support.MarkerBudget
+                        .stackBytes(getStackInSlot(i), provider);
+                }
+                rscc$usedHeapBytes = total;
+            }
+            return rscc$usedHeapBytes;
+        }
+
+        /** 合计体积还剩多少（堆估算；0 = 已满）。 */
+        public long remainingHeapBytes() {
+            return UnitLibraryLimits.remaining(usedHeapBytes());
+        }
+
+        /**
+         * 还能不能把这张样板加进库（第 118 轮：<b>合计体积</b>预算；不含格数判断）。
+         * <p>空栈 / 量不出来 ⇒ true（不误拒）。格数是否够由 {@link #firstEmptySlot()} /
+         * {@link #canAccept(int)} 负责 —— 两道闸各自独立，调用方两个都要看。</p>
+         */
+        public boolean canAcceptMore(final ItemStack stack) {
+            if (stack == null || stack.isEmpty()) {
+                return true;
+            }
+            final int bytes = rscc$bytesOf(stack);
+            if (bytes <= 0) {
+                return true;
+            }
+            return UnitLibraryLimits.fits(usedHeapBytes(), bytes);
+        }
+
+        /**
+         * 一次写入多张（「生成样板」在<b>扣材料之前</b>预检）时：格数与合计体积都要过。
+         * <p>合计时把每张的体积逐张相加 —— 与真正写入时的逐张判据同源，不会出现
+         * 「预检过了、写到一半撞上限」的半成品状态。</p>
+         */
+        public boolean canAcceptUnits(final java.util.List<ItemStack> units) {
+            if (units == null || units.isEmpty()) {
+                return true;
+            }
+            if (!canAccept(units.size())) {
+                return false;
+            }
+            long added = 0;
+            for (final ItemStack unit : units) {
+                added += Math.max(0, rscc$bytesOf(unit));
+            }
+            return UnitLibraryLimits.fits(usedHeapBytes(), added);
+        }
+
+        /** 第一个空槽位；<b>全满且已到容量上限</b>（第 116 轮）时返回 {@code -1}。 */
         public int firstEmptySlot() {
             for (int i = 0; i < getSlots(); i++) {
                 if (getStackInSlot(i).isEmpty()) {
                     return i;
                 }
             }
-            return getSlots();
+            // 未到上限：返回 getSlots()，调用方写入该下标即自动扩容追加（旧行为）。
+            return rscc$canGrow() ? getSlots() : -1;
+        }
+
+        /** 空槽位总数（不含「还能扩容出来的」槽位）。 */
+        public int freeSlots() {
+            int free = 0;
+            for (int i = 0; i < getSlots(); i++) {
+                if (getStackInSlot(i).isEmpty()) {
+                    free++;
+                }
+            }
+            return free;
+        }
+
+        /**
+         * 还能再放 {@code count} 张样板吗（第 116 轮：生成前预检，避免「扣了材料却丢样板」）。
+         * <p>= 现有空槽 + 还能扩容出的槽（上限 {@link #MAX_UNIT_LIBRARY_SLOTS}）。</p>
+         */
+        public boolean canAccept(final int count) {
+            if (count <= 0) {
+                return true;
+            }
+            return freeSlots() + Math.max(0, MAX_UNIT_LIBRARY_SLOTS - getSlots()) >= count;
+        }
+
+        /** 还能不能在新下标上扩容（已达上限 ⇒ false）。 */
+        private boolean rscc$canGrow() {
+            return getSlots() < MAX_UNIT_LIBRARY_SLOTS;
+        }
+
+        /**
+         * 写入一格并返回是否真的写入（第 118 轮：给调用方一个可判定的结果）。
+         * <p><b>唯一的写入入口</b>：格数上限（第 116 轮）与合计体积预算（第 118 轮）都在这里判，
+         * 任何一条不过就整次写入被拒（原样不动、不覆盖、不销毁）。菜单格直写 / 新建单元样板包 /
+         * 生成样板 / 从执行仓取回，全部经过这里。</p>
+         */
+        public boolean trySetStackInSlot(final int slot, final ItemStack stack) {
+            if (slot < 0) {
+                return false;
+            }
+            // 第 116 轮：扩容上限（rscc$ensureSlot 会拒绝越过上限的增长，这里再早退一次，
+            // 避免「写不进去但后续 trim / ensureTrailingEmpty 白跑一遍」）。
+            if (slot >= getSlots() && !rscc$canGrow()) {
+                return false;
+            }
+            final ItemStack incoming = stack == null ? ItemStack.EMPTY : stack;
+            rscc$ensureSlot(slot);
+            // 第 118 轮兜底：ensureSlot 内部走 rscc$resize（会拒绝越过 1024 格的扩容）。若调用方给了一个
+            // 比「当前容量 + 可扩容余量」还大的下标，扩容会被拒 → 此时绝不能继续 getStackInSlot/setStackInSlot
+            //（ItemStackHandler 会抛 IndexOutOfBoundsException = 崩服务端）。直接当写入失败处理。
+            if (slot >= getSlots()) {
+                return false;
+            }
+            final ItemStack previous = getStackInSlot(slot);
+            final int previousBytes = rscc$bytesOf(previous);
+            final int incomingBytes = rscc$bytesOf(incoming);
+            final long delta = (long) incomingBytes - previousBytes;
+            // 第 118 轮：只拦「增长」（delta > 0）。换小 / 取出 / 清空永远允许 —— 与库容量上限、
+            // 阻塞名单上限同一条纪律：宁可让超限旧数据留着，也不替玩家删数据。
+            if (delta > 0 && !UnitLibraryLimits.fits(usedHeapBytes(), delta)) {
+                return false;
+            }
+            super.setStackInSlot(slot, incoming);
+            // 增量维护缓存。⚠ 只有缓存**有效**（>= 0）时才增量更新：失效时保持失效，让下次查询整库重算。
+            // 绝不能写成 Math.max(0, -1 + delta) —— 那会把「不知道已用多少」静默变成「已用 0」，
+            // 之后的 canAcceptMore 就会以为库是空的，把合计体积上限整条废掉（第 118 轮自检 ③-1 抓到的就是这个）。
+            if (rscc$usedHeapBytes >= 0) {
+                rscc$usedHeapBytes = Math.max(0L, rscc$usedHeapBytes + delta);
+            }
+            if (incoming.isEmpty()) {
+                rscc$trimTrailingEmpty(); // 取空末格后收缩，避免出现多个末尾空槽/多余的空白页
+            }
+            rscc$ensureTrailingEmpty();
+            return true;
         }
 
         @Override
         public void setStackInSlot(final int slot, final ItemStack stack) {
-            if (slot < 0) {
-                return;
+            trySetStackInSlot(slot, stack);
+        }
+
+        /**
+         * 取出：体积只会变小 ⇒ 只维护缓存，不判上限（第 118 轮）。
+         * <p>{@code ItemStackHandler#extractItem} 直接改内部列表、不经过 {@link #setStackInSlot}，
+         * 所以这里必须单独维护，否则缓存会停留在取出前的体积从而导致「明明取空了还说满」。</p>
+         */
+        @Override
+        public ItemStack extractItem(final int slot, final int amount, final boolean simulate) {
+            final ItemStack removed = super.extractItem(slot, amount, simulate);
+            if (!simulate && !removed.isEmpty() && rscc$usedHeapBytes >= 0) {
+                // 取走那张的体积就是减少量（count 变化不改变序列化体积口径）。
+                rscc$usedHeapBytes = Math.max(0L, rscc$usedHeapBytes - rscc$bytesOf(removed));
             }
-            rscc$ensureSlot(slot);
-            super.setStackInSlot(slot, stack);
-            if (stack.isEmpty()) {
-                rscc$trimTrailingEmpty(); // 取空末格后收缩，避免出现多个末尾空槽/多余的空白页
+            return removed;
+        }
+
+        /**
+         * 插入：空格插入属于「增长」⇒ 先过体积预算（不过就把整张原样退回，绝不半插）；
+         * 已占用格只改数量 ⇒ 同步维护缓存。
+         */
+        @Override
+        public ItemStack insertItem(final int slot, final ItemStack stack, final boolean simulate) {
+            if (slot < 0 || stack == null || stack.isEmpty()) {
+                return super.insertItem(slot, stack, simulate);
             }
-            rscc$ensureTrailingEmpty();
+            final ItemStack previous = getStackInSlot(slot);
+            final int previousBytes = rscc$bytesOf(previous);
+            if (previous.isEmpty() && !canAcceptMore(stack)) {
+                return stack; // 体积预算不过：整张退回（不写入、不销毁）
+            }
+            final ItemStack leftover = super.insertItem(slot, stack, simulate);
+            if (!simulate && rscc$usedHeapBytes >= 0) {
+                final int afterBytes = rscc$bytesOf(getStackInSlot(slot));
+                rscc$usedHeapBytes = Math.max(0L, rscc$usedHeapBytes + (long) afterBytes - previousBytes);
+            }
+            return leftover;
         }
 
         /**
@@ -2622,6 +3122,23 @@ public class SequencePatternTerminalBlockEntity
             if (newSize < 1 || newSize == getSlots()) {
                 return;
             }
+            // 第 116 轮：**任何增长**都不许越过上限（含「旧存档库已经超过上限」的情况 —— 那种库允许原样保留
+            // 与缩小，但绝不再长大；否则 rscc$ensureTrailingEmpty 每写一次就能把超限旧库再 +1）。
+            if (newSize > getSlots() && newSize > MAX_UNIT_LIBRARY_SLOTS) {
+                return;
+            }
+            rscc$resizeRaw(newSize);
+        }
+
+        /** 真正的重建（不判上限）：只在 {@link #rscc$resize} 与读档路径里调用。 */
+        private void rscc$resizeRaw(final int newSize) {
+            if (newSize < 1 || newSize == getSlots()) {
+                return;
+            }
+            if (newSize < getSlots()) {
+                // 第 118 轮：缩小会丢弃尾部内容 ⇒ 体积缓存必须失效（扩容不改变内容，缓存可留）。
+                rscc$usedHeapBytes = -1L;
+            }
             final NonNullList<ItemStack> next = NonNullList.withSize(newSize, ItemStack.EMPTY);
             final int copy = Math.min(newSize, getSlots());
             for (int i = 0; i < copy; i++) {
@@ -2630,10 +3147,10 @@ public class SequencePatternTerminalBlockEntity
             stacks = next;
         }
 
-        /** 保证下标可写：容量不足时补齐空槽。 */
+        /** 保证下标可写：容量不足时补齐空槽（第 116 轮起不再越过 {@link #MAX_UNIT_LIBRARY_SLOTS}）。 */
         private void rscc$ensureSlot(final int slot) {
             if (slot >= getSlots()) {
-                rscc$resize(slot + 1);
+                rscc$resize(slot + 1); // rscc$resize 会拒绝越过上限的增长
             }
         }
 
@@ -2699,7 +3216,9 @@ public class SequencePatternTerminalBlockEntity
             // 不复用 super.deserializeNBT：它只认新格式（entry 即 stack 的 NBT），遇到旧格式
             // {Slot, Item:<stack>} 会解析失败并丢弃整条。这里显式兼容新旧两种格式，迁移优先于丢弃。
             final int size = nbt.contains("Size", Tag.TAG_INT) ? nbt.getInt("Size") : getSlots();
-            rscc$resize(Math.max(1, size));
+            // 第 116 轮：读档走<b>不判上限</b>的重建 —— 旧实现无上限扩容，旧存档里可能真的躺着
+            // 超过 MAX_UNIT_LIBRARY_SLOTS 的库；上限只约束「将来的增长」，绝不在这里截断玩家数据。
+            rscc$resizeRaw(Math.max(1, size));
             for (int i = 0; i < getSlots(); i++) {
                 stacks.set(i, ItemStack.EMPTY);
             }
@@ -2732,11 +3251,16 @@ public class SequencePatternTerminalBlockEntity
                     dropped++;
                     continue;
                 }
-                rscc$ensureSlot(slot);
+                if (slot >= getSlots()) {
+                    rscc$resizeRaw(slot + 1); // 读档专用：允许按存档里的真实槽位恢复（可超过上限）
+                }
                 stacks.set(slot, stack);
                 lastSlot = Math.max(lastSlot, slot);
             }
             rscc$ensureTrailingEmpty();
+            // 第 118 轮：读档<b>不判</b>体积预算（超限旧库原样读回、绝不截断），只把缓存置失效，
+            // 让下一次「增长」写入时按真实内容重新量一遍。
+            rscc$usedHeapBytes = -1L;
             onLoad();
             if (dropped > 0) {
                 LOGGER.warn("[rs_create_compat] 单元样板库读档：成功 {} 条（新格式 {} / 旧格式迁移 {}，最大槽位 {}），丢弃 {} 条无法解析条目",

@@ -79,6 +79,66 @@ public final class ClientPayloadHooks {
         /** 缺料处置策略：写入客户端只读镜像。 */
         default void syncShortageMode(final SyncShortageModePacket packet) {
         }
+
+        /** 网络资源接收器：把权威「名字 + 本网络已占用名字集合」刷新回已打开的界面。 */
+        default void syncNetworkResourceReceiver(final SyncReceiverConfigPacket packet) {
+        }
+
+        /** 网络资源请求器：把权威「目标名 + 订单清单 + 接收器名字集合」刷新回已打开的界面。 */
+        default void syncNetworkResourceRequester(final SyncRequesterConfigPacket packet) {
+        }
+
+        /** 范围充电器：把「充电范围框选」的权威坐标 + 三轴范围交给已打开的界面去画。 */
+        default void showChargerRange(final ShowChargerRangePacket packet) {
+        }
+
+        /**
+         * 归流缓存仓（基础 + 高级）：把「吸取范围」的服务端权威几何交给已打开的界面去画。
+         *
+         * <p>与 {@link #showChargerRange} 同语义（界面按钮 → 菜单按钮通道 C2S → 方块实体组快照 →
+         * 本包 S2C → 客户端只画），差别只在载荷形状：这里传的是<b>已经算好的方块区域</b>
+         * （{@code Area}，含首含尾），因此客户端连「半径 / 2」「inflate」这类换算都不做 ——
+         * 画出来的框必然等于服务端那一刻真正在扫的几何。</p>
+         */
+        default void showCollectionRange(final ShowCollectionRangePacket packet) {
+        }
+
+        /** 范围充电器：本 tick 真充了谁（方块 / 掉落物 / 玩家）—— 客户端据此画高亮。 */
+        default void syncChargerHighlight(final ChargerHighlightPacket packet) {
+        }
+
+        /**
+         * 范围充电器：把权威「过滤配置 + 已知玩家候选池」交给客户端 —— 由客户端
+         * <b>打开或就地刷新</b>过滤界面（{@code ChargerFilterScreen#openOrRefresh}）。
+         *
+         * <p>为什么不叫 {@code syncChargerFilter}：它不只是把数据写回一个<b>已经开着</b>的界面
+         * （与 {@link #syncChargerHighlight} 同一类心跳），它可能<b>新建界面</b>
+         * ——「点过滤按钮 → 服务端回快照 → 客户端开界面」这条链路的落点是这里。
+         * 名字如实写 {@code open}，免得将来有人以为它只做数据刷新。</p>
+         */
+        default void openChargerFilter(final SyncChargerFilterPacket packet) {
+        }
+
+        /**
+         * 高级远程多功能终端：绑定网络的电量快照（第 100 轮）—— 写客户端只读镜像
+         * {@code client/TerminalPowerState}，模式 Tab 行据此把<b>所有</b> Tab 置灰不可点。
+         *
+         * <p>服务端在终端界面打开时立刻发一条、之后每 20 tick 一条（见
+         * {@code support/TerminalNetworkPower}）；客户端<b>不</b>自己算「有没有电」
+         * （RS 没把网络能量同步给这些界面），也不看终端物品自身电量。</p>
+         */
+        default void updateTerminalPower(final TerminalPowerPacket packet) {
+        }
+
+        /**
+         * 降解室发电机（第 129 轮）：JEI 展示用的「降解条目」整表快照。
+         *
+         * <p>客户端只做一件事：写进只读镜像 {@code support/DecompositionDisplayCache}
+         * （JEI 的「降解发电」分类页读它）。条目已经由服务端展开成「物品 id + 数值」的形状，
+         * 客户端<b>不</b>重新解析数据包、也不重新推导数值。</p>
+         */
+        default void syncDecompositionDisplay(final SyncDecompositionDisplayPacket packet) {
+        }
     }
 
     /** 专用服务端上的空实现（也用于客户端挂载之前的兜底）。 */

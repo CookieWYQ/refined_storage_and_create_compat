@@ -12,14 +12,20 @@ import com.mojang.logging.LogUtils;
 import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.CollectionCacheNetworkNode;
+import cretae.cookiewyq.rs_create_compat.network.ShowCollectionRangePacket;
 import cretae.cookiewyq.rs_create_compat.support.AbsorbType;
+import cretae.cookiewyq.rs_create_compat.support.Area;
+import cretae.cookiewyq.rs_create_compat.support.AreaScanHook;
 import cretae.cookiewyq.rs_create_compat.support.BlockContentReleaser;
+import cretae.cookiewyq.rs_create_compat.support.CollectionBlockedLimits;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
+import cretae.cookiewyq.rs_create_compat.support.MarkerBudget;
 import cretae.cookiewyq.rs_create_compat.support.MultiFluidCache;
 import cretae.cookiewyq.rs_create_compat.support.OptionalDeps;
 import cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy;
 import cretae.cookiewyq.rs_create_compat.support.RsccFlowLedger;
 import cretae.cookiewyq.rs_create_compat.support.RsccMachineCluster;
+import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
 import cretae.cookiewyq.rs_create_compat.support.XpForm;
 import cretae.cookiewyq.rs_create_compat.support.XpTargetResolver;
 import net.minecraft.core.BlockPos;
@@ -31,6 +37,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -43,12 +50,14 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -118,11 +127,24 @@ public class CollectionCacheBlockEntity
     /** 六个面全部允许物流输入（默认值；{@code Direction#ordinal()} 取位）。 */
     public static final int ALL_FACES = 0b111111;
 
-    /** 掉落物忽略标记（避免反复处理同一堆暂时存不下的物品）。 */
+    /** 掉落物/经验球忽略标记（避免反复处理同一堆暂时存不下的东西）。 */
     private static final String TAG_IGNORE_UNTIL = "rs_create_compat:collect_ignore_until";
-    private static final int IGNORE_TICKS = 100;
+    /**
+     * 失败后的忽略窗口（tick）。第 101 轮从 100 缩短到 20：
+     * 旧值 5 秒里即使条件已经恢复（缓存腾出空位 / 数量凑够）也一件都不吸，
+     * 用户看到的就是「有时候吸、有时候不吸」。1 秒的退避已足够避免每轮空转刷屏。
+     */
+    private static final int IGNORE_TICKS = 20;
 
     private static final String TAG_MARKERS = "Markers";
+    /**
+     * 「标记数量已按新口径归一」的存档版本标记（第 101 轮）：
+     * 旧档（第 95 轮及更早）把 Shift 标记写成的<b>手持堆叠件数</b>当成了「凑够才吸」的硬门槛
+     * （常见 64）⇒ 玩家扔 1 件永远不满足门槛、一件都收不进去。载入时若没有这个键，
+     * 把 &gt;1 的旧数量统一归 1（并在日志里记一条）；写档时补上这个键，
+     * 于是玩家之后在条目标记界面里<b>显式设过</b>的 N 不会被下一次读档抹掉。
+     */
+    private static final String TAG_MARKER_AMOUNT_V2 = "MarkerAmountV2";
     private static final String TAG_MARKER_SLOT = "Slot";
     private static final String TAG_MARKER_FLUID = "Fluid";
     private static final String TAG_MARKER_ID = "Id";
@@ -180,14 +202,67 @@ public class CollectionCacheBlockEntity
      */
     private static final long ABSORB_ALL_THRESHOLD = 0L;
 
+    // ==================== 「为什么没在吸」状态码（第 101 轮；界面状态行的唯一来源） ====================
+
+    /** 工作正常（本轮吸到了东西，或条件齐全只是范围内暂时没货）。 */
+    public static final int ABSORB_STATUS_OK = 0;
+    /** 没接进 RS 网络（节点没有网络）。 */
+    public static final int ABSORB_STATUS_NO_NETWORK = 1;
+    /** 接进网络了但节点未激活（网络无电 / 红石模式停机）。 */
+    public static final int ABSORB_STATUS_INACTIVE = 2;
+    /** 「物品」吸取开关被关掉。 */
+    public static final int ABSORB_STATUS_TOGGLE_OFF = 3;
+    /** 没有任何生效的过滤条目（基础版 = 匹配区空；高级版 = 当前区域没配过滤）。 */
+    public static final int ABSORB_STATUS_NO_MARKER = 4;
+    /** 有过滤条目、范围内也有东西，但没有一条命中。 */
+    public static final int ABSORB_STATUS_NO_TARGET = 5;
+    /** 有命中，但没凑够某条标记的「数量门槛」（旧档数量被归一前的典型症状）。 */
+    public static final int ABSORB_STATUS_THRESHOLD = 6;
+    /** 缓存区已经放不下（会在一秒内自动重试，不丢东西）。 */
+    public static final int ABSORB_STATUS_CACHE_FULL = 7;
+    /** 高级版：区域模式开着，但槽里没装区域选定器 ⇒ 一点不吸。 */
+    public static final int ABSORB_STATUS_AREA_NO_SELECTOR = 8;
+    /** 高级版：装了选定器但区域列表为空 ⇒ 一点不吸。 */
+    public static final int ABSORB_STATUS_AREA_EMPTY = 9;
+    /** 高级版：选定器绑定的维度与当前维度不符 ⇒ 一点不吸。 */
+    public static final int ABSORB_STATUS_AREA_DIMENSION = 10;
+
+    /** 本轮状态码 / 附加位（由 {@link #absorbAll} 每轮刷新，界面经数据槽 24 / 25 读取）。 */
+    private int absorbStatusReason = ABSORB_STATUS_OK;
+    private int absorbStatusArg;
+    /** 本轮是否发生过「有命中但没凑够数量门槛」（状态码 6 的判据）。 */
+    private boolean thresholdBlockedThisScan;
+    /** 本轮实际吸进缓存的物品件数（>0 ⇒ 状态码 0）。 */
+    private int absorbedThisScan;
+    /**
+     * 界面写匹配标记时的默认需求数量（第 96 轮）：<b>1</b> = 「有就收」。
+     * <p>为什么不是「手持那一堆的件数」：{@code MarkerEntry#amount} 是「凑够才动手」的硬门槛，
+     * 逐件投料 / 农场掉落这类来源永远凑不满一整组 ⇒ 数量少的资源一件都进不来
+     * （用户本轮「无法与任何物品交互」的实测原因之一）。需要老口径时在条目标记界面里改数量即可。</p>
+     */
+    public static final long MIN_UI_MARK_AMOUNT = 1L;
+
     /** 匹配区：ghost 标记条目（下标即槽位，长度按需增长到 {@link #MATCH_CAPACITY}；null / {@link MarkerEntry#isEmpty()} = 未标记）。 */
     private final List<MarkerEntry> markers = new ArrayList<>();
-    /** 缓存区（真实存储）。<b>非 final</b>：参与机器集群时会被换成「整个集群共用的那一份」。 */
-    private SimpleContainer cache = new SimpleContainer(CACHE_SLOTS);
+    /**
+     * 缓存区（真实存储）。<b>非 final</b>：参与机器集群时会被换成「整个集群共用的那一份」。
+     * <p>单机规模由构造函数注入（{@link #cacheSlots}）：基础版 = {@link #CACHE_SLOTS}，
+     * 高级版 = 两倍（见 {@code AdvancedCollectionCacheBlockEntity.CACHE_SLOTS_ADVANCED}）。
+     * 容量口径仍然只是「格数 × {@link #getCacheSlotCapacity()}」，吞吐（{@code getTransferBatch}）
+     * 与升级槽规则一个字都没改。</p>
+     */
+    private SimpleContainer cache;
     /** 插件槽（速度 / 堆叠升级）。 */
     private final SimpleContainer upgrades = new SimpleContainer(UPGRADE_SLOTS);
-    /** 流体/气体缓存：容量上限、种类无上限。<b>非 final</b>：参与集群时换成集群共用的那一份。 */
-    private MultiFluidCache fluidCache = new MultiFluidCache(FLUID_CACHE_CAPACITY);
+    /**
+     * 流体/气体缓存：容量上限、种类无上限。<b>非 final</b>：参与集群时换成集群共用的那一份。
+     * <p>单机容量同样由构造函数注入（{@link #fluidCacheCapacity}）。</p>
+     */
+    private MultiFluidCache fluidCache;
+    /** 单机缓存区格数（基础版 {@link #CACHE_SLOTS}；高级版更大）。集群载荷按它 × 台数扩容。 */
+    protected final int cacheSlots;
+    /** 单机流体 / 气体缓存容量（mB；基础版 {@link #FLUID_CACHE_CAPACITY}；高级版更大）。 */
+    protected final long fluidCacheCapacity;
     /** 4 个吸取来源开关（NBT 持久化）。 */
     private final boolean[] absorbEnabled = new boolean[AbsorbType.values().length];
     /**
@@ -273,6 +348,35 @@ public class CollectionCacheBlockEntity
 
     /** 距下次扫描的 tick 数。 */
     private int scanCooldown;
+    /** 本次读档被归一的旧版「数量门槛」条数（一次性存档迁移，读档结束写一条 INFO）。 */
+    private int legacyMarkerAmountsNormalized;
+
+    // ==================== 流体扫描游标（跨扫描续扫；只存内存，不写 NBT） ====================
+
+    /**
+     * 流体扫描游标：<b>本轮已经查过的位次</b>，取值 {@code [0, volume)}；{@code 0} = 从最小角开始新一轮。
+     * <p><b>为什么需要它</b>：旧实现每次扫描都从 {@code BlockPos.betweenClosed} 的<b>最小角</b>重新开始，
+     * 凑够 {@link #MAX_FLUID_BLOCKS_PER_SCAN} 个源方块就 {@code break} —— 体积大于 4096 时尾部区域
+     * <b>永远轮不到</b>（半径 25 = 51³ = 132651 格只覆盖前 3.1%；范围升级到 50 = 101³ 只覆盖 0.4%）。
+     * 游标把「这一轮扫到哪」跨扫描记住，下一次从断点继续，扫满一整轮才回到 0。</p>
+     * <p><b>不落盘</b>：不写进 {@code saveAdditional} —— 重启 / 卸载后从最小角重扫没有任何损失
+     * （只是多扫不到一轮的时间），也避免旧存档多出一个无意义的 NBT 键。</p>
+     */
+    private long fluidScanCursor;
+    /** 游标绑定的扫描几何（方块位置 + 三轴半径）的最后一次取值：任一项变化 ⇒ 游标归零（见 {@link #resyncFluidScanCursorIfMoved()}）。 */
+    private long fluidScanPos = Long.MIN_VALUE;
+    private int fluidScanRadiusX = -1;
+    private int fluidScanRadiusY = -1;
+    private int fluidScanRadiusZ = -1;
+    /** 本 tick 已经花掉的方块查询次数：同一 tick 内多次调用共享预算，上限仍是 {@link #MAX_FLUID_BLOCKS_PER_SCAN}。 */
+    private int fluidScanQueriesThisTick;
+    /** {@link #fluidScanQueriesThisTick} 归属的服务器 tick（换 tick 自动归零，不依赖 tickCache 的调用顺序）。 */
+    private long fluidScanBudgetTick = Long.MIN_VALUE;
+    /** 本 tick 游标窗口的扫描结果：同一 tick 的第二次调用直接复用，既不重复查询、也不重复推进游标。 */
+    private List<BlockPos> fluidScanWindow = List.of();
+    /** {@link #fluidScanWindow} 归属的服务器 tick。 */
+    private long fluidScanWindowTick = Long.MIN_VALUE;
+
     /** 标签过滤器「本轮没吸到东西」日志的节流计数（避免刷屏）。 */
     private int tagDebugCooldown;
     /** 流体标记「本轮没吸到东西」日志的节流计数（避免刷屏）。 */
@@ -283,8 +387,104 @@ public class CollectionCacheBlockEntity
     private boolean experienceCollectLogged;
     /** 经验来源「本轮没吸到东西」日志的节流计数（避免刷屏）。 */
     private int experienceDebugCooldown;
-    /** 「经验吸取开关关着、但半径内确实有经验球」这条提醒的节流（每 200 tick 至多一条）。 */
-    private int experienceOffWarnCooldown;
+    /**
+     * 「经验吸取开关关着、但半径内确实有经验球」这条提醒的节流状态。
+     * <p><b>2026-10-25（第 95 轮用户反馈第 3 条）</b>：旧实现是「每个被扫描轮次一条（约 10 秒）」，
+     * 用户实机日志里连刷了 <b>数小时</b>（{@code diag/pull_2310/2026-10-24-3.log} 2571 条同类；
+     * {@code latest.log} 另有 118 条）。现行口径见 {@link #noteExperienceOffButOrbsNearby(Level)}：
+     * <b>状态变化时一条 + 之后每 {@link #EXPERIENCE_OFF_WARN_INTERVAL_TICKS} 至多一条</b>。</p>
+     */
+    /** 「半径内有没有经验球」这次检查发生在哪个游戏 tick（{@code Long.MIN_VALUE} = 还没查过）。 */
+    private long experienceOffCheckedAt = Long.MIN_VALUE;
+    /** 上一次「经验开关关着 + 半径内有球」告警发生在哪个游戏 tick（{@code Long.MIN_VALUE} = 从未告警）。 */
+    private long experienceOffWarnedAt = Long.MIN_VALUE;
+    /** 当前是否处于「经验开关关着 + 半径内有球」这个状态（状态变化才重新告警）。 */
+    private boolean experienceOffWarned;
+
+    // ==================== 回写网络（缓存 → 网络）的游标与「为什么写不进去」诊断 ====================
+
+    /**
+     * 缓存 → 网络 的<b>轮转游标</b>（本次修复的核心，见 {@link #flushCacheToNetwork(Network)}）。
+     * <p>旧实现每 tick 都从第 0 格重新开始、并且<b>只要尝试过就扣处理预算</b>；默认没有速度升级时预算恒为 1，
+     * 于是「第 0 格的东西网络拒收（无对应存储 / 存储已满）」会把后面每一格永久饿死 ——
+     * 玩家看到的就是「东西明明在缓存里，却永远收不进网络」。游标保证跨 tick 轮转、不重复卡在同一格。</p>
+     */
+    private int flushCursor;
+    /** 流体缓存 → 网络 的轮转游标（按当前条目数取模；条目增删时自动收敛，绝不越界）。 */
+    private int fluidFlushCursor;
+    /** 连续「缓存里有该回写的内容、但本 tick 一个字节都没写进网络」的 tick 数。 */
+    private int flushStallTicks;
+    /** 上一次「写不进网络」告警的游戏 tick（{@code -1} = 从未告警）。 */
+    private long flushWarnedAt = -1L;
+    /** 上一次告警的原因分类（{@link #FLUSH_OK} 等）：用于「状态变化时一条」。 */
+    private int flushWarnKind;
+    /** 节点未激活但缓存里有待回写内容，连续了多少 tick。 */
+    private int inactiveWorkTicks;
+    /** 上一次「节点未激活」告警的游戏 tick（{@code -1} = 从未告警）。 */
+    private long inactiveWarnedAt = -1L;
+    /** 上一次「节点未激活」告警的原因分类。 */
+    private int inactiveWarnKind;
+
+    // ==================== 第 96 轮：「哪条路径坏了」的合并诊断 ====================
+    //
+    // 用户对 beta.3 的原话是「归流缓存期现在还是无法与任何的物品」——这句话本身不指向任何一条具体路径：
+    // 界面放入 / 界面取出 / 世界掉落物 / 相邻容器 / 世界流体 / 经验 / 回写网络，任何一条断了看起来都一样。
+    // 因此这里按「窗口内这条路径到底有没有真的搬动过资源」记账，每 COLLECT_DIAG_INTERVAL_TICKS
+    // （5 秒）合并成**一条** `[rscc-collect]` INFO：只在**路径集合发生变化**时才写
+    // （状态变化才记，绝不刷屏）。玩家下次导出日志，一眼就能看出是哪一段没动。
+
+    /** 诊断窗口长度（tick）：100 tick = 5 秒。 */
+    private static final int COLLECT_DIAG_INTERVAL_TICKS = 100;
+    /** 路径位：界面上把物品/流体放进缓存（普通左键单击或拖入）。 */
+    public static final int PATH_UI_PUT = 1;
+    /** 路径位：界面上把物品从缓存取出。 */
+    public static final int PATH_UI_TAKE = 1 << 1;
+    /** 路径位：界面上写匹配标记（第 95 轮起 Shift+左键的默认行为）。 */
+    public static final int PATH_UI_MARK = 1 << 2;
+    /** 路径位：从世界里的掉落物吸收。 */
+    public static final int PATH_DROP = 1 << 3;
+    /** 路径位：从相邻方块容器（漏斗 / 溜槽 / 管道）抽入。 */
+    public static final int PATH_CONTAINER = 1 << 4;
+    /** 路径位：从世界流体源方块吸收。 */
+    public static final int PATH_FLUID = 1 << 5;
+    /** 路径位：气体来源（目前没有世界来源，见 {@link #collectGas}）。 */
+    public static final int PATH_GAS = 1 << 6;
+    /** 路径位：吸收经验球 / 液态经验。 */
+    public static final int PATH_XP = 1 << 7;
+    /** 路径位：缓存 / 流体写回 RS 网络。 */
+    public static final int PATH_FLUSH = 1 << 8;
+    /** 全部路径位的掩码（用于把「一条都没动过」说清楚）。 */
+    private static final int PATH_ALL = (1 << 9) - 1;
+    /** 本窗口内动过的路径位。 */
+    private int collectDiagFlags;
+    /** 上个窗口的路径位（{@code -1} = 还没有基线，第一窗口一定写一条）。 */
+    private int collectDiagLastFlags = -1;
+    /** 距离下一次合并输出还有多少 tick。 */
+    private int collectDiagTicks;
+
+    // ---------- 「写不进网络」告警的口径 ----------
+    /** 同一原因下最多每 5 分钟（= 6000 tick）一条：状态变化时立刻一条，之后按这个间隔重复。 */
+    private static final int FLUSH_WARN_INTERVAL_TICKS = 6000;
+    /** 连续多少 tick 一个字节都写不进去才告警（10 秒）：存储短暂抖动 / 能量瞬时不足不该刷日志。 */
+    private static final int FLUSH_STALL_TICKS_BEFORE_WARN = 200;
+    /** 未激活（没电 / 红石停机 / 没接网络）持续多少 tick 才告警（10 秒）。 */
+    private static final int INACTIVE_WARN_TICKS_BEFORE_WARN = 200;
+    /** 告警分类：一切正常（本 tick 有进度或缓存里没有待回写内容）。 */
+    private static final int FLUSH_OK = 0;
+    /** 告警分类：有内容、网络拒收（insert 返回 0）。 */
+    private static final int FLUSH_REJECTED = 1;
+    /** 告警分类：网络没有存储组件（未接入 RS 网络 / 网络损坏）。 */
+    private static final int FLUSH_NO_NETWORK = 2;
+    /** 告警分类：节点未激活 —— 网络能量不足。 */
+    private static final int FLUSH_INACTIVE_ENERGY = 3;
+    /** 告警分类：节点未激活 —— 红石模式要求当前停机。 */
+    private static final int FLUSH_INACTIVE_REDSTONE = 4;
+
+    // ---------- 经验球「开关关着但附近有球」提醒的口径 ----------
+    /** 检查半径内有没有经验球的间隔（10 秒）：查实体不便宜，不能每 tick 查。 */
+    private static final int EXPERIENCE_OFF_CHECK_INTERVAL_TICKS = 200;
+    /** 同一状态下重复提醒的间隔（5 分钟）：状态变化时不受此限，立刻一条。 */
+    private static final int EXPERIENCE_OFF_WARN_INTERVAL_TICKS = 6000;
     /** 连续「半径内既没有经验球、也没有液态源」的轮数：用于判定「只是暂时没东西」还是「一直收不到」。 */
     private int experienceEmptyStreak;
     /** 工作状态剩余 tick（用于耗电档位，收集到资源或写入网络后刷新）。 */
@@ -296,11 +496,38 @@ public class CollectionCacheBlockEntity
     /** 载入存档 / 校验插件期间跳过副作用。 */
     private boolean loading;
     private boolean enforcing;
-    /** 状态是否已随掉落物 NBT 带走（战利品表已调用 {@link #saveStateForItem()}）：避免创造模式拆除时漏掉。 */
+    /**
+     * 历史兼容字段：旧版由 {@link #saveStateForItem()} 写入并置位。
+     * <p><b>现在没有任何读写点</b>：方块被拆时的内容物结算改由 {@code BlockContentReleaser}
+     * 直接走 {@code saveAdditional()}（掉落的方块物品带 BLOCK_ENTITY_TAG，放置时由
+     * {@code CollectionCacheBlock#setPlacedBy} → {@link #loadPlacedState} 回填）。
+     * 字段与 {@link #isStateDropped()} 保留只是不改变旧存档的结构，<b>不参与任何逻辑判定</b>。</p>
+     */
     private boolean stateDropped;
 
     public CollectionCacheBlockEntity(final BlockPos pos, final BlockState state) {
-        super(RS_Create_Compat.COLLECTION_CACHE_BLOCK_ENTITY.get(), pos, state, new CollectionCacheNetworkNode());
+        this(RS_Create_Compat.COLLECTION_CACHE_BLOCK_ENTITY.get(), pos, state,
+            CACHE_SLOTS, FLUID_CACHE_CAPACITY);
+    }
+
+    /**
+     * 供高级版使用的构造器（与 {@code SchematicLoaderBlockEntity} 的「基础版构造函数委托到
+     * protected 通用构造器」同一套手法）：方块实体类型与两种容量由子类注入，其余初始化逐字不变。
+     *
+     * @param blockEntityType  子类自己的方块实体类型（必须，否则 {@code getType()} 会指回基础版）
+     * @param cacheSlots       单机缓存区格数
+     * @param fluidCacheCapacity 单机流体 / 气体缓存容量（mB）
+     */
+    protected CollectionCacheBlockEntity(final BlockEntityType<?> blockEntityType,
+                                         final BlockPos pos,
+                                         final BlockState state,
+                                         final int cacheSlots,
+                                         final long fluidCacheCapacity) {
+        super(blockEntityType, pos, state, new CollectionCacheNetworkNode());
+        this.cacheSlots = Math.max(1, cacheSlots);
+        this.fluidCacheCapacity = Math.max(0L, fluidCacheCapacity);
+        this.cache = new SimpleContainer(this.cacheSlots);
+        this.fluidCache = new MultiFluidCache(this.fluidCacheCapacity);
         // 默认只开物品吸取：流体吸取会消耗世界方块，必须由玩家显式开启
         for (int i = 0; i < absorbEnabled.length; i++) {
             absorbEnabled[i] = false;
@@ -439,14 +666,147 @@ public class CollectionCacheBlockEntity
     }
 
     /**
+     * 三轴扫描半径对应的<b>世界包围盒</b> —— 本机「到底在扫哪片空间」的<b>唯一几何口径</b>。
+     *
+     * <h2>为什么必须是一个唯一入口</h2>
+     * <p>旧实现里「实体查询」与「流体源游标」各写了一遍
+     * {@code new AABB(worldPosition).inflate(getScanRadiusX(), getScanRadiusY(), getScanRadiusZ())}；
+     * 本轮新增的「查看吸取范围」框若再写第三遍，任何一处改了另外两处都不会红 ——
+     * 玩家看到的就是「框画在这里、实际吸那里」。现在三处共用本方法：</p>
+     * <ul>
+     *     <li>{@link #itemEntitiesInRadius} / {@link #experienceOrbsInRadius}：实体查询的范围；</li>
+     *     <li>{@link #fluidSourcesInRadius}：游标按 {@code 2r+1} 展平，扫的正是本盒子里的每一格；</li>
+     *     <li>{@link #sendCollectionRangeOutline}：S2C「查看范围」框的几何。</li>
+     * </ul>
+     *
+     * <p><b>别和范围充电器混用口径</b>：充电器的 {@code rangeX/Y/Z} 是<b>直径</b>（扫描时
+     * {@code range / 2}）；归流缓存仓的 {@code getScanRadiusX/Y/Z} 是<b>半径</b>，AABB 直接
+     * {@code inflate(rx, ry, rz)}，即 {@code x ∈ [pos.x - rx, pos.x + rx]}（{@code 2r+1} 格）。</p>
+     */
+    protected AABB collectionRangeBox() {
+        return new AABB(worldPosition)
+            .inflate(getScanRadiusX(), getScanRadiusY(), getScanRadiusZ());
+    }
+
+    /**
+     * 客户端点了「查看吸取范围」：把本机<b>也就是现在真正在扫的几何</b>组一份快照回给该玩家。
+     *
+     * <h2>为什么由服务端算、而不是客户端自己算</h2>
+     * <p>客户端菜单是注册期二参工厂重建的（{@code block == null}）⇒ 拿不到方块坐标，更读不到
+     * 三轴半径（那三个值虽然在 {@code ContainerData} 里，但「框的几何」若由客户端二次换算，
+     * 就又多出一份可能与服务端漂移的公式）。这里直接把
+     * {@link #collectionRangeBox()} 换算成方块区域下发，客户端只画不算。</p>
+     *
+     * <h2>四种口径（由 {@link #collectionRangeMode()} 决定；客户端只按它画）</h2>
+     * <ul>
+     *     <li>{@code MODE_RADIUS}（<b>只有基础版</b>）：下发<b>一个</b>扫描盒
+     *     （{@code collectionRangeBox()}）；</li>
+     *     <li>{@code MODE_AREAS}（高级版区域生效）：下发已去重的若干区域（区域<b>取代</b>半径）；</li>
+     *     <li>{@code MODE_NO_AREA}（高级版：区域为空 / 维度不符）：<b>空表</b>，客户端一个框都不画
+     *     —— 此时 {@code absorbAll} 整段跳过，本机一点不吸；</li>
+     *     <li>{@code MODE_NO_SELECTOR}（高级版：没装区域选定器）：同样<b>空表不画框</b>
+     *     —— 高级版没有选定器时也不吸（{@link #areaAbsorptionBlocked()} 恒真）。</li>
+     * </ul>
+     * <p>后两种都<b>绝不</b>降级成半径框：画半径框等于告诉玩家「这片地正在被吸」，而代码里
+     * 一个都不吸（用户最反感的「界面说一套、代码做一套」）。</p>
+     * <p><b>只读</b>：不改半径 / 不改区域 / 不触发扫描，也不写存档；调用方（菜单）已先校验
+     * {@code stillValid(player)}（维度、距离、方块实体仍是它自己）。</p>
+     */
+    public void sendCollectionRangeOutline(final ServerPlayer player, final int containerId) {
+        int mode = collectionRangeMode();
+        List<Area> areas = List.of();
+        if (mode == ShowCollectionRangePacket.MODE_RADIUS) {
+            final Area box = areaOfBox(collectionRangeBox());
+            areas = box == null ? List.of() : List.of(box);
+        } else if (mode == ShowCollectionRangePacket.MODE_AREAS) {
+            areas = collectionRangeAreas();
+            if (areas.isEmpty()) {
+                // 防御：口径说「画区域」却给不出区域（配置把上限调小 / 区域刚好被清空）
+                // ⇒ 按「区域不可用」回，绝不退回半径框（那会谎报「正在吸半径范围」）。
+                mode = ShowCollectionRangePacket.MODE_NO_AREA;
+            }
+        }
+        PacketDistributor.sendToPlayer(player,
+            new ShowCollectionRangePacket(containerId, mode, areas));
+    }
+
+    /**
+     * 「查看吸取范围」的<b>口径</b>（服务端算，客户端只按它决定画什么）。
+     *
+     * <p>基础版恒 {@link ShowCollectionRangePacket#MODE_RADIUS}：它的吸收范围就是
+     * {@link #collectionRangeBox()}（三轴半径膨胀盒，与实体 / 流体扫描逐字同源）。</p>
+     * <p>高级版覆写为 {@code MODE_AREAS} / {@code MODE_NO_AREA} / {@code MODE_NO_SELECTOR}
+     * —— <b>永远不返回 MODE_RADIUS</b>，因为它的 {@link #areaAbsorptionBlocked()} 在任何
+     * 「区域不可用」的情形下都返回 {@code true}（{@code absorbAll} 整段跳过）：高级版<b>不存在</b>
+     * 「按半径吸」的状态，画半径框就是谎报。</p>
+     */
+    protected int collectionRangeMode() {
+        return ShowCollectionRangePacket.MODE_RADIUS;
+    }
+
+    /**
+     * {@code MODE_AREAS} 口径下要画的区域（基础版用不到；高级版覆写成已去重的选定区域）。
+     * <p>返回空表 ⇒ 发送方会把它降级成 {@code MODE_NO_AREA}（见 {@link #sendCollectionRangeOutline}）。</p>
+     */
+    protected List<Area> collectionRangeAreas() {
+        return List.of();
+    }
+
+    /**
+     * 包围盒 → 方块闭区间（{@code Area}）：S2C 快照用的坐标形态。
+     *
+     * <p>{@code Area#toAabb()} 是 {@code [min, max + 1)}，与 {@code new AABB(pos).inflate(...)}
+     * 的上下界逐位一致（inflate 之后上下界本来就是整数格边），因此客户端
+     * {@code toAabb()} 画出来的盒子 = 服务端扫描用的盒子，一像素不差。</p>
+     *
+     * <p>坐标先按世界边界 {@code Area.WORLD_LIMIT} 夹一次：创造范围升级可以把半径撑到
+     * {@code Integer.MAX_VALUE - 1}，直接写进 {@code Area} 会在 int 上回绕成另一个象限的坐标
+     * （<b>框会画到世界的另一边</b>）。夹紧后框仍覆盖玩家能看到的那一段，
+     * 而不是画一个坐标错乱的框。</p>
+     */
+    @Nullable
+    private static Area areaOfBox(@Nullable final AABB box) {
+        if (box == null) {
+            return null;
+        }
+        return new Area(
+            clampWorldCoord(Math.floor(box.minX)),
+            clampWorldCoord(Math.floor(box.minY)),
+            clampWorldCoord(Math.floor(box.minZ)),
+            clampWorldCoord(Math.ceil(box.maxX) - 1.0D),
+            clampWorldCoord(Math.ceil(box.maxY) - 1.0D),
+            clampWorldCoord(Math.ceil(box.maxZ) - 1.0D)
+        );
+    }
+
+    /** 世界坐标夹到 {@code [-WORLD_LIMIT, WORLD_LIMIT]}（NaN / 极端值一律不产生回绕坐标）。 */
+    private static int clampWorldCoord(final double value) {
+        if (Double.isNaN(value)) {
+            return 0;
+        }
+        final double limit = (double) Area.WORLD_LIMIT;
+        return (int) Math.max(-limit, Math.min(limit, value));
+    }
+
+    /**
      * 扫描间隔：速度升级与收集范围都会让它变短（数值越小 = 吸取越快）。
-     * <p>范围每 +2 格提升一档频率，与速度升级相乘（最高仍是 1 tick 一次）。</p>
+     * <p><b>为什么先按范围降一档、再按速度做移位</b>（用户 1A 拍板：接受归流缓存仓扫描变快）：
+     * 旧写法是倒数曲线 {@code base / ((1 + 速度数) * 半径档)}，是全工程唯一一条 {@code base / f(n)} 形状的公式
+     * （I2 明确禁止这种形状：一旦分母被改动为 0 就是崩溃 / 除零），而且<b>永远到不了 1 tick</b>
+     * （半径 1、满级 6：{@code 20/7 = 2}，「满级了还是每 2 tick 才扫一次」）。
+     * 现在改成 {@code max(1, (base / 半径档) >> 速度数)}：无除法、满级正好 1 tick、
+     * 与充电器/保持器的 {@code <<} 同一套移位直觉（见 {@link RsccRateLimiter}）。
+     * <p>数值对照（半径 1）：改前 {@code 20,10,6,5,4,3,2} → 改后 {@code 20,10,5,2,1,1,1}；
+     * 半径 5（档位 3）：改前 {@code 6,3,2,1,1,1,1} → 改后 {@code 6,3,1,1,1,1,1}。
+     * 两个写法的公共部分来自恒等式 {@code floor(floor(x/r)/2^n) == floor(x/(r*2^n))}，
+     * 因此低速度段（{@code 2^n} 还没超过商的量级时）逐格相同，差异只出现在高速度段
+     * —— 那正是「用户 1A 接受的变快」。</p>
      */
     public int getScanInterval() {
         final int base = Math.max(1, Config.collectionCacheScanInterval);
-        final int speedFactor = 1 + countUpgrades(SPEED_UPGRADE);
-        final int radiusFactor = 1 + (getCollectRadius() - 1) / 2;
-        return Math.max(1, base / (speedFactor * radiusFactor));
+        // 半径档位：范围每 +2 格提升一档。分母显式夹到 >= 1（旧形状遗留下来的除法，这里补上 I2 的保证）。
+        final int radiusFactor = Math.max(1, 1 + (getCollectRadius() - 1) / 2);
+        return RsccRateLimiter.intervalTicks(Math.max(1, base / radiusFactor), countUpgrades(SPEED_UPGRADE));
     }
 
     @Override
@@ -573,43 +933,120 @@ public class CollectionCacheBlockEntity
     }
 
     /**
+     * 阻塞名单一次编辑的结果（第 117 轮）。
+     * <p>为什么要有枚举而不是 boolean：上层（{@code SetCollectionBlockedPacket#handle}）必须能区分
+     * 「什么都没变」（幂等，不该提示）与「<b>因为名单已满被整体拒绝</b>」（必须提示玩家，否则就是
+     * 点了没反应 —— 本工程硬规则）。两种拒绝还要给不同的上限值（id 名单 vs 标签名单）。</p>
+     */
+    public enum BlockEditResult {
+        /** 真的改了（加入 / 移除至少一条）。 */
+        CHANGED,
+        /** 合法请求但什么都没变（已经处于目标状态 / 空请求）。 */
+        UNCHANGED,
+        /** 具体 id 名单已满（上限 {@link CollectionBlockedLimits#MAX_BLOCKED_IDS}），<b>整条请求被拒、一格没写</b>。 */
+        REJECTED_IDS_FULL,
+        /** 按标签名单已满（上限 {@link CollectionBlockedLimits#MAX_BLOCKED_TAGS}），<b>整条请求被拒、一格没写</b>。 */
+        REJECTED_TAGS_FULL
+    }
+
+    /**
+     * 阻塞名单的<b>唯一写入口</b>（第 117 轮）：同时处理「具体资源 id」与「按标签」两个名单，
+     * 带条数上限，且<b>整体原子</b> —— 只要有一项放不下，就什么都不写。
+     *
+     * <p>三条语义（与 {@link CollectionBlockedLimits} 的类注释同一口径）：</p>
+     * <ol>
+     *     <li><b>只约束增长</b>：{@code blocked = false}（解除阻塞）永远允许，无论名单多大；
+     *     旧存档里超过上限的名单靠「删一些」恢复，绝不在读档时被截断。</li>
+     *     <li><b>幂等不算超限</b>：已在名单里的条目重复阻塞必须继续成功 —— 否则玩家点第二下会看到
+     *     「名单已满」这种莫名其妙的话。</li>
+     *     <li><b>拒绝 = 一格不写</b>：id 放得下但标签放不下时，id 也不写。半写状态会让
+     *     「界面上显示的和提示说的」对不上。</li>
+     * </ol>
+     *
+     * @param fluid   {@code true} = 流体/气体名单，{@code false} = 物品名单（两个名单各自独立计数）
+     * @param id      具体资源注册名；{@code null} = 本次只动标签名单
+     * @param blocked {@code true} = 阻塞（增长），{@code false} = 解除（只减不增）
+     * @param tags    按标签阻塞的标签集合；{@code null} / 空 = 不动标签名单
+     */
+    public BlockEditResult applyBlockedEdit(final boolean fluid, @Nullable final ResourceLocation id,
+                                            final boolean blocked,
+                                            @Nullable final List<ResourceLocation> tags) {
+        final List<ResourceLocation> cleanTags = sanitizeBlockedTags(tags);
+        if (id == null && cleanTags.isEmpty()) {
+            return BlockEditResult.UNCHANGED;
+        }
+        final Set<ResourceLocation> idSet = fluid ? blockedFluids : blockedItems;
+        final Set<ResourceLocation> tagSet = fluid ? blockedFluidTags : blockedItemTags;
+        if (blocked) {
+            // 先判 id 名单：放不下就整体拒绝，绝不先写 id 再回头判标签
+            if (id != null && !CollectionBlockedLimits.fits(
+                idSet, List.of(id), CollectionBlockedLimits.MAX_BLOCKED_IDS)) {
+                return BlockEditResult.REJECTED_IDS_FULL;
+            }
+            // 再判标签名单：fits 已把「已存在的条目不占新名额」算进去
+            if (!CollectionBlockedLimits.fits(
+                tagSet, cleanTags, CollectionBlockedLimits.MAX_BLOCKED_TAGS)) {
+                return BlockEditResult.REJECTED_TAGS_FULL;
+            }
+        }
+        boolean changed = false;
+        if (id != null) {
+            changed |= blocked ? idSet.add(id) : idSet.remove(id);
+        }
+        for (final ResourceLocation tag : cleanTags) {
+            changed |= blocked ? tagSet.add(tag) : tagSet.remove(tag);
+        }
+        if (changed) {
+            setChanged();
+            return BlockEditResult.CHANGED;
+        }
+        return BlockEditResult.UNCHANGED;
+    }
+
+    /**
+     * 把客户端给的标签集合洗成「可以落盘的那种」：跳过 {@code null}、跳过超长
+     * （{@link CollectionBlockedLimits#MAX_TAG_NAME_LENGTH}）、去重、保序。
+     * <p>超长标签不落盘的理由：它不可能存在于任何注册表（AI 生成的 {@code tag} 在
+     * {@link TagKey#create} 里也永远匹配不到东西），但会按原样进 NBT 并随同步包回发 ——
+     * 纯负担。这里是唯一写入口，所以只判这一处即可，解码层不必重复判。</p>
+     */
+    private static List<ResourceLocation> sanitizeBlockedTags(@Nullable final List<ResourceLocation> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return List.of();
+        }
+        final List<ResourceLocation> out = new ArrayList<>(Math.min(tags.size(), CollectionBlockedLimits.MAX_TAGS_PER_PACKET));
+        for (final ResourceLocation tag : tags) {
+            if (tag == null || tag.toString().length() > CollectionBlockedLimits.MAX_TAG_NAME_LENGTH) {
+                continue;
+            }
+            if (!out.contains(tag)) {
+                out.add(tag);
+            }
+            if (out.size() >= CollectionBlockedLimits.MAX_TAGS_PER_PACKET) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
      * 设置某资源的阻塞开关（服务端权威；界面经
      * {@code SetCollectionBlockedPacket} 调用）。返回是否真的发生了改变。
+     * <p>第 117 轮起委托 {@link #applyBlockedEdit}，因此同样受条数上限约束（超限 = 拒绝 + 返回 false）。</p>
      */
     public boolean setBlocked(final boolean fluid, @Nullable final ResourceLocation id, final boolean blocked) {
-        if (id == null) {
-            return false;
-        }
-        final Set<ResourceLocation> target = fluid ? blockedFluids : blockedItems;
-        final boolean added = blocked ? target.add(id) : target.remove(id);
-        if (added) {
-            setChanged();
-        }
-        return added;
+        return applyBlockedEdit(fluid, id, blocked, null) == BlockEditResult.CHANGED;
     }
 
     /**
      * 设置一组标签的阻塞开关（服务端权威；供「按标签注册的匹配条目」使用）。
      * <p>与 {@link #setBlocked} 并列：两个名单都参与 {@link #isBlockedStack} / {@link #isBlockedFluid}
      * 的判定。空集合表示「不动标签名单」（保持既有行为）。返回是否真的发生了改变。</p>
+     * <p>第 117 轮起委托 {@link #applyBlockedEdit}，因此同样受条数上限约束（超限 = 拒绝 + 返回 false）。</p>
      */
     public boolean setBlockedTags(final boolean fluid, @Nullable final List<ResourceLocation> tags,
                                   final boolean blocked) {
-        if (tags == null || tags.isEmpty()) {
-            return false;
-        }
-        final Set<ResourceLocation> target = fluid ? blockedFluidTags : blockedItemTags;
-        boolean changed = false;
-        for (final ResourceLocation tag : tags) {
-            if (tag == null) {
-                continue;
-            }
-            changed |= blocked ? target.add(tag) : target.remove(tag);
-        }
-        if (changed) {
-            setChanged();
-        }
-        return changed;
+        return applyBlockedEdit(fluid, null, blocked, tags) == BlockEditResult.CHANGED;
     }
 
     /** 翻转某资源的阻塞开关，返回翻转后的状态。 */
@@ -666,6 +1103,14 @@ public class CollectionCacheBlockEntity
         tag.put(TAG_BLOCKED_FLUID_TAGS, fluidTags);
     }
 
+    /**
+     * 读档：<b>不判上限、原样读回</b>（第 117 轮）。
+     * <p>旧存档（或本轮之前被改包撑大的存档）里四个集合可能已经超过
+     * {@link CollectionBlockedLimits} 的上限。这里截断就等于「玩家明确说过不要回流的那批资源
+     * 突然又开始回流」—— 属于静默改变语义，比「超限的名单暂时不能再增长」严重得多。
+     * 恢复路径是让玩家删几条（删除永远允许）；这是第 116 轮单元样板库复核定下的同一条规则
+     * （读档不截断、任何增长不许越限）。</p>
+     */
     private void loadBlocked(final CompoundTag tag) {
         blockedItems.clear();
         blockedFluids.clear();
@@ -975,10 +1420,29 @@ public class CollectionCacheBlockEntity
      * <ol>
      *     <li>该物品已标记过 → 不新增、不覆盖，直接返回 false；</li>
      *     <li>指定下标已被别的条目占用 → 改放到第一个空位；容量已满（{@link #MATCH_CAPACITY}）则返回 false；</li>
-     *     <li>标记数量默认取手持堆叠数量（至少 1），之后可在条目编辑界面修改。</li>
+     *     <li>标记数量默认取<b>1</b>（见 {@link #tryAddMarker(int, ItemStack, long)} 的注释）。</li>
      * </ol>
      */
     public boolean tryAddMarker(final int index, final ItemStack stack) {
+        return tryAddMarker(index, stack, MIN_UI_MARK_AMOUNT);
+    }
+
+    /**
+     * 同上，显式指定需求数量（{@code amount}）。
+     *
+     * <h2>第 96 轮：界面写标记的默认数量从「手持件数」改成 <b>1</b></h2>
+     * <p>用户对 beta.3 的原话是「归流缓存期现在还是无法与任何的物品」——查下来这是一条真实原因：
+     * 这个方块的 {@code amount} 是<b>「凑够才动手」的硬门槛</b>（见
+     * {@link #absorbMatchingItems(List, java.util.function.Predicate, long)}），
+     * 而第 95 轮把 Shift+左键改成「写标记」之后，写进去的数量是<b>那一堆的件数</b>。
+     * 于是「Shift 点一下手里 64 个鸡蛋」= 要求半径内同时出现 64 个鸡蛋才会吸——
+     * 对农场、逐件投料这类来源，数量永远凑不满 ⇒ <b>件数少的资源一件都收不进去</b>，
+     * 玩家看到的就是「跟任何物品都无法交互」。</p>
+     * <p>现在的口径：界面写标记默认 {@code amount = }{@link MarkerEntry#MIN_ABSORB_DEMAND}（= 1）
+     * ⇒「有就收」；需要「凑够 N 件再收」的老口径仍然保留，玩家可以在条目标记界面里把数量改成 N
+     * （{@code setMarkerConfig} 会把门槛原样写进条目，吸收侧一个字都没改）。</p>
+     */
+    public boolean tryAddMarker(final int index, final ItemStack stack, final long amount) {
         if (stack.isEmpty()) {
             return false;
         }
@@ -994,9 +1458,92 @@ public class CollectionCacheBlockEntity
             return false;
         }
         final Level level = getLevel();
-        setMarker(target, MarkerEntry.item(stack, Math.max(1, stack.getCount()), false,
-            level == null ? null : level.registryAccess()));
+        final MarkerEntry candidate = MarkerEntry.item(stack, Math.max(MIN_UI_MARK_AMOUNT, amount),
+            false, level == null ? null : level.registryAccess());
+        // 第 114 轮：体积预算。单条过大（成书 / 带内容物的容器）或「整表 + 这一条」超过总量上限都不写。
+        // 返回 false 而不是只打日志：调用方（界面）要靠它给「为什么没写进去」的提示。
+        if (wouldExceedMarkerBudget(candidate)) {
+            return false;
+        }
+        setMarker(target, candidate);
         return true;
+    }
+
+    /**
+     * 第 114 轮：<b>体积预算</b>（权威常量见 {@link MarkerBudget}）。
+     * <p>三层入口都收敛到这一个判定：单条上限 {@link MarkerBudget#MAX_ENTRY_BYTES}
+     * + 整表上限 {@link MarkerBudget#MAX_TOTAL_BYTES}（按该机器<b>整个匹配区</b>估算 ——
+     * 匹配区是随方块实体存档 / 随菜单同步的一整份数据）。</p>
+     * <p><b>只拦新增 / 放大</b>：读档、旧档迁移写既有数据不走这里（那些路径的原则是不删玩家数据）。</p>
+     */
+    private boolean wouldExceedMarkerBudget(@Nullable final MarkerEntry candidate) {
+        if (MarkerBudget.isEntryTooBig(candidate)) {
+            return true;
+        }
+        return MarkerBudget.isTotalTooBig(markerTableBytes() + MarkerBudget.entryBytes(candidate, 0));
+    }
+
+    /** 当前匹配区所有标记编码后的字节合计（诊断 / 自检用；{@link MarkerBudget} 的口径）。 */
+    public int markerTableBytes() {
+        int total = 0;
+        for (int i = 0; i < markers.size(); i++) {
+            total += MarkerBudget.entryBytes(markers.get(i), i);
+        }
+        return total;
+    }
+
+    /**
+     * 菜单专用入口：把一堆物品写成一条 ghost 匹配标记（<b>不消耗、不移动</b>该堆物品），
+     * 并把失败原因分类返回 —— 界面据此给玩家不同提示（「点一下没反应」是最糟的反馈）。
+     * <p>语义与 {@link #tryAddMarker(int, ItemStack)} 完全一致，只是把「为什么失败」暴露出来。</p>
+     * <p><b>数量一律写 {@link #MIN_UI_MARK_AMOUNT}（= 1，有就收）</b>：见
+     * {@link #tryAddMarker(int, ItemStack, long)} 的第 96 轮注释 —— 用「手持件数」当门槛会让
+     * 逐件投料的资源永远收不进来。</p>
+     */
+    public MarkerAddResult addMarkerForUi(final ItemStack stack) {
+        if (stack.isEmpty()) {
+            return MarkerAddResult.INVALID;
+        }
+        final ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        if (id == null) {
+            return MarkerAddResult.INVALID;
+        }
+        if (isMarkerPresent(false, id, -1)) {
+            return MarkerAddResult.DUPLICATE;
+        }
+        if (isMarkerCoveredByTagFilter(false, id)) {
+            return MarkerAddResult.COVERED_BY_TAG;
+        }
+        // 第 114 轮：体积预算。界面要能区分「匹配区满」和「这个物品数据太大」，
+        // 否则玩家看到的都是「点了没反应」。
+        final Level budgetLevel = getLevel();
+        final MarkerEntry budgetCandidate = MarkerEntry.item(stack, MIN_UI_MARK_AMOUNT, false,
+            budgetLevel == null ? null : budgetLevel.registryAccess());
+        if (wouldExceedMarkerBudget(budgetCandidate)) {
+            return MarkerAddResult.TOO_COMPLEX;
+        }
+        return tryAddMarker(-1, stack, MIN_UI_MARK_AMOUNT) ? MarkerAddResult.OK : MarkerAddResult.FULL;
+    }
+
+    /** 写入 ghost 匹配标记的结果（供界面提示；{@link #OK} 以外都是「没写进去」）。 */
+    public enum MarkerAddResult {
+        /** 已写入。 */
+        OK,
+        /** 这一种物品已经在匹配区里了（同一物品只允许一条标记）。 */
+        DUPLICATE,
+        /** 已被某条「按标签匹配」的条目覆盖，无需再单独标记。 */
+        COVERED_BY_TAG,
+        /** 匹配区容量 {@link #MATCH_CAPACITY} 已满。 */
+        FULL,
+        /** 空堆 / 无法取到注册名（理论上不该发生）。 */
+        INVALID,
+        /**
+         * 第 114 轮：<b>这个物品的数据太大</b>（成书 / 带内容物的容器 / 大 NBT 物品），
+         * 或者「整张标记表 + 这一条」会超过 {@link MarkerBudget#MAX_TOTAL_BYTES}。
+         * <p>单独一个分类是为了让界面说人话：以前这种情况会落到 {@link #FULL}（「匹配区满」），
+         * 玩家会去删标记却永远腾不出空间 —— 明明只标了两三条。</p>
+         */
+        TOO_COMPLEX
     }
 
     /** 尝试在指定下标标记流体/气体（ghost，不消耗）。 */
@@ -1071,8 +1618,20 @@ public class CollectionCacheBlockEntity
             return;
         }
         final CompoundTag effectiveNbt = fluid || nbt == null ? new CompoundTag() : nbt;
-        setMarker(index, new MarkerEntry(fluid, id, effectiveNbt, Math.max(1L, amount),
-            matchNbt, effectiveTags));
+        final MarkerEntry candidate = new MarkerEntry(fluid, id, effectiveNbt, Math.max(1L, amount),
+            matchNbt, effectiveTags);
+        // 第 114 轮：这是<b>服务端权威入口</b>，而 {@code nbt} 是客户端原样回传的不透明负载
+        // （见 {@code SetCollectionMarkerConfigPacket}）。不校验的话，改包 / 旧客户端回传一条超大 nbt
+        // 就能绕过所有界面拦截，把方块实体的同步数据撑到 MB 级。这里与界面入口同一套预算。
+        if (wouldExceedMarkerBudget(candidate)) {
+            LOGGER.warn("[rs_create_compat] 归流缓存仓 @{}：拒绝写入第 {} 条标记 {}"
+                    + "（数据组件 {} B，单条上限 {} B / 整表上限 {} B）",
+                worldPosition, index, id,
+                MarkerBudget.entryBytes(candidate, 0), MarkerBudget.MAX_ENTRY_BYTES,
+                MarkerBudget.MAX_TOTAL_BYTES);
+            return;
+        }
+        setMarker(index, candidate);
     }
 
     /**
@@ -1256,6 +1815,168 @@ public class CollectionCacheBlockEntity
 
     // ==================== 收集 / 入网 ====================
 
+    /**
+     * 每 tick 的网络节点钩子（RS 的 {@code doWork()} 就是节点被 tick 的入口：
+     * {@code AbstractBaseNetworkNodeContainerBlockEntity#doWork()} ⇒ {@code ticker.tick(mainNetworkNode)}，
+     * 而 {@code NetworkNodeBlockEntityTicker#tick} 会<b>无条件</b>先更新激活态、再调用 {@code doWork()}）。
+     *
+     * <p><b>为什么必须在这里加诊断（第 95 轮用户反馈第 12 条）</b>：节点<b>未激活</b>时
+     * {@link CollectionCacheNetworkNode#doWork()} 直接 return ⇒ {@link #tickCache} 一次都不会跑，
+     * 于是既不吸收、也不回写，而且<b>一句日志都没有</b>。玩家看到的就是「机器摆着，东西不动」。
+     * 未激活有三种成因（网络没电 / 红石模式停机 / 根本没接进 RS 网络），必须能区分开，
+     * 否则「无法吸收」永远只能靠猜。所以这里在 {@code super.doWork()}（内部已经更新完激活态）之后
+     * 按状态补一条 INFO：状态变化时立刻一条，之后同一原因每
+     * {@link #FLUSH_WARN_INTERVAL_TICKS}（5 分钟）至多一条；重新激活时补一条恢复日志。</p>
+     *
+     * <p><b>本方法不改任何行为</b>：未激活时该不干活还是不干活（这是 RS 的能量语义，不是缺陷）。</p>
+     */
+    @Override
+    public void doWork() {
+        super.doWork();
+        // 第 96 轮：`[rscc-collect]` 合并诊断。放在 super 之后、无条件执行 —— 未激活 / 没接网络时
+        // 也必须能写出「一条路径都没动过」那一行，否则「机器摆着不动」就只能靠猜。
+        flushCollectDiagnostic();
+        final Level level = getLevel();
+        if (level == null || level.isClientSide()) {
+            return;
+        }
+        if (getNode().isActive()) {
+            if (inactiveWarnKind != FLUSH_OK) {
+                LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：节点已重新激活，恢复吸收 / 回写"
+                        + "（此前连续 {} tick 未激活，原因：{}）。",
+                    worldPosition, inactiveWorkTicks, flushReasonName(inactiveWarnKind));
+                inactiveWarnKind = FLUSH_OK;
+                inactiveWarnedAt = -1L;
+            }
+            inactiveWorkTicks = 0;
+            return;
+        }
+        // 未激活：只有「本机本该在干活」（缓存里有待回写内容，或至少开了某个吸取开关）才值得提醒，
+        // 否则一片空地上摆着的机器每 5 分钟说一句就是噪声。
+        if (!hasFlushableContent() && !anyAbsorbEnabled()) {
+            inactiveWorkTicks = 0;
+            inactiveWarnKind = FLUSH_OK;
+            inactiveWarnedAt = -1L;
+            return;
+        }
+        if (inactiveWorkTicks < Integer.MAX_VALUE) {
+            inactiveWorkTicks++;
+        }
+        if (inactiveWorkTicks < INACTIVE_WARN_TICKS_BEFORE_WARN) {
+            return;
+        }
+        final int kind = classifyInactiveReason(level);
+        final long now = level.getGameTime();
+        final boolean stateChanged = kind != inactiveWarnKind;
+        final boolean cooledDown = inactiveWarnedAt < 0L || now - inactiveWarnedAt >= FLUSH_WARN_INTERVAL_TICKS;
+        if (!stateChanged && !cooledDown) {
+            return;
+        }
+        inactiveWarnKind = kind;
+        inactiveWarnedAt = now;
+        LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：节点连续 {} tick 未激活 ⇒ 既不会吸收世界里的资源、"
+                + "也不会把缓存写回网络。原因：{}。缓存里现有 {} 件（{} 堆）物品 / {} mB 流体，"
+                + "它们安全留在本机缓存、不会丢失；恢复供电 / 红石信号 / 接回网络后会自动继续。"
+                + "（同一原因每 5 分钟最多提醒一次）",
+            worldPosition, inactiveWorkTicks, flushReasonName(kind),
+            pendingItemTotal(), pendingItemStacks(), pendingFluidTotal());
+    }
+
+    /**
+     * 记一笔「这条路径在本诊断窗口内<b>真的</b>搬动过资源」。
+     * <p>只置位、不写日志 —— 日志由 {@link #flushCollectDiagnostic()} 每 5 秒合并成一条。
+     * 调用点全是「资源真的动了」的分支（数量 &gt; 0），因此「日志里没出现某条路径」
+     * 等价于「这条路 5 秒内一件都没搬动」，这正是玩家报「什么都收不进去」时最需要的信息。</p>
+     */
+    public void noteCollectPath(final int path) {
+        collectDiagFlags |= path;
+    }
+
+    /**
+     * 把本窗口的路径位集合合并成<b>一条</b> {@code [rscc-collect]} INFO（状态变化才写）。
+     *
+     * <h2>为什么是「状态变化才写」而不是每 5 秒一条</h2>
+     * <p>一台正常工作的机器路径集合是稳定的（比如一直在 {@code 掉落物 + 回写网络}），
+     * 每 5 秒一条就是 17280 条/天，正是用户反复投诉的刷屏。现在只有<b>集合变了</b>
+     * （某条路径开始工作 / 停止工作）才写一条；第一次一定写，便于确认诊断本身在跑。</p>
+     *
+     * <p>行内同时给出「为什么可能一条都没动」的全部前置条件：节点激活态 / 是否接入网络 /
+     * 标记条数 / 四个吸取开关 / 缓存里待回写的量 —— 这样玩家把日志贴回来就能定位到
+     * 「界面没放进去」「没标记」「没开开关」「没接网络」「网络拒收」中的哪一种。</p>
+     */
+    private void flushCollectDiagnostic() {
+        if (++collectDiagTicks < COLLECT_DIAG_INTERVAL_TICKS) {
+            return;
+        }
+        collectDiagTicks = 0;
+        final int flags = collectDiagFlags;
+        collectDiagFlags = 0;
+        if (flags == collectDiagLastFlags) {
+            return; // 路径集合没变：一句都不说
+        }
+        collectDiagLastFlags = flags;
+        final Level level = getLevel();
+        if (level == null || level.isClientSide()) {
+            return;
+        }
+        LOGGER.info("[rscc-collect] @{} {} {} 标记={} 开关[物品={} 流体={} 气体={} 经验={}] "
+                + "缓存={}件/{}堆 流体={}mB | 本窗口({}t)动过的路径=[{}] 未动过=[{}]",
+            worldPosition,
+            getNode().isActive() ? "节点=激活" : "节点=未激活",
+            getNode().getNetworkOrNull() == null ? "网络=未接入" : "网络=已接入",
+            getMarkerCount(),
+            isAbsorbEnabled(AbsorbType.ITEM) ? "开" : "关",
+            isAbsorbEnabled(AbsorbType.FLUID) ? "开" : "关",
+            isAbsorbEnabled(AbsorbType.GAS) ? "开" : "关",
+            isAbsorbEnabled(AbsorbType.EXPERIENCE) ? "开" : "关",
+            getCacheItemTotal(), getCacheItemStacks(), fluidCache.getStored(),
+            COLLECT_DIAG_INTERVAL_TICKS,
+            pathNames(flags), pathNames(PATH_ALL & ~flags));
+    }
+
+    /** 把路径位渲染成中文短名（空集合返回「无」）。 */
+    private static String pathNames(final int flags) {
+        final String[] names = {
+            "界面放入", "界面取出", "写标记", "掉落物", "相邻容器", "世界流体", "气体", "经验", "回写网络"
+        };
+        final StringBuilder out = new StringBuilder();
+        for (int bit = 0; bit < names.length; bit++) {
+            if ((flags & (1 << bit)) == 0) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append('/');
+            }
+            out.append(names[bit]);
+        }
+        return out.length() == 0 ? "无" : out.toString();
+    }
+
+    /** 本机是否至少开着一个吸取开关（用于决定「未激活是否值得提醒」）。 */
+    private boolean anyAbsorbEnabled() {
+        for (final AbsorbType type : AbsorbType.values()) {
+            if (isAbsorbEnabled(type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 未激活的成因分类（决定告警文案，也用于「原因一变立刻再告警一条」）。 */
+    private int classifyInactiveReason(final Level level) {
+        if (getNode().getNetworkOrNull() == null) {
+            return FLUSH_NO_NETWORK;
+        }
+        if (hasRedstoneMode()) {
+            final com.refinedmods.refinedstorage.common.support.RedstoneMode mode = getRedstoneMode();
+            if (mode != null && mode != com.refinedmods.refinedstorage.common.support.RedstoneMode.IGNORE
+                && !mode.isActive(level.hasNeighborSignal(worldPosition))) {
+                return FLUSH_INACTIVE_REDSTONE;
+            }
+        }
+        return FLUSH_INACTIVE_ENERGY;
+    }
+
     /** 归流缓存仓每 tick 的网络节点驱动：按间隔扫描吸取 + 缓存写入网络。 */
     public void tickCache(final Network network) {
         final Level level = getLevel();
@@ -1274,8 +1995,63 @@ public class CollectionCacheBlockEntity
         flushCacheToNetwork(network);
     }
 
+    /**
+     * <b>区域扫描钩子</b>（高级版覆盖；基础版恒 {@code null}）。
+     * <p>非 null = 本机处于「只按区域吸收」模式：掉落物 / 经验球的实体查询改用
+     * {@link AreaScanHook#entityQueryAreas()} 的<b>每簇一个包围盒</b> + {@link AreaScanHook#containsEntity}
+     * 过滤（区域全相邻时只有 1 个盒，与第 121 轮之前的总并集一次查询等价），
+     * 流体源遍历改用 {@link AreaScanHook#scanFluidWindow} 的跨 tick 游标。
+     * 基础版返回 null ⇒ 三段扫描逐字走原来的半径路径（行为与改动前完全一致）。</p>
+     */
+    @Nullable
+    protected AreaScanHook areaScanHook() {
+        return null;
+    }
+
+    /**
+     * 区域模式是否<b>禁止本机吸收</b>（高级版覆盖）。
+     * <p>基础版恒 {@code false}；高级版在「没装选定器 / 区域为空 / 维度不符」时返回 {@code true}，
+     * 于是 {@link #absorbAll} 整段跳过 —— 这是「区域取代 XYZ」的硬保证：绝不悄悄退回半径吸收。</p>
+     */
+    protected boolean areaAbsorptionBlocked() {
+        return false;
+    }
+
+    /**
+     * 某个掉落物实体该用<b>哪一组</b> ghost 过滤集合（第 101 轮 P1 的扩展点）。
+     *
+     * <p>基础版：恒返回<b>全局匹配区</b> {@link #markers}（同一份列表对象 ⇒ 吸收侧把它们归成一个上下文，
+     * 行为与「逐条标记对全体掉落物」逐字一致）。</p>
+     * <p>高级版（覆写）：返回该实体<b>所在区域</b>的过滤集合：
+     * <ul>
+     *     <li>不在任何生效区域 ⇒ 返回 {@code null} / 空列表 ⇒ <b>这个实体不吸</b>（区域模式的安全默认）；</li>
+     *     <li>所在区域<b>没配任何过滤条目</b> ⇒ 同样空列表 ⇒ 该区域<b>不吸任何东西</b>
+     *     —— 这是解决用户「相邻机器重复吸放」的关键口径（原话：
+     *     「某物品是原料但又在另一步骤里作为输出，就会重叠——重复地吸收-放出」）。</li>
+     * </ul>
+     *
+     * <p>返回的列表<b>必须是稳定对象</b>：吸收侧用引用相等（{@code ==}）把实体分桶，
+     * 每次调用都新建列表会让分桶退化成「每个实体一个桶」（数量门槛按单件统计，语义就错了）。</p>
+     */
+    @Nullable
+    protected List<MarkerEntry> filtersForEntity(final net.minecraft.world.entity.Entity entity,
+                                                 final HolderLookup.Provider registries) {
+        return markers;
+    }
+
     /** 4 个来源共用同一入口，各自受开关控制。 */
     private void absorbAll(final Level level) {
+        // 每轮重置「本轮为什么没吸」的统计（状态行 / 诊断都读它）
+        thresholdBlockedThisScan = false;
+        absorbedThisScan = 0;
+        // 高级版：区域模式已启用（装了选定器）但当前<b>没有可用区域</b>（区域为空 / 维度不符 / 没装）
+        // ⇒ 本机一点不吸。这里刻意是「整段返回」而不是「退回 XYZ 半径」：
+        // 用户拍板「区域取代 XYZ」，没有区域就没有吸收范围（设计文档 §4.4 的交集方案已被取代）。
+        if (areaAbsorptionBlocked()) {
+            absorbStatusReason = absorbStatusOverride();
+            absorbStatusArg = 0;
+            return;
+        }
         if (isAbsorbEnabled(AbsorbType.ITEM)) {
             collectFromDroppedItems(level);
             // <b>用户第 3 条：从相邻方块容器「主动抽取」物品并回网</b>（不只等漏斗 / 管道推入）。
@@ -1290,20 +2066,116 @@ public class CollectionCacheBlockEntity
         }
         if (isAbsorbEnabled(AbsorbType.EXPERIENCE)) {
             collectExperience(level);
-        } else if (--experienceOffWarnCooldown <= 0) {
-            // <b>2026-10-05：开关关着时也要留下痕迹</b>。
-            //
-            // 用户报告「旁边搞了几个经验球，它们根本不消失」。原因排查发现：本机 4 个吸取开关
-            // <b>默认只有「物品」是开的</b>（构造器里 {@code absorbEnabled[i] = false} 之后只把 ITEM 置 true），
-            // 因此「经验」没打开时 {@link #collectExperience} <b>一次都不会被调用</b> ——
-            // 既没有收集，也没有任何日志，玩家只能看到「东西不动、也没报错」。
-            // 这条日志每 10 秒提醒一次（只在附近真的有经验球时），把「开关没开」这件事说清楚。
-            experienceOffWarnCooldown = 200;
-            if (!experienceOrbsInRadius(level).isEmpty()) {
-                LOGGER.info("[rs_create_compat] 归流缓存仓检测到半径内有经验球，但「经验」吸取开关是关闭的"
-                    + " ⇒ 不会收集。请打开该开关（界面里那一排开关，最后一个是「经验」）。");
+            // 开关打开 ⇒ 复位「关着但有球」的告警状态：下次再关掉时立刻重新说一句（状态变化才记）。
+            experienceOffWarned = false;
+            experienceOffWarnedAt = Long.MIN_VALUE;
+        } else {
+            noteExperienceOffButOrbsNearby(level);
+        }
+        absorbStatusReason = computeAbsorbStatus();
+        absorbStatusArg = thresholdBlockedThisScan ? 1 : 0;
+    }
+
+    /**
+     * 本轮「为什么没吸到物品」的状态码（服务端算，界面只显示一行对应的语言键）。
+     * <p>用户本轮原话是「界面特别丑、分不清什么是什么」，其中最关键的一格信息是
+     * <b>「它到底为什么不吸」</b>。这里把所有能导致「一件都没吸」的前置条件按优先级排成一条链，
+     * 任何一条不满足就返回对应的码 —— 玩家不用再猜「是没标记 / 没电 / 缓存满 / 区域没生效」。</p>
+     */
+    private int computeAbsorbStatus() {
+        final CollectionCacheNetworkNode node = getNode();
+        if (node.getNetworkOrNull() == null) {
+            return ABSORB_STATUS_NO_NETWORK;
+        }
+        if (!node.isActive()) {
+            return ABSORB_STATUS_INACTIVE;
+        }
+        // 区域模式的状态由高级版覆写给出（未装选定器 / 区域为空 / 维度不符），优先级高于「没标记」
+        final int areaReason = absorbStatusOverride();
+        if (areaReason != ABSORB_STATUS_OK) {
+            return areaReason;
+        }
+        if (!isAbsorbEnabled(AbsorbType.ITEM)) {
+            return ABSORB_STATUS_TOGGLE_OFF;
+        }
+        if (absorbedThisScan > 0) {
+            return ABSORB_STATUS_OK;
+        }
+        if (thresholdBlockedThisScan) {
+            return ABSORB_STATUS_THRESHOLD;
+        }
+        if (!hasAnyEffectiveFilter()) {
+            return ABSORB_STATUS_NO_MARKER;
+        }
+        if (freeCacheSlots() <= 0L) {
+            return ABSORB_STATUS_CACHE_FULL;
+        }
+        return ABSORB_STATUS_NO_TARGET;
+    }
+
+    /** 区域相关的原因码（基础版恒 {@link #ABSORB_STATUS_OK}；高级版覆写为「没装选定器 / 区域为空 / 维度不符」）。 */
+    protected int absorbStatusOverride() {
+        return ABSORB_STATUS_OK;
+    }
+
+    /** 是否<b>至少有一条</b>真正可用的过滤条目（物品类、非空、非流体）。基础版 = 全局匹配区；高级版按区域覆写。 */
+    protected boolean hasAnyEffectiveFilter() {
+        for (final MarkerEntry marker : markers) {
+            if (marker != null && !marker.isEmpty() && !marker.fluid()) {
+                return true;
             }
         }
+        return false;
+    }
+
+    /** 本轮状态码（界面数据槽；见 {@link #computeAbsorbStatus()}）。 */
+    public int getAbsorbStatus() {
+        return absorbStatusReason;
+    }
+
+    /** 本轮状态附加位：1 = 有匹配但没凑够某条标记的数量门槛（界面显示「还差 N 件」用）。 */
+    public int getAbsorbStatusArg() {
+        return absorbStatusArg;
+    }
+
+
+    /**
+     * 「经验」吸取开关关着、但半径内<b>确实有经验球</b>时的提醒。
+     *
+     * <p><b>2026-10-25（第 95 轮用户反馈第 3 条）</b>：旧实现是「无条件每 200 次扫描一条」，用户实机日志里
+     * 从 16:00 连刷到 23:1x（{@code diag/pull_2310/latest.log} 118 条 + {@code 2026-10-24-3.log} 2571 条同类），
+     * 把真正有用的日志全淹了。现在的口径：</p>
+     * <ol>
+     *     <li><b>检查本身</b>仍节流到 {@link #EXPERIENCE_OFF_CHECK_INTERVAL_TICKS}（10 秒）一次 ——
+     *         每 tick 查一次半径内实体太贵；</li>
+     *     <li><b>半径内没有球 / 开关被打开</b> ⇒ 静默复位，什么都不写；</li>
+     *     <li><b>第一次</b>发现「关着但有球」⇒ 立刻一条 INFO（不能一句不说：玩家需要知道为什么不吸）；</li>
+     *     <li>同一状态持续 ⇒ 之后每 {@link #EXPERIENCE_OFF_WARN_INTERVAL_TICKS}（5 分钟）至多一条。</li>
+     * </ol>
+     * <p>也就是说：<b>状态变化时一条 + 之后 5 分钟一条</b>，两者合起来既不会刷屏、也不会静默。</p>
+     */
+    private void noteExperienceOffButOrbsNearby(final Level level) {
+        final long now = level.getGameTime();
+        if (experienceOffCheckedAt != Long.MIN_VALUE
+            && now - experienceOffCheckedAt < EXPERIENCE_OFF_CHECK_INTERVAL_TICKS) {
+            return;
+        }
+        experienceOffCheckedAt = now;
+        if (experienceOrbsInRadius(level).isEmpty()) {
+            // 半径内没球了：复位，下次真出现球时立刻说一句
+            experienceOffWarned = false;
+            experienceOffWarnedAt = Long.MIN_VALUE;
+            return;
+        }
+        if (experienceOffWarned && now - experienceOffWarnedAt < EXPERIENCE_OFF_WARN_INTERVAL_TICKS) {
+            return;
+        }
+        experienceOffWarned = true;
+        experienceOffWarnedAt = now;
+        LOGGER.info("[rs_create_compat] 归流缓存仓 @{} 检测到半径内有经验球，但「经验」吸取开关是关闭的"
+            + " ⇒ 不会收集。请打开该开关（界面里那一排开关，最后一个是「经验」）。"
+            + "（状态变化或每 5 分钟最多提醒一次；此前的实现是每 10 秒一条，会把日志刷满）",
+            worldPosition);
     }
 
     /** 掉落物来源：逐条物品标记凑够数量后吸取，优先入缓存（装不下的留在世界，不销毁）。 */
@@ -1323,37 +2195,67 @@ public class CollectionCacheBlockEntity
             changed |= absorbMatchingItems(entities, stack -> !matchesAnyItemMarker(stack, registries),
                 ABSORB_ALL_THRESHOLD) > 0;
         } else {
-            for (int i = 0; i < markers.size(); i++) {
-                final MarkerEntry marker = markers.get(i);
-                if (marker == null || marker.isEmpty() || marker.fluid()) {
-                    continue;
+            // 逐实体决定「用哪一组 ghost 过滤集合」：
+            //   基础版 = 全局匹配区（filtersForEntity 直接返回 markers，全体实体同一组，行为与改动前逐字一致）；
+            //   高级版 = 该实体<b>所在区域</b>的过滤集合（第 101 轮 P1：每个区域可以吸不同的东西）。
+            // 「凑够 N 件才吸」的数量门槛因此按「同一组过滤集合」内部统计，而不是整半径混算。
+            final List<List<MarkerEntry>> contexts = new ArrayList<>(2);
+            final List<List<ItemEntity>> buckets = new ArrayList<>(2);
+            for (final ItemEntity entity : entities) {
+                final List<MarkerEntry> filters = filtersForEntity(entity, registries);
+                if (filters == null || filters.isEmpty()) {
+                    continue; // 不在任何生效区域 / 所在区域没配过滤 ⇒ 不吸（安全默认，见 filtersForEntity 注释）
                 }
-                final int absorbed = absorbMatchingItems(entities,
-                    stack -> matchesItem(marker, stack, registries), marker.amount());
-                changed |= absorbed > 0;
-                // 标签过滤器「看得见却吸不到」时给一行不刷屏的 DEBUG 日志：把「命中该标签的物品堆 / 件数 / 数量门槛」
-                // 一次列全，用来区分「半径内根本没有这一类物品」与「有这一类物品但没凑够数量门槛」。
-                if (absorbed <= 0 && marker.isTagFilter() && !entities.isEmpty() && --tagDebugCooldown <= 0) {
-                    tagDebugCooldown = 60;
-                    long hitCount = 0L;
-                    int hitStacks = 0;
-                    for (final ItemEntity entity : entities) {
-                        if (entity.isRemoved() || isIgnored(entity)) {
-                            continue;
-                        }
-                        final ItemStack stack = entity.getItem();
-                        if (!stack.isEmpty() && matchesItem(marker, stack, registries)) {
-                            hitStacks++;
-                            hitCount += stack.getCount();
-                        }
+                int bucket = -1;
+                for (int c = 0; c < contexts.size(); c++) {
+                    if (contexts.get(c) == filters) {
+                        bucket = c;
+                        break;
                     }
-                    LOGGER.debug("[rs_create_compat] 归流缓存仓标签过滤器本轮未收集：slot={} tags={} 数量门槛={} "
-                            + "半径内掉落物={} 堆 / 其中命中该标签={} 堆共 {} 件",
-                        i, marker.tags(), marker.amount(), entities.size(), hitStacks, hitCount);
+                }
+                if (bucket < 0) {
+                    contexts.add(filters);
+                    buckets.add(new ArrayList<>());
+                    bucket = buckets.size() - 1;
+                }
+                buckets.get(bucket).add(entity);
+            }
+            for (int c = 0; c < contexts.size(); c++) {
+                final List<MarkerEntry> filters = contexts.get(c);
+                final List<ItemEntity> bucket = buckets.get(c);
+                for (int i = 0; i < filters.size(); i++) {
+                    final MarkerEntry marker = filters.get(i);
+                    if (marker == null || marker.isEmpty() || marker.fluid()) {
+                        continue;
+                    }
+                    final int absorbed = absorbMatchingItems(bucket,
+                        stack -> matchesItem(marker, stack, registries), marker.amount());
+                    changed |= absorbed > 0;
+                    // 标签过滤器「看得见却吸不到」时给一行不刷屏的 DEBUG 日志：把「命中该标签的物品堆 / 件数 / 数量门槛」
+                    // 一次列全，用来区分「半径内根本没有这一类物品」与「有这一类物品但没凑够数量门槛」。
+                    if (absorbed <= 0 && marker.isTagFilter() && !bucket.isEmpty() && --tagDebugCooldown <= 0) {
+                        tagDebugCooldown = 60;
+                        long hitCount = 0L;
+                        int hitStacks = 0;
+                        for (final ItemEntity entity : bucket) {
+                            if (entity.isRemoved() || isIgnored(entity)) {
+                                continue;
+                            }
+                            final ItemStack stack = entity.getItem();
+                            if (!stack.isEmpty() && matchesItem(marker, stack, registries)) {
+                                hitStacks++;
+                                hitCount += stack.getCount();
+                            }
+                        }
+                        LOGGER.debug("[rs_create_compat] 归流缓存仓标签过滤器本轮未收集：上下文={} tags={} 数量门槛={} "
+                                + "该范围内掉落物={} 堆 / 其中命中该标签={} 堆共 {} 件",
+                            c, marker.tags(), marker.amount(), bucket.size(), hitStacks, hitCount);
+                    }
                 }
             }
         }
         if (changed) {
+            noteCollectPath(PATH_DROP);
             setChanged();
             // 成就触发点：本机刚把掉落物吸进缓存（服务端吸收流程；重复 fire 由原版去重，不会重复弹 toast）
             cretae.cookiewyq.rs_create_compat.advancement.RsccAdvancements.onCollectedFromWorld(this);
@@ -1432,6 +2334,7 @@ public class CollectionCacheBlockEntity
             }
         }
         if (changed) {
+            noteCollectPath(PATH_CONTAINER);
             setChanged();
             markWork();
         }
@@ -1528,7 +2431,7 @@ public class CollectionCacheBlockEntity
                     LOGGER.info("[rs_create_compat] 归流缓存仓流体收集生效：slot={} fluid={} 半径({},{},{}) "
                             + "内可抽源方块={} 本轮收走={}格 · 流体缓存={}mB/{}mB",
                         i, marker.id(), getScanRadiusX(), getScanRadiusY(), getScanRadiusZ(),
-                        sources.size(), collected, fluidCache.getStored(), FLUID_CACHE_CAPACITY);
+                        sources.size(), collected, fluidCache.getStored(), fluidCacheCapacity);
                 }
             }
         }
@@ -1544,6 +2447,7 @@ public class CollectionCacheBlockEntity
                 isAbsorbEnabled(AbsorbType.FLUID));
         }
         if (changed) {
+            noteCollectPath(PATH_FLUID);
             setChanged();
             // 成就触发点：本机刚抽走世界里的源流体（服务端吸收流程；重复 fire 由原版去重）
             cretae.cookiewyq.rs_create_compat.advancement.RsccAdvancements.onCollectedFluid(this);
@@ -1590,8 +2494,11 @@ public class CollectionCacheBlockEntity
 
     /**
      * 气体来源入口（与其它三种共用一个入口与缓存/回流管线）。
-     * <p>RS 2.0 的资源体系当前没有气体资源类型（{@code ResourceType}），因此这里暂不产生具体来源；
-     * 后续接入气体资源类型后在本方法内实现即可，缓存与回流逻辑无需改动。</p>
+     * <p><b>本机没有可扫描的气体来源</b>，因此这里不产生具体条目（方法体留空是事实，不是「未实现」）：
+     * 气体资源类型由第三方集成提供（见 {@code docs/GAS_COMPAT_DESIGN.md} 与
+     * {@code support/RsccGenericResourceTarget}；接收器 / 请求器已经能按
+     * {@code PlatformResourceKey} 搬运气体），但「世界上哪里有一团能被吸取的气体」本机不扫。</p>
+     * <p>将来若接入来源，只需在本方法内塞进同一个入口即可 —— 缓存与回流管线无需改动。</p>
      */
     private void collectGas(final Level level) {
         // 预留入口：见方法注释
@@ -1647,6 +2554,7 @@ public class CollectionCacheBlockEntity
             changed |= pointsCollected > 0;
         }
         if (changed) {
+            noteCollectPath(PATH_XP);
             if (!experienceCollectLogged) {
                 experienceCollectLogged = true;
                 LOGGER.info("[rs_create_compat] 归流缓存仓经验收集生效：形态={} 液态目标={} "
@@ -1699,8 +2607,26 @@ public class CollectionCacheBlockEntity
 
     /** 半径内的经验球实体（三轴范围与掉落物来源同源；只取未移除、未被忽略窗口挡住的）。 */
     private List<net.minecraft.world.entity.ExperienceOrb> experienceOrbsInRadius(final Level level) {
-        final AABB area = new AABB(worldPosition)
-            .inflate(getScanRadiusX(), getScanRadiusY(), getScanRadiusZ());
+        // 区域模式：与掉落物同一条口径（第 121 轮 C-7 起按簇拆成多个盒、每簇一次查询；
+        // 每簇盒向上扩 1 格 + containsEntity 过滤。第 101 轮 P0 修复，见 itemEntitiesInRadius 的注释：
+        // 只比 blockPosition() 会把「站在区域底板上」的实体整批判到区域外）
+        final AreaScanHook areas = areaScanHook();
+        if (areas != null) {
+            final List<AABB> boxes = areas.entityQueryAreas();
+            if (boxes.isEmpty()) {
+                return List.of();
+            }
+            // 簇盒之间可能相交 ⇒ 集合去重；顺序稳定保证吸收顺序不抖。
+            final Set<net.minecraft.world.entity.ExperienceOrb> found = new java.util.LinkedHashSet<>();
+            for (final AABB box : boxes) {
+                found.addAll(level.getEntitiesOfClass(net.minecraft.world.entity.ExperienceOrb.class, box,
+                    entity -> !entity.isRemoved() && !isIgnored(entity)));
+            }
+            found.removeIf(entity -> !areas.containsEntity(entity));
+            return new ArrayList<>(found);
+        }
+        // 几何与掉落物 / 流体 / 「查看范围」框同源（collectionRangeBox()），不在这里重写一遍 inflate
+        final AABB area = collectionRangeBox();
         return level.getEntitiesOfClass(net.minecraft.world.entity.ExperienceOrb.class, area,
             entity -> !entity.isRemoved() && !isIgnored(entity));
     }
@@ -1837,9 +2763,35 @@ public class CollectionCacheBlockEntity
     }
 
     private List<ItemEntity> itemEntitiesInRadius(final Level level) {
-        // 三轴各自的范围（贴图 / 界面允许分别调控）——AABB 按三轴分别膨胀
-        final AABB area = new AABB(worldPosition)
-            .inflate(getScanRadiusX(), getScanRadiusY(), getScanRadiusZ());
+        // 高级版（区域模式）：第 121 轮 C-7 起按「簇」分组 —— 每簇一个 AABB 各查一次实体表，
+        // 再按绝对坐标精确过滤。绝不「每个区域查一次」（16 次查询 = 16 倍代价，设计文档 §4.2），
+        // 也绝不「拿跨 1000 格的总并集查一次」（中间全是空区块，白扫上千个区块段）。
+        // 区域全相邻时簇 = 1 个盒 ⇒ 与旧版「总并集查一次」逐字等价。
+        final AreaScanHook areas = areaScanHook();
+        if (areas != null) {
+            // <b>第 101 轮 P0 修复</b>：查询盒由 {@link AreaScanHook#entityQueryAreas()} 给出（每簇盒向上扩 1 格），
+            // 过滤用 {@link AreaScanHook#containsEntity}（占用的格 / 所站的格 / 被卡的上方格）。
+            // 旧写法 `getEntitiesOfClass(union)` + `contains(entity.blockPosition())` 会把「落在区域底板上」
+            // 的掉落物整批丢掉：实体 AABB 下界恰好等于并集盒上界（相切不算相交），且整数格坐标在底板上一格。
+            // 注意方向是<b>向上</b>扩（详见 AreaScanHook#entityQueryArea 的注释）。
+            // 玩家最常见的「两角都点在地面」的 1 格高区域因此一件都吸不到（流体却正常，因为流体扫的是方块本身）。
+            final List<AABB> boxes = areas.entityQueryAreas();
+            if (boxes.isEmpty()) {
+                return List.of();
+            }
+            // 簇盒之间可能相交（贪心聚类不保证互斥）⇒ 用 LinkedHashSet 去重，同时保持遍历顺序稳定。
+            final Set<ItemEntity> found = new java.util.LinkedHashSet<>();
+            for (final AABB box : boxes) {
+                found.addAll(level.getEntitiesOfClass(ItemEntity.class, box,
+                    entity -> !entity.isRemoved() && entity.isAlive() && !entity.getItem().isEmpty()));
+            }
+            found.removeIf(entity -> !areas.containsEntity(entity));
+            return new ArrayList<>(found);
+        }
+        // 三轴各自的范围（贴图 / 界面允许分别调控）——AABB 按三轴分别膨胀。
+        // 几何走 collectionRangeBox()：实体查询 / 流体游标 / 「查看范围」框三处共用同一份口径，
+        // 绝不在任何一处另写一遍 inflate（否则框画在哪里、实际吸哪里会各说一套）。
+        final AABB area = collectionRangeBox();
         return level.getEntitiesOfClass(ItemEntity.class, area,
             entity -> !entity.isRemoved() && entity.isAlive() && !entity.getItem().isEmpty());
     }
@@ -1868,6 +2820,7 @@ public class CollectionCacheBlockEntity
                 }
             }
             if (total < threshold) {
+                thresholdBlockedThisScan = true;
                 return 0;
             }
         }
@@ -1889,6 +2842,7 @@ public class CollectionCacheBlockEntity
             }
             collectedTotal += stored;
             storedTotal += stored;
+            absorbedThisScan += stored;
             // 账本：这些物品来自世界（掉落物），记「从世界收集」一侧；之后若被销毁会另记 destroyed
             flowLedger.fromWorld(RsccFlowLedger.itemKey(stack.getItem()), stored);
             markWork();
@@ -1940,24 +2894,129 @@ public class CollectionCacheBlockEntity
         return collected;
     }
 
-    /** 三轴范围内的流体<b>源</b>方块坐标（每次扫描有数量上限，防卡顿）。 */
+    /**
+     * 三轴范围内的流体<b>源</b>方块坐标 —— <b>跨扫描游标</b>版本：每次调用只枚举
+     * {@link #MAX_FLUID_BLOCKS_PER_SCAN} 个位次，下一次从断点继续；扫满一整轮才回到最小角。
+     *
+     * <h2>为什么这样能保证「整个体积都会被扫到」</h2>
+     * <p>位次按 {@code 0..volume-1} 展开（x 最快、z 最慢），游标只前进不回退，
+     * 第 k 次扫描只看 {@code [k*4096, (k+1)*4096)}：</p>
+     * <pre>
+     * 一轮扫描次数 = ceil(volume / MAX_FLUID_BLOCKS_PER_SCAN)
+     * 一轮实际 tick = ceil(volume / MAX_FLUID_BLOCKS_PER_SCAN) × getScanInterval()
+     * </pre>
+     * <p>实例（{@code Config.collectionCacheScanInterval} 默认 20，无速度升级）：</p>
+     * <ul>
+     *     <li>半径 25：51³ = 132651 格 ⇒ ceil(132651/4096) = <b>33 次</b>；该半径
+     *     {@code getScanInterval()} = 20/13 = 1 ⇒ <b>33 tick 扫完一整轮</b>（旧实现永远扫不到尾部）；</li>
+     *     <li>半径 50（+25 范围升级）：101³ = 1030301 格 ⇒ ceil(1030301/4096) = <b>252 次</b>；
+     *     interval = 20/25 → 1 ⇒ <b>252 tick（≈12.6 秒）扫完一整轮</b>；</li>
+     *     <li>默认半径 5：11³ = 1331 格 ⇒ <b>1 次</b>；interval = 20/3 = 6 ⇒ <b>6 tick</b> 扫完（与改前同量级）。</li>
+     * </ul>
+     *
+     * <h2>预算（绝不提高每 tick 上限）</h2>
+     * <p>旧实现的 4096 实际是「<b>找到的源方块数</b>」上限、<b>不是查询数</b>上限：空区域要遍历整个体积
+     * （51³ = 132651 次 {@code getBlockState}）。新实现把它变成<b>硬的查询上限</b>：同一 tick 内所有调用
+     * 共享 4096 次查询（{@link #fluidScanQueriesThisTick}），且同 tick 的第二次调用直接复用窗口
+     * （{@link #fluidScanWindow}，流体路径 + 经验液态路径各调一次也只查一遍）⇒ 每 tick 查询数
+     * <b>≤ 4096</b>，比改前只减不增。</p>
+     */
     private List<BlockPos> fluidSourcesInRadius(final Level level) {
+        // 区域模式（高级版）：游标与预算都在 AreaScanHook 的实现里（每 tick ≤ 2048 次查询，
+        // 扫完一个区域才推进到下一个；同一 tick 的第二次调用复用同一批结果）。
+        final AreaScanHook areas = areaScanHook();
+        if (areas != null) {
+            return areas.scanFluidWindow(level, MAX_FLUID_BLOCKS_PER_SCAN,
+                pos -> fluidSourceIdAt(level, pos) != null);
+        }
+        // ① 位置 / 半径变了 ⇒ 游标归零（绝不能拿旧区域的位次去扫新区域）
+        resyncFluidScanCursorIfMoved();
+        // ② 同一 tick 的后续调用（流体路径 + 经验液态路径）复用同一批坐标
+        final long tick = level.getGameTime();
+        if (fluidScanWindowTick == tick) {
+            return fluidScanWindow;
+        }
+        fluidScanWindowTick = tick;
+        if (fluidScanBudgetTick != tick) {
+            fluidScanBudgetTick = tick;
+            fluidScanQueriesThisTick = 0;
+        }
+        final int remaining = MAX_FLUID_BLOCKS_PER_SCAN - fluidScanQueriesThisTick;
+        if (remaining <= 0) {
+            fluidScanWindow = List.of(); // 本 tick 预算已用完：不再查询（正常路径不会走到这里）
+            return fluidScanWindow;
+        }
         final int rx = getScanRadiusX();
         final int ry = getScanRadiusY();
         final int rz = getScanRadiusZ();
+        final long sizeX = 2L * rx + 1L;
+        final long sizeY = 2L * ry + 1L;
+        final long sizeZ = 2L * rz + 1L;
+        final long volume = saturatedMultiply(saturatedMultiply(sizeX, sizeY), sizeZ);
+        if (fluidScanCursor < 0L || fluidScanCursor >= volume) {
+            fluidScanCursor = 0L; // 防御：游标只允许落在 [0, volume)
+        }
+        final long planeSize = saturatedMultiply(sizeX, sizeY);
+        // ③ 本次只推进「剩余预算」个位次；到达体积末尾则天然不足一次预算
+        final int budget = (int) Math.min((long) remaining, volume - fluidScanCursor);
         final List<BlockPos> sources = new ArrayList<>();
-        final Iterable<BlockPos> positions = BlockPos.betweenClosed(
-            worldPosition.offset(-rx, -ry, -rz),
-            worldPosition.offset(rx, ry, rz));
-        for (final BlockPos pos : positions) {
-            if (sources.size() >= MAX_FLUID_BLOCKS_PER_SCAN) {
-                break;
-            }
+        for (int i = 0; i < budget; i++) {
+            final long index = fluidScanCursor + i;
+            final long dx = index % sizeX;
+            final long dy = (index / sizeX) % sizeY;
+            final long dz = index / planeSize;
+            final int x = clampToInt((long) worldPosition.getX() - rx + dx);
+            final int y = clampToInt((long) worldPosition.getY() - ry + dy);
+            final int z = clampToInt((long) worldPosition.getZ() - rz + dz);
+            final BlockPos pos = new BlockPos(x, y, z);
             if (fluidSourceIdAt(level, pos) != null) {
-                sources.add(pos.immutable());
+                sources.add(pos);
             }
         }
-        return sources;
+        fluidScanQueriesThisTick += budget;
+        // ④ 只前进这一个窗口；扫满一整轮才回到 0（下一轮重新覆盖整个体积）
+        final long next = fluidScanCursor + budget;
+        fluidScanCursor = (next < fluidScanCursor || next >= volume) ? 0L : next;
+        fluidScanWindow = List.copyOf(sources);
+        return fluidScanWindow;
+    }
+
+    /** 乘法饱和（半径可被创造范围升级撑到 {@code Integer.MAX_VALUE-1}，体积必须用 long 且不许溢出）。 */
+    private static long saturatedMultiply(final long first, final long second) {
+        if (first <= 0L || second <= 0L) {
+            return 0L;
+        }
+        return first > Long.MAX_VALUE / second ? Long.MAX_VALUE : first * second;
+    }
+
+    /** long → int（越界时夹到 int 范围，避免巨大半径下坐标回绕成负数）。 */
+    private static int clampToInt(final long value) {
+        return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, value));
+    }
+
+    /**
+     * 扫描几何变化时把游标归零。
+     * <p><b>为什么必须在 radius / pos 变化时重置</b>：游标是「旧体积里的位次」，半径或方块位置一变，
+     * 同一个位次对应的世界坐标就完全不同 —— 不重置的后果是：① 新区域的尾部要等游标走完旧体积
+     * 才可能被扫到（相当于又变回「永远轮不到」）；② 旧体积剩下的位次对应的坐标可能已经在新的
+     * 扫描盒之外，白查一遍。这里每 tick 只做 4 次基本比较，可忽略。</p>
+     */
+    private void resyncFluidScanCursorIfMoved() {
+        final long pos = worldPosition.asLong();
+        final int rx = getScanRadiusX();
+        final int ry = getScanRadiusY();
+        final int rz = getScanRadiusZ();
+        if (pos == fluidScanPos && rx == fluidScanRadiusX
+            && ry == fluidScanRadiusY && rz == fluidScanRadiusZ) {
+            return;
+        }
+        fluidScanPos = pos;
+        fluidScanRadiusX = rx;
+        fluidScanRadiusY = ry;
+        fluidScanRadiusZ = rz;
+        fluidScanCursor = 0L;
+        fluidScanWindowTick = Long.MIN_VALUE; // 同 tick 里几何变了也必须作废旧窗口
+        fluidScanWindow = List.of();
     }
 
     /**
@@ -1977,7 +3036,14 @@ public class CollectionCacheBlockEntity
      * 改为按「属性只有 LEVEL」判定后，既覆盖模组流体，又不会误伤含水方块。</p>
      */
     @Nullable
-    private static ResourceLocation fluidSourceIdAt(final Level level, final BlockPos pos) {
+    protected static ResourceLocation fluidSourceIdAt(final Level level, final BlockPos pos) {
+        // 第 119 轮修（审计 C-6）：先判「区块已加载」再 getBlockState。
+        // Level#getBlockState 对未加载区块会**同步加载**区块（本工程 support/SeparationFrameGuard
+        // 里已有同样的注释警告），而区域扫描每 tick 要问上千个坐标 —— 玩家走远、区块被卸载后
+        // 机器还在跑，就会反复触发同步加载，把主线程拖卡。未加载的坐标一律当作「没有流体」。
+        if (!level.isLoaded(pos)) {
+            return null;
+        }
         final BlockState state = level.getBlockState(pos);
         // ① 纯流体方块：只有 LEVEL 一个属性（含水方块必然还带其它属性），且没有方块实体
         if (state.getProperties().size() != 1 || !state.hasProperty(LiquidBlock.LEVEL)
@@ -1994,16 +3060,50 @@ public class CollectionCacheBlockEntity
     /**
      * 把缓存内容按每 tick 处理速率写入网络：
      * 速度升级提高每 tick 的处理组数；堆叠升级提高单次吞吐（每格/每条一次最多搬运的量）。
+     *
+     * <h2>2026-10-25（第 95 轮用户反馈第 12 条）修掉的三个「部分情况下收不进网络」缺陷</h2>
+     * <p>用户原话：「归流缓存器潜在存在严重问题部分情况下无法正常的吸收物品……包括高级和普通的」。
+     * 基础版与高级版共用本方法（高级版只多一个区域扫描来源），因此根因必须落在<b>这里</b>。
+     * 逐条证伪/证实的结果：</p>
+     * <ol>
+     *     <li><b>【已证实 · 永久卡死】失败也扣预算</b>：旧实现 {@code budget--} 在 {@code insert} 之前无条件执行，
+     *         而默认没有速度升级时 {@code getProcessRate() == 1} ⇒ 每 tick 只<b>尝试</b>一格。一旦第 0 格是
+     *         「网络拒收」的东西（存储已满 / 网络里没有能存它的存储 / 该资源被所有存储拒收），这一 tick
+     *         就直接结束，后面每一格<b>永远</b>轮不到；而第 0 格自己又是永久被拒的 ⇒ 回写<b>彻底停摆</b>，
+     *         缓存逐渐填满后连吸收也停了 —— 玩家看到的就是「东西收不进去」。修法：失败不扣预算 +
+     *         {@link #flushCursor} 跨 tick 轮转（保证每一格都会被公平尝试）。</li>
+     *     <li><b>【已证实 · 流体永不回网】流体/气体共享物品的剩余预算</b>：旧实现把
+     *         {@code flushCacheToNetwork} 用剩的预算传给 {@code flushFluidCacheToNetwork}，而默认配置下
+     *         只要缓存里有<b>一件物品</b>，预算就已经是 0 ⇒ 流体/气体<b>永远</b>不会被写回网络。
+     *         修法：物品与流体各自独立预算（各 {@code getProcessRate()} 组）+ {@link #fluidFlushCursor} 轮转。</li>
+     *     <li><b>【已证实 · 无诊断】</b>「写不进去」没有任何日志，玩家与日志都看不出是「网络拒收 / 没接网络 /
+     *         没电 / 红石停机」中的哪一条。修法：{@link #noteFlushStall(int, int, int)} 状态化告警
+     *         （状态变化立刻一条，之后同一原因每 5 分钟至多一条，恢复时一条）。</li>
+     * </ol>
+     * <p><b>语义不变</b>：写不进去的资源一律<b>留在本机缓存</b>（绝不销毁、绝不复制）；
+     * 阻塞名单里的资源照旧跳过且不占预算；反转 + 删除模式照旧先销毁再谈回写。</p>
      */
     private void flushCacheToNetwork(final Network network) {
         final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
         if (storage == null) {
+            noteFlushStall(FLUSH_NO_NETWORK, 0, 0);
             return;
         }
         final HolderLookup.Provider registries = getLevel() == null ? null : getLevel().registryAccess();
-        int budget = getProcessRate();
-        final int transfer = getTransferBatch();
-        for (int i = 0; i < cache.getContainerSize() && budget > 0; i++) {
+        // 物品与流体<b>各自</b>一份预算（见上面的缺陷 ②）：互不抢占，默认配置下两者都能回网。
+        final int groups = Math.max(1, getProcessRate());
+        final int transfer = Math.max(1, getTransferBatch());
+        final int slots = Math.max(1, cache.getContainerSize());
+        // 单 tick 最多尝试多少个「非空且未被阻塞」的格子：既不让一整片被拒的格子吃掉整 tick，
+        // 又不至于永远轮不到后面的格子。上限恒定（不随处理速率无限放大）。
+        final int maxAttempts = Math.max(groups, Math.min(slots, groups * 8 + 8));
+        int processed = 0;
+        int rejected = 0;
+        int attempts = 0;
+        int scanned = 0;
+        for (int step = 0; step < slots && processed < groups && attempts < maxAttempts; step++) {
+            final int i = (flushCursor + step) % slots;
+            scanned++;
             final ItemStack inSlot = cache.getItem(i);
             if (inSlot.isEmpty()) {
                 continue;
@@ -2011,7 +3111,7 @@ public class CollectionCacheBlockEntity
             if (isBlockedStack(inSlot)) {
                 continue; // 阻塞：内容仍安全留在本机缓存，只是不写回网络（不占处理预算）
             }
-            budget--;
+            attempts++;
             // <b>反转 + 删除模式</b>：这一格「没有被匹配到」⇒ <b>直接销毁，不回网络</b>（用户指正的语义）。
             // 预算口径与槽级「直接销毁」完全一致（一个槽算一组、单次吞吐 = transfer）。
             if (registries != null && shouldDestroyUnmatched(inSlot, registries)) {
@@ -2027,13 +3127,18 @@ public class CollectionCacheBlockEntity
                     markWork();
                     setChanged();
                 }
+                processed++;
                 continue;
             }
             final int attempt = Math.min(inSlot.getCount(), transfer);
             final long inserted = storage.insert(ItemResource.ofItemStack(inSlot), attempt, Action.EXECUTE, Actor.EMPTY);
             if (inserted <= 0) {
+                // <b>缺陷 ① 的修复点</b>：insert 返回 0 = 网络拒收（不是「这一格处理完了」）。
+                // 绝不能扣处理预算 —— 否则默认 processRate = 1 时它会把本 tick 用光，后面所有格子永远饿死。
+                rejected++;
                 continue;
             }
+            processed++;
             insertedTotal += inserted;
             // 账本：这一份写回了网络（进入网络一侧）
             flowLedger.toNetwork(RsccFlowLedger.itemKey(inSlot.getItem()), inserted);
@@ -2045,22 +3150,53 @@ public class CollectionCacheBlockEntity
             }
             setChanged();
         }
-        flushFluidCacheToNetwork(storage, budget, transfer);
+        // 游标按「本 tick 实际扫过的格数」前进（空槽 / 阻塞槽也计入）：某一格长期被拒也不会挡住后面的格子。
+        flushCursor = (flushCursor + Math.max(1, scanned)) % slots;
+        final FluidFlush fluidFlush = flushFluidCacheToNetwork(storage, groups, transfer);
+        // ---------- 诊断：把「写不进去」变成可观测的状态，而不是静默 --------
+        if (processed > 0 || fluidFlush.processed() > 0) {
+            noteCollectPath(PATH_FLUSH);
+            noteFlushProgress();
+            return;
+        }
+        if (!hasFlushableContent()) {
+            noteFlushIdle();
+            return;
+        }
+        // 本 tick 把所有格都扫过了（或确实有被拒的）⇒ 是真的写不进去，不是「缓存格数超过单 tick 尝试上限」。
+        if (rejected > 0 || fluidFlush.rejected() > 0 || scanned >= slots) {
+            noteFlushStall(FLUSH_REJECTED, rejected, fluidFlush.rejected());
+        } else {
+            noteFlushIdle(); // 只是本 tick 预算内没轮到（格数多 / 处理速率低）：不是故障
+        }
     }
 
-    /** 流体/气体缓存 → 网络（网络没有对应资源存储时留在缓存里，不丢资源）。 */
-    private void flushFluidCacheToNetwork(final StorageNetworkComponent storage, final int itemBudget,
-                                          final int transfer) {
+    /**
+     * 流体 / 气体缓存 → 网络（网络没有对应资源存储时留在缓存里，不丢资源）。
+     * <p>返回本次的「成功条数 / 被拒条数」；预算<b>独立</b>于物品侧（见 {@link #flushCacheToNetwork} 缺陷 ②）。</p>
+     */
+    private FluidFlush flushFluidCacheToNetwork(final StorageNetworkComponent storage, final int groups,
+                                                final int transfer) {
         if (fluidCache.isEmpty()) {
-            return;
+            fluidFlushCursor = 0;
+            return new FluidFlush(0, 0);
         }
         final Level level = getLevel();
         final HolderLookup.Provider registries = level == null ? null : level.registryAccess();
-        int budget = itemBudget;
-        for (final MultiFluidCache.Entry entry : fluidCache.entries()) {
-            if (budget <= 0) {
-                return;
-            }
+        // 快照：循环体里会 extract（可能把条目从 fluidCache 里删掉），直接遍历活列表会跳过元素。
+        final List<MultiFluidCache.Entry> entries = List.copyOf(fluidCache.entries());
+        if (entries.isEmpty()) {
+            fluidFlushCursor = 0;
+            return new FluidFlush(0, 0);
+        }
+        final int size = entries.size();
+        int processed = 0;
+        int rejected = 0;
+        int scanned = 0;
+        for (int step = 0; step < size && processed < groups; step++) {
+            scanned++;
+            final int index = Math.floorMod(fluidFlushCursor + step, size);
+            final MultiFluidCache.Entry entry = entries.get(index);
             final Fluid fluid = BuiltInRegistries.FLUID.get(entry.id());
             if (fluid == null || fluid == Fluids.EMPTY) {
                 fluidCache.extract(entry.id(), entry.nbt(), entry.amount()); // 无效资源（模组被移除）：直接清理
@@ -2069,7 +3205,6 @@ public class CollectionCacheBlockEntity
             if (isBlockedFluid(entry.id())) {
                 continue; // 阻塞（含按标签阻塞）：流体同样只留在本机缓存，不写回网络
             }
-            budget--;
             // 反转 + 删除模式：这条流体「没有被匹配到」⇒ 直接销毁，不回网络（与物品侧同一口径）
             if (shouldDestroyUnmatchedFluid(entry.id())) {
                 final long amount = Math.min(entry.amount(), transfer);
@@ -2080,20 +3215,144 @@ public class CollectionCacheBlockEntity
                     markWork();
                     setChanged();
                 }
+                processed++;
                 continue;
             }
             final long attempt = Math.min(entry.amount(), transfer);
             final FluidResource resource = new FluidResource(fluid, MarkerEntry.decodeComponents(entry.nbt(), registries));
             final long inserted = storage.insert(resource, attempt, Action.EXECUTE, Actor.EMPTY);
             if (inserted <= 0) {
+                rejected++; // 同物品侧：网络拒收不占预算，靠游标轮转保证其它条目不会被饿死
                 continue;
             }
+            processed++;
             fluidCache.extract(entry.id(), entry.nbt(), inserted);
             // 账本：这一份流体写回了网络（进入网络一侧）
             flowLedger.toNetwork(RsccFlowLedger.fluidKey(fluid), inserted);
             markWork();
             setChanged();
         }
+        fluidFlushCursor = Math.floorMod(fluidFlushCursor + Math.max(1, scanned), size);
+        return new FluidFlush(processed, rejected);
+    }
+
+    /** 一趟流体回写的统计（只用于诊断 / 告警，不参与资源搬运决策）。 */
+    private record FluidFlush(int processed, int rejected) {
+    }
+
+    // ==================== 「为什么写不进网络」的状态化诊断 ====================
+
+    /** 缓存里是否还有「本应写回网络」的内容（未被阻塞的物品 / 流体 / 气体）。 */
+    private boolean hasFlushableContent() {
+        for (int i = 0; i < cache.getContainerSize(); i++) {
+            final ItemStack stack = cache.getItem(i);
+            if (!stack.isEmpty() && !isBlockedStack(stack)) {
+                return true;
+            }
+        }
+        return hasUnblockedFluid();
+    }
+
+    /** 待回写的物品总件数（只在真的要写日志时调用：每次扫 256 格）。 */
+    private int pendingItemTotal() {
+        long total = 0L;
+        for (int i = 0; i < cache.getContainerSize(); i++) {
+            final ItemStack stack = cache.getItem(i);
+            if (!stack.isEmpty() && !isBlockedStack(stack)) {
+                total += stack.getCount();
+            }
+        }
+        return (int) Math.min(Integer.MAX_VALUE, total);
+    }
+
+    /** 待回写的物品堆数（≈ 资源种类数）。 */
+    private int pendingItemStacks() {
+        int count = 0;
+        for (int i = 0; i < cache.getContainerSize(); i++) {
+            final ItemStack stack = cache.getItem(i);
+            if (!stack.isEmpty() && !isBlockedStack(stack)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** 待回写的流体 / 气体总量（mB）。 */
+    private long pendingFluidTotal() {
+        long total = 0L;
+        for (final MultiFluidCache.Entry entry : fluidCache.entries()) {
+            if (!isBlockedFluid(entry.id())) {
+                total += Math.max(0L, entry.amount());
+            }
+        }
+        return total;
+    }
+
+    /**
+     * 本 tick 有进度：清掉「写不进去」的全部状态。
+     * <p>只有<b>真的告过警</b>（{@code flushWarnedAt >= 0}）才补一条恢复日志：否则「几 tick 卡住、几 tick 通」
+     * 这种抖动会变成「恢复日志刷屏」—— 短于 {@link #FLUSH_STALL_TICKS_BEFORE_WARN} 的抖动本来就不该出声。</p>
+     */
+    private void noteFlushProgress() {
+        if (flushWarnedAt >= 0L) {
+            LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：回写网络已恢复（此前连续 {} tick 一个字节都写不进去，"
+                + "原因：{}）。", worldPosition, flushStallTicks, flushReasonName(flushWarnKind));
+        }
+        flushStallTicks = 0;
+        flushWarnKind = FLUSH_OK;
+        flushWarnedAt = -1L;
+    }
+
+    /** 缓存里没有待回写内容（正常空闲）：静默复位，不写日志。 */
+    private void noteFlushIdle() {
+        flushStallTicks = 0;
+        flushWarnKind = FLUSH_OK;
+        flushWarnedAt = -1L;
+    }
+
+    /**
+     * 「缓存里有内容、但写不进网络」：持续 10 秒后告警，同一原因之后每 5 分钟至多一条；
+     * 原因类别一变立刻再告警一条（避免「先满存储、后来没电」这种变化被吞掉）。
+     */
+    private void noteFlushStall(final int kind, final int rejectedItems, final int rejectedFluids) {
+        if (flushStallTicks < Integer.MAX_VALUE) {
+            flushStallTicks++;
+        }
+        if (flushStallTicks < FLUSH_STALL_TICKS_BEFORE_WARN) {
+            return;
+        }
+        final long now = getLevel() == null ? 0L : getLevel().getGameTime();
+        final boolean stateChanged = kind != flushWarnKind;
+        final boolean cooledDown = flushWarnedAt < 0L || now - flushWarnedAt >= FLUSH_WARN_INTERVAL_TICKS;
+        if (!stateChanged && !cooledDown) {
+            return;
+        }
+        flushWarnKind = kind;
+        flushWarnedAt = now;
+        if (kind == FLUSH_NO_NETWORK) {
+            LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：已接入网络节点，但网络没有存储组件（未接入 RS 网络？），"
+                + "缓存里的 {} 件（{} 堆）物品 / {} mB 流体因此无法回写。内容安全留在本机缓存，不会丢失。",
+                worldPosition, pendingItemTotal(), pendingItemStacks(), pendingFluidTotal());
+            return;
+        }
+        LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：缓存里有 {} 件（{} 堆）物品 / {} mB 流体想写回网络，"
+                + "但网络一个都没接收（本 tick 物品被拒 {} 次 / 流体被拒 {} 条）。"
+                + "成因：网络里没有能接收该资源的存储、存储已满、或该资源被所有存储拒收。"
+                + "资源仍安全留在本机缓存、不会丢失；腾出空间或补上存储后会自动继续回写。"
+                + "（同一原因每 5 分钟最多提醒一次）",
+            worldPosition, pendingItemTotal(), pendingItemStacks(), pendingFluidTotal(),
+            rejectedItems, rejectedFluids);
+    }
+
+    /** 告警原因的可读名（日志用）。 */
+    private static String flushReasonName(final int kind) {
+        return switch (kind) {
+            case FLUSH_REJECTED -> "网络拒收（存储已满 / 没有对应资源的存储 / 该资源被所有存储拒收）";
+            case FLUSH_NO_NETWORK -> "未接入 RS 网络";
+            case FLUSH_INACTIVE_ENERGY -> "网络能量不足（节点未激活）";
+            case FLUSH_INACTIVE_REDSTONE -> "红石模式要求当前停机";
+            default -> "一切正常";
+        };
     }
 
     private void markWork() {
@@ -2568,14 +3827,22 @@ public class CollectionCacheBlockEntity
         level.addFreshEntity(entity);
     }
 
-    /** 每 tick 处理组数 = 基础 1 组 + 每个速度升级 1 组（缓存 → 网络回流速度）。 */
+    /**
+     * 每 tick 处理组数 = 基础 1 组 + 每个速度升级 1 组（缓存 → 网络回流速度）。
+     * <p>速度升级个数走 {@link RsccRateLimiter#level(int)} 收敛到 {@code [0,6]}：数值与改前逐格相同
+     * （{@code 1,2,3,4,5,6,7}），但漏斗往一格塞 64 个也无法把它抬到 65（I4）。</p>
+     */
     public int getProcessRate() {
-        return 1 + countUpgrades(SPEED_UPGRADE);
+        return 1 + RsccRateLimiter.level(countUpgrades(SPEED_UPGRADE));
     }
 
-    /** 单次吞吐 = 64 × (1 + 堆叠升级数)（堆叠升级影响单次搬运量）。 */
+    /**
+     * 单次吞吐 = 64 × (1 + 堆叠升级数)（堆叠升级影响单次搬运量）。
+     * <p>走 {@link RsccRateLimiter#batchSaturating}：数值与改前逐格相同（{@code 64,128,…,448}），
+     * 且乘法饱和（I3）—— 堆叠升级个数同样先被夹到 6。</p>
+     */
     public int getTransferBatch() {
-        return Math.max(1, 64 * (1 + countUpgrades(STACK_UPGRADE)));
+        return (int) RsccRateLimiter.batchSaturating(64L, countUpgrades(STACK_UPGRADE));
     }
 
     /** 当前是否处于工作状态（刚收集/写入过，或缓存里还有<b>未被阻塞</b>的待处理资源）。 */
@@ -2665,6 +3932,9 @@ public class CollectionCacheBlockEntity
                     case 22 -> deleteMode ? 1 : 0;
                     // 23 = 当前删除吞吐/ tick（组数 × 单次吞吐，随速度 / 堆叠升级变化）——供界面展示
                     case 23 -> (int) Math.min(Integer.MAX_VALUE, getDeleteRatePerTick());
+                    // 24 / 25 = 第 101 轮「为什么没在吸」状态行（状态码 + 附加位），服务端算、客户端只显示
+                    case 24 -> absorbStatusReason;
+                    case 25 -> absorbStatusArg;
                     default -> 0;
                 };
             }
@@ -2676,7 +3946,7 @@ public class CollectionCacheBlockEntity
 
             @Override
             public int getCount() {
-                return 24;
+                return 26;
             }
         };
     }
@@ -2732,11 +4002,14 @@ public class CollectionCacheBlockEntity
     }
 
     /**
-     * 破坏方块时写入掉落物物品 NBT 的「非实体掉落」状态：
-     * 匹配区 ghost 标记、<b>流体/气体缓存</b>、4 个吸取开关、经验形态与统计。
-     * <p>缓存区（物品）与插件槽由破坏逻辑按实体掉落，因此这里<b>不包含</b>它们，避免重复。
-     * <p>放置时由原版 {@code BlockItem} 的 BLOCK_ENTITY_DATA 机制自动写回本方块实体，
-     * 从而做到流体（含不足 1 桶的余量）与标记配置的<b>零损耗</b>。
+     * <b>历史兼容方法，当前没有任何调用点</b>（{@code grep -rn saveStateForItem src/main/java} 只有定义与子类覆写）。
+     *
+     * <p>它当初的用途是「把非实体掉落的状态写进掉落物物品 NBT」，但那条路（战利品表）后来被换掉了：
+     * 现在拆方块的内容物结算由 {@code BlockContentReleaser} 负责 —— 它调的是 {@code saveAdditional()}
+     * （整份 NBT 随方块物品走），放置时再由 {@code CollectionCacheBlock#setPlacedBy} 交给
+     * {@link #loadPlacedState(CompoundTag, HolderLookup.Provider)} 回填。因此这里写的字段
+     * <b>已经不是</b>拆方块时真正保存的那份数据。保留方法只为不改动子类覆写与旧存档结构，
+     * 下轮可整段删除（连同 {@link #isStateDropped()} / {@code stateDropped} 字段）。</p>
      */
     public CompoundTag saveStateForItem() {
         stateDropped = true;
@@ -2824,26 +4097,72 @@ public class CollectionCacheBlockEntity
             if (marker == null || marker.isEmpty()) {
                 continue;
             }
-            final CompoundTag markerTag = new CompoundTag();
-            // 用 int 写槽位：旧存档写的是 byte（TAG_Byte 也是数值型，getInt 可正常读回），
-            // 而匹配区无上限后槽位可能超过 255，必须用 int。
-            markerTag.putInt(TAG_MARKER_SLOT, i);
-            markerTag.putBoolean(TAG_MARKER_FLUID, marker.fluid());
-            markerTag.putString(TAG_MARKER_ID, marker.id().toString());
-            markerTag.put(TAG_MARKER_NBT, marker.nbt() == null ? new CompoundTag() : marker.nbt());
-            markerTag.putLong(TAG_MARKER_AMOUNT, marker.amount());
-            markerTag.putBoolean(TAG_MARKER_MATCH_NBT, marker.matchNbt());
-            // 匹配标签集合：存 tag 注册名列表（旧字段 TAG_MARKER_MATCH_TAG 是布尔，语义已变更，不再写入）
-            if (marker.isTagFilter()) {
-                final ListTag tags = new ListTag();
-                for (final ResourceLocation tagId : marker.tags()) {
-                    tags.add(net.minecraft.nbt.StringTag.valueOf(tagId.toString()));
-                }
-                markerTag.put(TAG_MARKER_TAGS, tags);
-            }
-            markerList.add(markerTag);
+            markerList.add(encodeMarkerTag(marker, i));
         }
         tag.put(TAG_MARKERS, markerList);
+        // 第 101 轮：标记数量的「旧门槛归一」只做一次 —— 有这个键的存档按玩家真实意图读
+        // （他在条目标记界面里显式设过的 N 必须保留），没有这个键的才是第 95 轮及更早的旧档。
+        tag.putBoolean(TAG_MARKER_AMOUNT_V2, true);
+    }
+
+    /**
+     * 一条 ghost 标记 → NBT（写档，以及高级版「每区域过滤器」共用；两处必须是同一份编码，
+     * 否则区域过滤器读档后匹配规则会静默丢失）。
+     */
+    public static CompoundTag encodeMarkerTag(final MarkerEntry marker, final int slot) {
+        final CompoundTag markerTag = new CompoundTag();
+        // 用 int 写槽位：旧存档写的是 byte（TAG_Byte 也是数值型，getInt 可正常读回），
+        // 而匹配区无上限后槽位可能超过 255，必须用 int。
+        markerTag.putInt(TAG_MARKER_SLOT, slot);
+        markerTag.putBoolean(TAG_MARKER_FLUID, marker.fluid());
+        markerTag.putString(TAG_MARKER_ID, marker.id().toString());
+        markerTag.put(TAG_MARKER_NBT, marker.nbt() == null ? new CompoundTag() : marker.nbt());
+        markerTag.putLong(TAG_MARKER_AMOUNT, marker.amount());
+        markerTag.putBoolean(TAG_MARKER_MATCH_NBT, marker.matchNbt());
+        // 匹配标签集合：存 tag 注册名列表（旧字段 TAG_MARKER_MATCH_TAG 是布尔，语义已变更，不再写入）
+        if (marker.isTagFilter()) {
+            final ListTag tags = new ListTag();
+            for (final ResourceLocation tagId : marker.tags()) {
+                tags.add(net.minecraft.nbt.StringTag.valueOf(tagId.toString()));
+            }
+            markerTag.put(TAG_MARKER_TAGS, tags);
+        }
+        return markerTag;
+    }
+
+    /** NBT → 一条 ghost 标记（{@code null} = 这条读不出来，调用方跳过）。数量不做归一，由调用方决定。 */
+    @Nullable
+    public static MarkerEntry decodeMarkerTag(final CompoundTag markerTag,
+                                                 final HolderLookup.Provider registries) {
+        if (markerTag.contains(TAG_MARKER_ID)) {
+            final ResourceLocation id = ResourceLocation.tryParse(markerTag.getString(TAG_MARKER_ID));
+            if (id == null) {
+                return null;
+            }
+            return new MarkerEntry(
+                markerTag.getBoolean(TAG_MARKER_FLUID),
+                id,
+                markerTag.contains(TAG_MARKER_NBT) ? markerTag.getCompound(TAG_MARKER_NBT) : new CompoundTag(),
+                Math.max(1L, markerTag.getLong(TAG_MARKER_AMOUNT)),
+                markerTag.getBoolean(TAG_MARKER_MATCH_NBT),
+                readMarkerTags(markerTag));
+        }
+        if (markerTag.contains(TAG_MARKER_ITEM)) {
+            // 旧档兼容：物品标记（MatchComponents → matchNbt；旧的布尔 tag 语义已废弃，读档一律按具体物品）
+            if (registries == null) {
+                // 第 113 轮：{@code ItemStack.parseOptional(null, ...)} 会 NPE。客户端（tooltip / 界面）
+                // 有没有注册表上下文是不确定的，这里宁可「这条读不出来」也不能把客户端崩掉。
+                return null;
+            }
+            final ItemStack stack = ItemStack.parseOptional(registries, markerTag.getCompound(TAG_MARKER_ITEM));
+            if (stack.isEmpty()) {
+                return null;
+            }
+            return MarkerEntry.item(stack.copyWithCount(1),
+                Math.max(1L, markerTag.getInt(TAG_MARKER_AMOUNT)),
+                markerTag.getBoolean(TAG_MARKER_MATCH_COMPONENTS), registries);
+        }
+        return null;
     }
 
     private void writeAbsorb(final CompoundTag tag) {
@@ -2894,6 +4213,10 @@ public class CollectionCacheBlockEntity
     }
 
     private void loadMarkers(final CompoundTag tag, final HolderLookup.Provider registries) {
+        // 旧档（没有 MarkerAmountV2 键）= 第 95 轮及更早写下的数量门槛，需要归一为 1；
+        // 新档不做归一（玩家在条目标记界面里显式设过的 N 必须原样保留）。
+        final boolean legacyAmounts = !tag.getBoolean(TAG_MARKER_AMOUNT_V2);
+        legacyMarkerAmountsNormalized = 0;
         final ListTag markerList = tag.getList(TAG_MARKERS, Tag.TAG_COMPOUND);
         for (int i = 0; i < markerList.size(); i++) {
             final CompoundTag markerTag = markerList.getCompound(i);
@@ -2902,29 +4225,37 @@ public class CollectionCacheBlockEntity
             if (slot < 0) {
                 continue;
             }
-            if (markerTag.contains(TAG_MARKER_ID)) {
-                final ResourceLocation id = ResourceLocation.tryParse(markerTag.getString(TAG_MARKER_ID));
-                if (id == null) {
-                    continue;
-                }
-                putMarkerRaw(slot, new MarkerEntry(
-                    markerTag.getBoolean(TAG_MARKER_FLUID),
-                    id,
-                    markerTag.contains(TAG_MARKER_NBT) ? markerTag.getCompound(TAG_MARKER_NBT) : new CompoundTag(),
-                    Math.max(1L, markerTag.getLong(TAG_MARKER_AMOUNT)),
-                    markerTag.getBoolean(TAG_MARKER_MATCH_NBT),
-                    readMarkerTags(markerTag)));
-            } else if (markerTag.contains(TAG_MARKER_ITEM)) {
-                // 旧档兼容：物品标记（MatchComponents → matchNbt；旧的布尔 tag 语义已废弃，读档一律按具体物品）
-                final ItemStack stack = ItemStack.parseOptional(registries, markerTag.getCompound(TAG_MARKER_ITEM));
-                if (stack.isEmpty()) {
-                    continue;
-                }
-                putMarkerRaw(slot, MarkerEntry.item(stack.copyWithCount(1),
-                    Math.max(1L, markerTag.getInt(TAG_MARKER_AMOUNT)),
-                    markerTag.getBoolean(TAG_MARKER_MATCH_COMPONENTS), registries));
+            final MarkerEntry decoded = decodeMarkerTag(markerTag, registries);
+            if (decoded == null) {
+                continue;
             }
+            final long amount = normalizeLoadedMarkerAmount(decoded.amount(), legacyAmounts);
+            putMarkerRaw(slot, amount == decoded.amount() ? decoded : decoded.withRules(
+                amount, decoded.matchNbt(), decoded.tags()));
         }
+        if (legacyMarkerAmountsNormalized > 0) {
+            // 状态变化才写：这是一次性的存档迁移，一条 INFO 足够，不刷屏。
+            LOGGER.info("[rs_create_compat] 归流缓存仓 @{}：检测到 {} 条旧版标记带有「凑够 N 件才吸」"
+                    + "的数量门槛（第 95 轮及更早写下的手持件数），已归一为「有就收」（数量 = 1）。"
+                    + "需要凑够 N 件再吸的，请在条目标记界面里重新填 N —— 新值会被持久化，不再归一。",
+                worldPosition, legacyMarkerAmountsNormalized);
+        }
+    }
+
+    /**
+     * 读档时的标记数量归一（第 101 轮 P0-3 修复）。
+     * <p>旧档的 {@code Amount} 是「凑够才吸」的硬门槛（当年 Shift 标记写的是手持堆叠件数，常见 64），
+     * 而玩家扔几件（尤其 1 件）永远凑不满 ⇒ {@code absorbMatchingItems} 直接 return 0，
+     * 表现为「已经标记的物品扔进去根本吸不出来」。现在按存档版本只归一一次：
+     * 旧档 → 1，新档 → 原样保留玩家显式设置的值。</p>
+     */
+    private long normalizeLoadedMarkerAmount(final long raw, final boolean legacyAmounts) {
+        final long amount = Math.max(1L, raw);
+        if (legacyAmounts && amount > 1L) {
+            legacyMarkerAmountsNormalized++;
+            return 1L;
+        }
+        return amount;
     }
 
     /** 读取标记的匹配标签集合：新字段（列表）优先；只有旧单值字段时升级为单元素列表。 */
@@ -3011,9 +4342,10 @@ public class CollectionCacheBlockEntity
     @Override
     public Object rscc$clusterNewPayload(final int machineCount) {
         final int count = Math.max(1, machineCount);
-        // 容量叠加：物品格数 = 台数 × CACHE_SLOTS；流体容量 = 台数 × FLUID_CACHE_CAPACITY
-        return new ClusterPayload(new SimpleContainer(CACHE_SLOTS * count),
-            new MultiFluidCache(FLUID_CACHE_CAPACITY * count));
+        // 容量叠加：物品格数 = 台数 × 单机格数；流体容量 = 台数 × 单机容量
+        // （单机值走实例字段：基础版 = CACHE_SLOTS / FLUID_CACHE_CAPACITY，高级版是它们的两倍）
+        return new ClusterPayload(new SimpleContainer(cacheSlots * count),
+            new MultiFluidCache(fluidCacheCapacity * count));
     }
 
     @Override
@@ -3037,12 +4369,12 @@ public class CollectionCacheBlockEntity
 
     @Override
     public void rscc$clusterStandalone() {
-        if (cache.getContainerSize() == CACHE_SLOTS && fluidCache.getCapacity() == FLUID_CACHE_CAPACITY) {
+        if (cache.getContainerSize() == cacheSlots && fluidCache.getCapacity() == fluidCacheCapacity) {
             return; // 已是单机规格：不重建对象，保持载荷身份稳定
         }
         // 调用方保证内容已按拆集群规则移交，这里只换成一份空的单机存储
-        cache = new SimpleContainer(CACHE_SLOTS);
-        fluidCache = new MultiFluidCache(FLUID_CACHE_CAPACITY);
+        cache = new SimpleContainer(cacheSlots);
+        fluidCache = new MultiFluidCache(fluidCacheCapacity);
         clusterPayload = null;
         setChanged();
     }
@@ -3420,7 +4752,9 @@ public class CollectionCacheBlockEntity
 
                 @Override
                 public int getTankCapacity(final int tank) {
-                    return (int) Math.min(Integer.MAX_VALUE, FLUID_CACHE_CAPACITY);
+                    // 实例字段而不是静态常量：高级版把容量放大到 1_024_000 mB，
+                    // 用静态值会让「经物流能力对外报的罐容」与「实际能存多少」口径分叉（高级版少报一半）。
+                    return (int) Math.min(Integer.MAX_VALUE, fluidCacheCapacity);
                 }
 
                 @Override

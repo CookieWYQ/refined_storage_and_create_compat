@@ -1,0 +1,29 @@
+{
+  "replace": false,
+  "mod_loaded": "farmersdelight",
+  "_comment": [
+    "农夫乐事（Farmer's Delight）植物的补充条目。",
+    "mod_loaded 门：没装农夫乐事时整份跳过 —— 不会因为引用了不存在的 id / tag 在日志里刷一屏警告。",
+    "tag 用农夫乐事 1.21 分支真实存在的两个：wild_crops（7 种野生作物）与 mushroom_colonies（2 种蘑菇群）。",
+    "蔬菜本体没有现成的 tag，只能按 id 列；id 已逐个对照 farmersdelight 1.21 分支的 assets/farmersdelight/models/item/*.json 核实存在。",
+    "",
+    "第 123 轮只做「数值重标」：按新的 4 档平衡表把旧数值换成新档位（T1 10t/25FE、T2 20t/50FE、T3 40t/100FE），",
+    "  条目结构（tag / item + time + energy）保持不变，不新增模组、不引入本模组之外的副产物。",
+    "  因此本文件的条目都只有电、没有副产物（results）；想让野生作物也产骨粉，请在数据包里覆盖这两条 tag 并写 results。",
+    "旧值 → 新值对照：60t/3600 FE → 10/25；60t/4000 FE → 10/25；40t/1800 FE → 10/25；100t/8000 FE → 20/50；200t/24000 FE → 40/100。",
+    "文件里 _comment 只是给人看的说明字段，加载器忽略未知字段。"
+  ],
+  "entries": [
+    { "tag": "farmersdelight:wild_crops", "time": 10, "energy": 25 },
+    { "tag": "farmersdelight:mushroom_colonies", "time": 40, "energy": 100 },
+
+    { "item": "farmersdelight:cabbage", "time": 20, "energy": 50 },
+    { "item": "farmersdelight:tomato", "time": 20, "energy": 50 },
+    { "item": "farmersdelight:onion", "time": 20, "energy": 50 },
+    { "item": "farmersdelight:cabbage_leaf", "time": 10, "energy": 25 },
+    { "item": "farmersdelight:cabbage_seeds", "time": 10, "energy": 25 },
+    { "item": "farmersdelight:tomato_seeds", "time": 10, "energy": 25 },
+    { "item": "farmersdelight:rice", "time": 10, "energy": 25 },
+    { "item": "farmersdelight:rice_panicle", "time": 10, "energy": 25 }
+  ]
+}

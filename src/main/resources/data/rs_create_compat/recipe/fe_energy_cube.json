@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "QRQ",
+    "CMC",
+    "QPQ"
+  ],
+  "key": {
+    "Q": {
+      "item": "refinedstorage:quartz_enriched_iron"
+    },
+    "R": {
+      "item": "minecraft:redstone_block"
+    },
+    "C": {
+      "item": "minecraft:copper_block"
+    },
+    "M": {
+      "item": "refinedstorage:machine_casing"
+    },
+    "P": {
+      "item": "refinedstorage:advanced_processor"
+    }
+  },
+  "result": {
+    "id": "rs_create_compat:fe_energy_cube"
+  }
+}

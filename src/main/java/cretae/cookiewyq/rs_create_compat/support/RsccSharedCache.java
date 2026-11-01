@@ -78,7 +78,14 @@ public final class RsccSharedCache {
     /** 判断磁盘存储是否「能存物品」用的探针资源（只看类型，不看具体物品）。 */
     private static final ItemResource ITEM_PROBE = new ItemResource(net.minecraft.world.item.Items.AIR);
 
-    /** 无限容量磁盘（创造级）对外报告的剩余容量：足够大又不会在别处做加法时溢出。 */
+    /**
+     * 无限容量磁盘（创造级）对外报告的剩余容量。
+     *
+     * <p>第 119 轮修正注释：旧注释声称这个常量「在别处做加法也不会溢出」，这是<b>错的</b> ——
+     * 该值本身是 {@code Long.MAX_VALUE / 4}，池子里只要同时存在 5 块以上无限盘，
+     * 逐个相加就会回绕成负数。现在所有求和都走 {@link SaturatingMath#add}（饱和加法），
+     * 因此这里的数值只需要「足够大」，溢出由求和一端兜住。
+     */
     private static final long UNLIMITED_REMAINING = Long.MAX_VALUE / 4;
 
     /** 池内容的版本号（全局单调）：换盘 / 写入 / 拓扑变化都会 +1，用于作废「伪槽位清单」缓存。 */
@@ -167,22 +174,28 @@ public final class RsccSharedCache {
      *
      * <p>用途：{@link RsccIntermediateFlow} 的「闸门 A」—— 池子满了就一件都不抽，
      * 避免「抽出来又插不进去」的无谓往返。</p>
+     *
+     * <p><b>第 119 轮修</b>：求和改走 {@link SaturatingMath#add}。旧实现裸 {@code +=}，
+     * 而无限容量盘每块报告 {@link #UNLIMITED_REMAINING}（{@code Long.MAX_VALUE / 4}）——
+     * 池子里 5 块以上就会溢出成负数，闸门 A 因此把「几乎无限的空位」读成「池子满了」，
+     * 中间产物一件都不搬（不报错、不打日志，只表现为机器无故不动）。</p>
      */
     public static long poolFreeSpace(final net.minecraft.world.level.Level level,
                                      final com.refinedmods.refinedstorage.api.network.Network network) {
         long free = 0L;
         for (final SerializableStorage each : storages(level, network)) {
-            free += remainingOf(each);
+            free = SaturatingMath.add(free, remainingOf(each));
         }
         return free;
     }
 
-    /** <b>缓存池当前已存件数</b>（对照读数用：与 {@link #poolFreeSpace} 配对）。 */
+    /** <b>缓存池当前已存件数</b>（对照读数用：与 {@link #poolFreeSpace} 配对）。
+     *  <p>同样走饱和加法：盘数多、单盘件数大时不会回绕成负数。</p> */
     public static long poolStored(final net.minecraft.world.level.Level level,
                                   final com.refinedmods.refinedstorage.api.network.Network network) {
         long stored = 0L;
         for (final SerializableStorage each : storages(level, network)) {
-            stored += storedOf(each);
+            stored = SaturatingMath.add(stored, storedOf(each));
         }
         return stored;
     }
@@ -203,7 +216,8 @@ public final class RsccSharedCache {
         for (final SerializableStorage each : storages(level, network)) {
             for (final ResourceAmount amount : each.getAll()) {
                 if (amount.amount() > 0L) {
-                    contents.merge(amount.resource(), amount.amount(), Long::sum);
+                    // 同一资源分散在多块盘上：按饱和加法合并（第 119 轮修，理由见 poolFreeSpace）
+                    contents.merge(amount.resource(), amount.amount(), SaturatingMath::add);
                 }
             }
         }
@@ -226,7 +240,8 @@ public final class RsccSharedCache {
         CACHE.clear();
     }
 
-    /** 诊断：池子的「盘数 / 已用 / 容量」摘要（无限盘记 {@code INF}）；没有盘时返回 {@code none}。 */
+    /** 诊断：池子的「盘数 / 已用 / 容量」摘要（无限盘记 {@code INF}）；没有盘时返回 {@code none}。
+     *  <p>两个累加同样走饱和加法（第 119 轮修）：多盘 + 大容量时裸 {@code +=} 会把摘要打成负数。</p> */
     public static String describe(@Nullable final Level level, @Nullable final Network network) {
         final List<SerializableStorage> storages = storages(level, network);
         if (storages.isEmpty()) {
@@ -236,12 +251,12 @@ public final class RsccSharedCache {
         long capacity = 0L;
         boolean unlimited = false;
         for (final SerializableStorage storage : storages) {
-            stored += storedOf(storage);
+            stored = SaturatingMath.add(stored, storedOf(storage));
             final long each = capacityOf(storage);
             if (each < 0L) {
                 unlimited = true;
             } else {
-                capacity += each;
+                capacity = SaturatingMath.add(capacity, each);
             }
         }
         return storages.size() + "x" + stored + "/" + (unlimited ? "INF" : capacity);

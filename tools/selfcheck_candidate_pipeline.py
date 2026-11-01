@@ -141,7 +141,7 @@ def main():
           "List<ItemStack> ingredientCandidates," in packet)
     check("encode/decode 对称（漏读会整表串位）",
           "writeStacks(buf, packet.ingredientCandidates());" in packet
-          and "final List<ItemStack> ingredientCandidates = readStacks(buf);" in packet)
+          and "final List<ItemStack> ingredientCandidates = readStacks(buf, staged);" in packet)
     check("handle 把它交给菜单",
           "packet.stepCandidates(), packet.ingredientCandidates());" in packet)
     check("JEI 侧算出起步原料候选",

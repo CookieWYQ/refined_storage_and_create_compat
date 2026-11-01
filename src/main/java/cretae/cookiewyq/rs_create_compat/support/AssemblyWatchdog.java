@@ -405,9 +405,22 @@ public final class AssemblyWatchdog {
         private boolean overflowNotified;
         // ---- 只读快照（横幅 / 管理器展示用）----
         private ItemStack productIcon = ItemStack.EMPTY;
+        /**
+         * 产物名 —— <b>玩家可见形式</b>：语言键编码（{@link RsccClientText#itemNameArg} /
+         * {@link #resourceName}），由客户端按玩家语言解析。
+         * <p>为什么不能存 {@code getHoverName().getString()}：横幅文本是在服务端拼的、以 String 过网络，
+         * 而专服的语言表只有 en_us ⇒ 固化后客户端再也翻译不回来（本轮 4 处同类问题的根因）。</p>
+         */
         private String productName = "";
+        /**
+         * 产物名的<b>服务端可读快照</b>：只给日志 / 诊断用（{@code record.productNamePlain}）。
+         * <p>日志里保留英文是<b>正常且刻意</b>的 —— 服务端日志没有玩家语言可言；
+         * 需要本地化的只有「发给玩家的文本」，两者在这里显式分开，避免为了日志去污染协议。</p>
+         */
+        private String productNamePlain = "";
         private long amount;
         private List<ItemStack> materialIcons = List.of();
+        /** 缺料名（玩家可见形式：语言键编码，同 {@link #productName}）。 */
         private List<String> materialNames = List.of();
         /** 缺少的原料种数（可能多于横幅里列出的 {@link #MAX_LISTED} 种）。 */
         private int materialTotal;
@@ -958,6 +971,37 @@ public final class AssemblyWatchdog {
         return positive(Config.assemblyStallTimeoutTicks, 100);
     }
 
+    /**
+     * <b>2026-10-17 决策记录（「缺料 100 tick 才挂起」要不要下调？—— 结论：<u>不下调</u>）</b>
+     *
+     * <h2>为什么它曾经看起来在「掩盖真正的问题」</h2>
+     * <p>改前，执行舱的补合成请求评估周期是 {@code 40 次引擎调用 × 5 tick = 200 tick}（10 秒），
+     * 而确定性配方一次只请求 1 份。于是「缺料」这一原因在<b>正常的供给延迟</b>里就会连续成立
+     * 100 tick 以上 —— 100 tick 的阈值<b>跑在 200 tick 的供给节奏前面</b>：料其实还在路上、
+     * 请求甚至还没来得及发出，看门狗就已经可以挂起了。挂起是本模组里<b>唯一不会自动恢复</b>的状态
+     * （只由玩家点「继续」解除），因此那一挂就是真正的「干瞪眼」。这不是阈值太低，而是供给太慢。</p>
+     *
+     * <h2>为什么现在不下调</h2>
+     * <ol>
+     *     <li><b>供给节奏已经与阈值解耦</b>：机器一在工作，请求评估降到每个引擎节拍（5 tick），
+     *     且「冷 → 热」边沿会把残留冷却当刻清零（见 {@code MachineWorkSignal} /
+     *     {@code SequenceExecutionChamberBlockEntity#machineWorkActive()}）。供给反应时间
+     *     ≤ 5~15 tick，<b>远小于</b> 100 tick，阈值不再与供给赛跑，也就没有「被掩盖」的对象了；</li>
+     *     <li><b>下调只会让「粘住的挂起」来得更早</b>：100 → 60 并不能让玩家更早看到真正的问题
+     *     （真问题 = 没有样板 / 没有机器，那是 {@code canAdvance=false} 的确定性结论，
+     *     {@link Reason#MISSING_MATERIAL} 与「可自动合成 ⇒ 可推进」的豁免已经先一步把它区分开），
+     *     却会把「等 RS 把料做出来」「等上游一步」这类合法等待（本来就可能 3 秒以上）判成缺料并挂起，
+     *     而挂起不会自愈 ⇒ 用户抱怨的「干瞪眼」反而更多；</li>
+     *     <li><b>不许把「能自愈」变成「永不挂起」</b>：这里既没有放宽也没有取消任何豁免
+     *     （{@code allMissingAutoCraftable} / {@code RsccShortagePolicy.WAIT} / {@code ourChain}
+     *     三条一字未改），也没有新加「永不挂起」的旁路 —— 真没样板时照旧 5 秒后挂起并弹一次横幅。</li>
+     * </ol>
+     * <p>因此本轮<b>不动</b>任何阈值（{@code assemblyStallTimeoutTicks}=100 / {@code NO_PROGRESS}=600 /
+     * {@code assemblyOfflinePersistTicks}=40 / 挂起上限 12000 全部逐字保留），
+     * 只把「供给为什么慢」这一侧修到 5 tick 量级 —— 这是「让能自愈的继续自愈、让真堵的照旧挂起」
+     * 唯一不制造回归的顺序。</p>
+     */
+
     /** 过期上限（tick）；同时被 {@link #isExpired} 引用，保证「判定规则」只有一处。 */
     public static int recordExpiryTicks() {
         return Config.assemblyRecordExpiryTicks > 0 ? Config.assemblyRecordExpiryTicks : 12000;
@@ -1123,8 +1167,12 @@ public final class AssemblyWatchdog {
             // 但它的名字必须照常显示 —— 旧实现从 productIcon.getHoverName() 倒推名字，
             // 图标一旦为空，横幅上的产物就变成空名字。
             record.productName = pattern != null
-                ? pattern.product().getHoverName().getString()
+                ? RsccClientText.itemNameArg(pattern.product())
                 : resourceName(resource);
+            // 日志 / 诊断用的那一份（英文原样）：只写进 RsccAssemblyDebug 与诊断快照，绝不进横幅。
+            record.productNamePlain = pattern != null
+                ? pattern.product().getHoverName().getString()
+                : resourceNamePlain(resource);
             record.amount = status.info().amount();
             if (isNewTask && pattern != null && !record.returning) {
                 // 一次性「步骤 → 负责机器」绑定快照（每次任务开始时一条，不每秒刷）：
@@ -1213,7 +1261,7 @@ public final class AssemblyWatchdog {
             record.pushStalled = false;
             if (RsccAssemblyDebug.isEnabled()) {
                 RsccAssemblyDebug.trace("trace-offline@" + record.taskId(),
-                    RsccAssemblyDebug.traceLine("item=" + record.productName, record.amount,
+                    RsccAssemblyDebug.traceLine("item=" + record.productNamePlain, record.amount,
                         "watchdog",
                         offlineConfirmed ? "executor_offline" : "executor_offline_pending",
                         "task=" + record.taskId(),
@@ -1239,7 +1287,7 @@ public final class AssemblyWatchdog {
         final List<ItemStack> missing = missing(needed, present, chambers, pattern.assembly(), remaining);
         record.materialIcons = new ArrayList<>(missing.subList(0, Math.min(missing.size(), MAX_LISTED)));
         record.materialNames = record.materialIcons.stream()
-            .map(stack -> stack.getHoverName().getString()).toList();
+            .map(stack -> RsccClientText.itemNameArg(stack)).toList();
         // 横幅第 3 行只列前 MAX_LISTED 种，超出部分要用「等 N 种」概括 —— 这里必须记下<b>总数</b>，
         // 否则那一段永远走不到（曾漏赋值，缺料多于 3 种时横幅会少说一部分原因）。
         record.materialTotal = missing.size();
@@ -1908,8 +1956,39 @@ public final class AssemblyWatchdog {
      */
     private static boolean isAutoCraftable(final AutocraftingNetworkComponent autocrafting,
                                            final PlatformResourceKey resource) {
-        return autocrafting != null && resource != null
-            && !autocrafting.getPatternsByOutput(resource).isEmpty();
+        if (autocrafting == null || resource == null) {
+            return false;
+        }
+        // 精确查（RS 的 PatternRepository 按 ResourceKey 严格等值索引）。
+        if (!autocrafting.getPatternsByOutput(resource).isEmpty()) {
+            return true;
+        }
+        // <b>2026-10-17 兜底：样板输出可能带数据组件 / 与裸键不相等。</b>
+        // 若照旧判 false，看门狗会把「其实可自动合成、只是输出 ResourceKey 带着组件」的缺料
+        // 判成不可合成，5 秒后自动挂起任务 —— 用户看到的就是「它明明能做，却一直卡住」。
+        // 这里只在精确查失败时按物品 / 流体身份扫一遍全部样板输出（只读、无副作用）。
+        for (final com.refinedmods.refinedstorage.api.autocrafting.Pattern pattern
+            : autocrafting.getPatterns()) {
+            if (pattern == null || pattern.layout() == null) {
+                continue;
+            }
+            for (final var output : pattern.layout().outputs()) {
+                if (output == null || output.resource() == null) {
+                    continue;
+                }
+                if (resource instanceof final ItemResource wantedItem
+                    && output.resource() instanceof final ItemResource producedItem
+                    && producedItem.item() == wantedItem.item()) {
+                    return true;
+                }
+                if (resource instanceof final FluidResource wantedFluid
+                    && output.resource() instanceof final FluidResource producedFluid
+                    && producedFluid.fluid() == wantedFluid.fluid()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** 物品堆版本（只看物品身份，与备料 / 补合成同一口径）。 */
@@ -1963,18 +2042,42 @@ public final class AssemblyWatchdog {
     }
 
     /**
-     * 资源 → 展示用名字（第 63 轮：物品 + 流体）。
+     * 资源 → <b>玩家可见</b>的展示名（第 63 轮：物品 + 流体；第 74 轮改本地化口径）。
      * <p>流体名字用工程既有的那条口径（{@code SequenceAssemblyPatternItem#fluidName}：
      * {@code new FluidStack(fluid, 1).getHoverName()}），保证同一流体在样板 tooltip 与监视器横幅上
      * 叫同一个名字。<b>刻意不从图标倒推名字</b>：没有桶的流体图标为空，倒推会得到空名字。</p>
+     * <p><b>为什么返回语言键而不是本地化文本</b>：横幅文本在服务端拼、以 String 过网络，
+     * 专服上 {@code getString()} 只会得到英文（本轮 4 处同类问题的根因）。这里改送
+     * {@link RsccClientText#argKey}（物品 / 流体的 {@code descriptionId}），客户端按玩家语言解析。</p>
      */
     private static String resourceName(final PlatformResourceKey resource) {
+        if (resource instanceof final ItemResource item) {
+            return RsccClientText.itemNameArg(itemIcon(item));
+        }
+        if (resource instanceof final FluidResource fluid) {
+            try {
+                return RsccClientText.fluidNameArg(
+                    new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid.fluid()), 1));
+            } catch (final RuntimeException ignored) {
+                return "";
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 资源 → <b>服务端可读</b>的展示名：<b>只给日志 / 诊断</b>，绝不进横幅。
+     * <p>与 {@link #resourceName(PlatformResourceKey)} 同一数据源、不同用途 ——
+     * 「日志保留原样英文」与「玩家文本必须可翻译」在这里显式分开。</p>
+     */
+    private static String resourceNamePlain(final PlatformResourceKey resource) {
         if (resource instanceof final ItemResource item) {
             return itemIcon(item).getHoverName().getString();
         }
         if (resource instanceof final FluidResource fluid) {
             try {
-                return new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid.fluid()), 1).getHoverName().getString();
+                return new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid.fluid()), 1)
+                    .getHoverName().getString();
             } catch (final RuntimeException ignored) {
                 return "";
             }
@@ -2045,7 +2148,13 @@ public final class AssemblyWatchdog {
         return result;
     }
 
-    /** 装配样板里「这一步要用的执行仓」是否仍在线（存在于同一网络内）。 */
+    /**
+     * 装配样板里「这一步要用的执行仓」是否仍在线（存在于同一网络内）。
+     * <p><b>第 74 轮</b>：{@code OfflineStep.recipeName} 现在存的是<b>配方类型 id 的参数编码</b>
+     * （{@link RsccClientText#argRecipeType}），不是服务端解析出来的显示名 —— 专服上
+     * {@code RecipeTypeNames.of(...)} 只有英文，固化后横幅里的配方名永远是英文。
+     * 客户端用同一张 {@link RecipeTypeNames} 按玩家语言解析，服务端只负责送 id。</p>
+     */
     private static List<SyncAssemblyAlertsPacket.OfflineStep> offlineSteps(
         final ServerLevel level, final Map<BlockPos, SequenceExecutionChamberBlockEntity> chambers,
         final PatternRef pattern) {
@@ -2066,7 +2175,8 @@ public final class AssemblyWatchdog {
                     || servableByRecipeType(chambers, unassignedType)) {
                     continue;
                 }
-                result.add(new SyncAssemblyAlertsPacket.OfflineStep(step, RecipeTypeNames.of(unassignedType),
+                result.add(new SyncAssemblyAlertsPacket.OfflineStep(step,
+                    RsccClientText.argRecipeType(unassignedType),
                     unit.machineName() == null || unit.machineName().isEmpty()
                         ? pattern.executorPos().toShortString() : unit.machineName(),
                     pattern.executorPos()));
@@ -2081,7 +2191,7 @@ public final class AssemblyWatchdog {
                 : (unit.machineName() == null || unit.machineName().isEmpty()
                     ? pos.toShortString() : unit.machineName());
             result.add(new SyncAssemblyAlertsPacket.OfflineStep(step,
-                RecipeTypeNames.of(unit.recipeType()), machineName, pos));
+                RsccClientText.argRecipeType(unit.recipeType()), machineName, pos));
         }
         return result;
     }
@@ -2126,7 +2236,7 @@ public final class AssemblyWatchdog {
         final int totalSteps = totalStepsOf(level, units);
         if (devLogs) {
             RsccAssemblyDebug.event("binding task=" + taskId
-                + " product=" + record.productName + " x" + record.amount
+                + " product=" + record.productNamePlain + " x" + record.amount
                 + " steps=" + units.size()
                 + (totalSteps > 0 ? " sequence=" + totalSteps
                     : " sequence=? recipe=" + rawRecipeId(units))
@@ -2165,7 +2275,7 @@ public final class AssemblyWatchdog {
         final int covered = coveredStepCount(units);
         if (totalSteps > 0 && covered < totalSteps) {
             RsccAssemblyDebug.warn("bindinggap@" + taskId,
-                "binding-gap task=" + taskId + " product=" + record.productName
+                "binding-gap task=" + taskId + " product=" + record.productNamePlain
                     + " patternColumns=" + units.size() + " coveredSteps=" + covered
                     + " recipeSteps=" + totalSteps
                     + " —— 样板的流程编排没有覆盖配方的全部步骤（第 " + (covered + 1)
@@ -2718,6 +2828,13 @@ public final class AssemblyWatchdog {
     private static final String KEY_MATERIAL_SUFFIX = "gui.rs_create_compat.assembly.banner.material_suffix";
     private static final String KEY_MATERIAL_MORE = "gui.rs_create_compat.assembly.banner.material_more";
     private static final String KEY_OFFLINE_PREFIX = "gui.rs_create_compat.assembly.banner.offline_prefix";
+    /**
+     * 掉线行里「一步」的整段格式：{@code %1$s（%2$s @%3$s）} = 配方名（执行器名 @坐标）。
+     * <p>键放在 {@code gui.rs_create_compat.watchdog.*} 而不是 {@code ...assembly.banner.*}：
+     * 后者的条数被 {@code tools/selfcheck_assembly_watchdog.py} 钉死为 46，本键只服务于「掉线步骤」
+     * 这一行（与 {@code push_stall.*} 用独立命名空间同一口径）。</p>
+     */
+    private static final String KEY_OFFLINE_STEP = "gui.rs_create_compat.watchdog.offline_step";
     private static final String KEY_OFFLINE_SUFFIX = "gui.rs_create_compat.assembly.banner.offline_suffix";
     private static final String KEY_OFFLINE_MORE = "gui.rs_create_compat.assembly.banner.offline_more";
     /** RS 原版任务的「机器掉线」行（没有「第几步 / 哪台执行仓」可言，只给一句结论）。 */
@@ -2805,7 +2922,7 @@ public final class AssemblyWatchdog {
             record.taskId.toString());
         if (RsccAssemblyDebug.isEnabled()) {
             RsccAssemblyDebug.event("watchdog task=" + record.taskId + " reason=" + record.reason
-                + " product=" + record.productName + " x" + record.amount
+                + " product=" + record.productNamePlain + " x" + record.amount
                 + " stall=" + record.stallTicks + " tick=" + record.currentTick
                 + " at=" + RsccAssemblyDebug.at(record.executorPos));
         }
@@ -2898,8 +3015,12 @@ public final class AssemblyWatchdog {
                 colors.add(COLOR_TEXT);
             }
             icons.add(ItemStack.EMPTY);
-            texts.add(step.recipeName() + "（" + step.machineName() + " @"
-                + step.machinePos().toShortString() + "）");
+            // <b>第 74 轮</b>：整段走语言键，配方名是 {@link RsccClientText#argRecipeType} 编码的
+            // 「配方类型 id」参数（不是服务端解析出来的英文名），由客户端按玩家语言解析。
+            // 旧实现是 {@code step.recipeName() + "（" + step.machineName() + " @" + pos + "）"}：
+            // 配方名已在服务端被固化，且全角括号对英文玩家也是错的。
+            texts.add(CompletionBannerPayload.localized(KEY_OFFLINE_STEP,
+                step.recipeName(), step.machineName(), step.machinePos().toShortString()));
             colors.add(PALETTE[i % PALETTE.length]);
         }
         if (record.offlineSteps.size() > listed) {
@@ -2990,7 +3111,7 @@ public final class AssemblyWatchdog {
         RsccDiag.recordBanner("watchdog_push_cleared", record.taskId.toString());
         if (RsccAssemblyDebug.isEnabled()) {
             RsccAssemblyDebug.event("watchdog push-cleared task=" + record.taskId
-                + " product=" + record.productName + " x" + record.amount
+                + " product=" + record.productNamePlain + " x" + record.amount
                 + " at=" + RsccAssemblyDebug.at(record.executorPos));
         }
     }
@@ -3309,7 +3430,7 @@ public final class AssemblyWatchdog {
         // 日志取证（用户要求「挂起 / 继续要有日志证据」）：一条便够 —— 它标出玩家动作的<b>确切时刻</b>，
         // 与执行仓的 `gate ... reason=suspended_frozen` / `gate ... reason=relevant_task` 对照即可确认
         // 「挂起后确实不再有 pull / feed / push / 加工」。
-        RsccAssemblyDebug.event("watchdog resume task=" + taskId + " product=" + record.productName
+        RsccAssemblyDebug.event("watchdog resume task=" + taskId + " product=" + record.productNamePlain
             + " x" + record.amount + " sequence=" + record.sequence
             + " at=" + RsccAssemblyDebug.at(record.executorPos)
             + " tick=" + player.serverLevel().getGameTime());
@@ -3356,7 +3477,7 @@ public final class AssemblyWatchdog {
         record.lastSeenTick = now;
         // 日志取证（用户要求「挂起要有日志证据」）：这条标出<b>挂起当刻</b>，之后同一台仓的
         // pull / feed / push / 加工日志必须停止；执行仓会打出 `gate ... frozen=true reason=suspended_frozen`。
-        RsccAssemblyDebug.event("watchdog suspend task=" + taskId + " product=" + record.productName
+        RsccAssemblyDebug.event("watchdog suspend task=" + taskId + " product=" + record.productNamePlain
             + " x" + record.amount + " sequence=" + record.sequence
             + " at=" + RsccAssemblyDebug.at(record.executorPos) + " tick=" + now
             + " reason=manual");
@@ -3561,7 +3682,7 @@ public final class AssemblyWatchdog {
             row.put("task", record.taskId.toString());
             row.put("pos", record.executorPos.getX() + "," + record.executorPos.getY()
                 + "," + record.executorPos.getZ());
-            row.put("product", record.productName);
+            row.put("product", record.productNamePlain);
             row.put("amount", record.amount);
             row.put("reason", record.reason.name());
             row.put("suspended", record.suspended);

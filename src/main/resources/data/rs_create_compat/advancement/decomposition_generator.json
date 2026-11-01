@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "decomposition_generator": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:decomposition_generator"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.decomposition_generator.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:decomposition_generator"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.decomposition_generator.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "decomposition_generator"
+    ]
+  ]
+}

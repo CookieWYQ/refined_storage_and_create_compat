@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""第 22 轮：RS「自动合成预览」界面显示「中间产物（优先复用）」——纯显示层，红线不动。
+"""第 22 轮：RS「自动合成预览」界面显示「优先使用中间产物」——纯显示层，红线不动。
 
 用户原话：「当『优先使用中间产物』开关打开时，这个预览界面应当能看出『本配方会优先复用中间产物』，
 而不是只显示起步原料就完事。」
+
+**2026-10-17 语义修正（身份与策略分离）**：这行字是<b>附加标注</b>（策略），
+不是分类改名 —— 用户原话「这个中间产物、就是这个原料，这个时候不要显示成中间产物，还是正常显示，
+但是旁边需要标注『优先使用中间产物』」。本脚本的断言意图一字未改（仍然只钉「是附加的一行 + 开关为关不显示
++ 定位紧」），只是文案从「中间产物（优先复用）」改成「优先使用中间产物」。
+其余语义判据见 tools/selfcheck_round70_intermediate_label.py。
 
 本脚本把这一轮的三条硬约束钉成可回归的锚点：
   1) <b>纯显示层</b>：只在 RS 的预览界面上多画一行，绝不动样板的 ingredient 构成
@@ -168,11 +174,14 @@ check("4f 请求包只读：不写任何服务端状态（只 sendToPlayer 一�
 zh = json.load(io.open(os.path.join(LANG, "zh_cn.json"), encoding="utf-8"))
 en = json.load(io.open(os.path.join(LANG, "en_us.json"), encoding="utf-8"))
 check("4g zh/en 键集合一致", set(zh) == set(en))
-has(screen_mixin, '"%s"' % KEY, "4h 界面 Mixin 引用的就是这对键")
+has(screen_mixin, '"%s"' % KEY, "4h 界面 Mixin 引用的就是这对键（附加标注，不是分类改名）")
 check("4i 键在中英两边都存在且非空", zh.get(KEY, "").strip() and en.get(KEY, "").strip())
 text = zh.get(KEY, "")
 check("4j 中文文案 ≤40 字符", len(text) <= 40, "len=%d" % len(text))
-check("4k 文案不写「或」/「等 N 种」/「图标轮换」/种类数",
+check("4k 文案是「优先使用中间产物」这句附加标注（2026-10-17 修正：不再自称「中间产物」这个分类）",
+      text == "优先使用中间产物",
+      "zh=%r" % text)
+check("4k2 文案不写「或」/「等 N 种」/「图标轮换」/种类数",
       "或" not in text and "等" not in text and "轮换" not in text
       and not __import__("re").search(r"\d", text))
 

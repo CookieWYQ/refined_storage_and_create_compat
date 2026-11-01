@@ -3,6 +3,7 @@ package cretae.cookiewyq.rs_create_compat.client.screen;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.tooltip.RecipeTypeMachines;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.data.RecipeTypeNames;
 import cretae.cookiewyq.rs_create_compat.data.SequencePatternData;
 import cretae.cookiewyq.rs_create_compat.menu.ChamberUnitsSummaryMenu;
@@ -71,8 +72,20 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
     /** 选中行左侧强调条（2px）。 */
     private static final int COLOR_ROW_ACCENT = 0xFF4A78C8;
 
-    /** 名字 / 配方 id 的文字区宽度（到第一个槽位框之前）。 */
+    /**
+     * 名字 / 配方 id 的文字区宽度（到第一个槽位框之前）。
+     * <p><b>第 104 轮（用户口径：不许省略号）</b>：执行仓名字超宽时用
+     * {@link RsccTextFit#drawFitLine} 整体缩字号完整显示（下限 {@link RsccTextFit#MIN_SCALE}），
+     * 不再截断加 {@code ...}；槽位网格起点（{@code ROW_SLOT_X = 150}）一个像素都不动。</p>
+     */
     private static final int NAME_MAX_W = 116;
+
+    /** 「轮询」提示相对提示行左端的偏移（与原来硬编码的 {@code + 118} 同源，抽出来供两段互相让位）。 */
+    private static final int POLL_OFFSET_X = 118;
+    /** 「轮询」提示的面板内绝对左端。 */
+    private static final int POLL_X = ChamberUnitsSummaryMenu.ROW_BAND_X + 2 + POLL_OFFSET_X;
+    /** 提示行两段之间的硬间隙（像素）：左段右界永远 ≤ 右段左界 − 间隙。 */
+    private static final int HINT_GAP = 4;
 
     /** 服务端同步回来的分页（权威值；客户端不自行改页，避免与槽位内容错位一帧）。 */
     private int page;
@@ -231,20 +244,32 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
             renderRowLabels(guiGraphics, row);
         }
         // 提示行：空网络 / 未选中 / 已选中的是哪台
+        // 第 104 轮：这三个都是「可能很长」的文本（执行仓名字是自由文本），一律 drawFitLine
+        // 完整显示（下限 MIN_SCALE），不再让它静默越出面板；「轮询」提示占右段时可用宽度随之收窄。
         final SyncChamberUnitsPacket.Entry selected = rowEntry(selectedRow);
+        final boolean pollShown = maxPage() > 0;
+        final int hintX = ChamberUnitsSummaryMenu.ROW_BAND_X + 2;
+        final int hintMaxW = pollShown ? POLL_X - hintX - HINT_GAP : imageWidth - hintX - 6;
         if (chambers.isEmpty()) {
-            guiGraphics.drawString(font, Component.translatable(LANG + "empty"),
-                ChamberUnitsSummaryMenu.ROW_BAND_X + 2, ChamberUnitsSummaryMenu.HINT_Y, COLOR_TEXT, false);
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.translatable(LANG + "empty"),
+                hintX, ChamberUnitsSummaryMenu.HINT_Y, hintMaxW, COLOR_TEXT);
         } else if (selected == null) {
-            guiGraphics.drawString(font, Component.translatable(LANG + "select.none"),
-                ChamberUnitsSummaryMenu.ROW_BAND_X + 2, ChamberUnitsSummaryMenu.HINT_Y, COLOR_DIM, false);
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.translatable(LANG + "select.none"),
+                hintX, ChamberUnitsSummaryMenu.HINT_Y, hintMaxW, COLOR_DIM);
         } else {
-            guiGraphics.drawString(font, Component.translatable(LANG + "selected", selected.name()),
-                ChamberUnitsSummaryMenu.ROW_BAND_X + 2, ChamberUnitsSummaryMenu.HINT_Y, COLOR_TEXT, false);
+            // 选中行的名字：轮询提示占住右段时不再加「已选中：」前缀 —— 选中行本身已有高亮底纹 +
+            // 左侧强调条，前缀属于重复信息；去掉它才能让自由文本（自定义机器名 / 第三方语言）
+            // 尽量以 1.0 倍字号完整显示（第 104 轮：宁可改排列，也不截断名字）。
+            final Component selectedText = pollShown
+                ? Component.literal(selected.name())
+                : Component.translatable(LANG + "selected", selected.name());
+            RsccTextFit.drawFitLine(guiGraphics, font, selectedText,
+                hintX, ChamberUnitsSummaryMenu.HINT_Y, hintMaxW, COLOR_TEXT);
         }
-        if (maxPage() > 0) {
-            guiGraphics.drawString(font, Component.translatable(LANG + "poll"),
-                ChamberUnitsSummaryMenu.ROW_BAND_X + 2 + 118, ChamberUnitsSummaryMenu.HINT_Y, COLOR_DIM, false);
+        if (pollShown) {
+            RsccTextFit.drawFitLine(guiGraphics, font, Component.translatable(LANG + "poll"),
+                hintX + POLL_OFFSET_X, ChamberUnitsSummaryMenu.HINT_Y,
+                imageWidth - (hintX + POLL_OFFSET_X) - 6, COLOR_DIM);
         }
         guiGraphics.drawString(font, Component.translatable(LANG + "page", page + 1, maxPage() + 1),
             ChamberUnitsSummaryMenu.PAGE_TEXT_X, ChamberUnitsSummaryMenu.PAGE_TEXT_Y, COLOR_DIM, false);
@@ -259,9 +284,10 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
         final int rowY = ChamberUnitsSummaryMenu.ROW_Y0 + row * ChamberUnitsSummaryMenu.ROW_H;
         guiGraphics.renderItem(machineIcon(entry),
             ChamberUnitsSummaryMenu.ROW_ICON_X, rowY + ChamberUnitsSummaryMenu.ROW_ICON_DY);
-        guiGraphics.drawString(font,
-            Component.literal(trimToWidth(entry.name(), NAME_MAX_W)),
-            ChamberUnitsSummaryMenu.ROW_TEXT_X, rowY + ChamberUnitsSummaryMenu.ROW_NAME_DY, COLOR_TEXT, false);
+        // 名字：超宽时整体缩字号完整显示（第 104 轮：不截断、不补省略号；下限 MIN_SCALE）
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(entry.name()),
+            ChamberUnitsSummaryMenu.ROW_TEXT_X,
+            rowY + ChamberUnitsSummaryMenu.ROW_NAME_DY, NAME_MAX_W, COLOR_TEXT);
         drawSmallText(guiGraphics, RecipeTypeNames.display(entry.recipeType()),
             ChamberUnitsSummaryMenu.ROW_TEXT_X, rowY + ChamberUnitsSummaryMenu.ROW_ID_DY, COLOR_DIM);
         if (entry.units().isEmpty()) {
@@ -285,6 +311,19 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
         return entry.units().isEmpty() ? ItemStack.EMPTY : entry.units().get(0);
     }
 
+    /**
+     * 该行单元样板的总<b>张数</b>（第 119 轮）：{@code entry.units()} 是「一格一项」，
+     * 每项的 count 可能大于 1，所以要把 count 相加；这才能与「取回 / 存入」按张搬运的口径、
+     * 以及物品槽右上角的数量角标一致。
+     */
+    private static int unitItemCount(final SyncChamberUnitsPacket.Entry entry) {
+        int total = 0;
+        for (final ItemStack unit : entry.units()) {
+            total += unit == null ? 0 : Math.max(0, unit.getCount());
+        }
+        return total;
+    }
+
     /** 0.5 缩放小字（配方 id / 空态），全部无阴影。 */
     private void drawSmallText(final GuiGraphics guiGraphics, final Component text,
                                final float x, final float y, final int color) {
@@ -294,20 +333,6 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
         pose.scale(0.5F, 0.5F, 1.0F);
         guiGraphics.drawString(font, text, 0, 0, color, false);
         pose.popPose();
-    }
-
-    private String trimToWidth(final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
-        }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        String s = text;
-        while (s.length() > 1 && font.width(s + "...") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "...";
     }
 
     // ==================== 渲染主流程与 tooltip ====================
@@ -384,8 +409,11 @@ public class ChamberUnitsSummaryScreen extends AbstractContainerScreen<ChamberUn
                 Component.translatable(LANG + "slot.tip")));
             layered.add(cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers.shift(
                 Component.translatable(LANG + "row.tip")));
+            // 第 119 轮：`units` 是「一格一项」的视图，一项的 count 可能 >1（执行仓单元槽允许堆叠）。
+            // 语言键写的是「%s 张」，因此这里必须把每项 count 相加；用 units().size() 会把
+            // 「一格 64 张」显示成「1 张」—— 与真实库存不符，也是 F1 里玩家「丢了都不知道」的一部分。
             layered.add(cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers.ctrl(
-                Component.translatable(LANG + "units", entry.units().size())));
+                Component.translatable(LANG + "units", unitItemCount(entry))));
             layered.add(cretae.cookiewyq.rs_create_compat.client.tooltip.RsccTooltipLayers.alt(
                 RecipeTypeNames.idLine(entry.recipeType())));
             for (final ItemStack unit : entry.units()) {

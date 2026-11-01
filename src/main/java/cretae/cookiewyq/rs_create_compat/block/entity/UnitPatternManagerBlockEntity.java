@@ -12,6 +12,7 @@ import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.UnitPatternManagerData;
 import cretae.cookiewyq.rs_create_compat.support.UnitManagerSources;
+import cretae.cookiewyq.rs_create_compat.support.ViewOnlyHandlers;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -19,7 +20,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
+import net.neoforged.neoforge.items.wrapper.InvWrapper;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -155,12 +158,22 @@ public class UnitPatternManagerBlockEntity
         return false;
     }
 
-    /** 注册方块能力：RS 网络节点容器。 */
+    /** 注册方块能力：RS 网络节点容器 + 旧存档额外槽位的只读视图。 */
     public static void registerCapabilities(final RegisterCapabilitiesEvent event) {
         event.registerBlockEntity(
             RefinedStorageNeoForgeApi.INSTANCE.getNetworkNodeContainerProviderCapability(),
             RS_Create_Compat.UNIT_PATTERN_MANAGER_BLOCK_ENTITY.get(),
             (blockEntity, direction) -> blockEntity.getContainerProvider()
+        );
+        // 旧存档遗留的 1 格额外槽位（界面已移除，但里面的物品是真实资源）：
+        // 按用户硬规则「所有储存物品的方块都对外暴露 Inventory」补一条只读视图。
+        // 只读 + 只在无侧别查询（Jade）时暴露：这个槽位只是抢救出口，不应该给自动化开新路径。
+        event.registerBlockEntity(
+            Capabilities.ItemHandler.BLOCK,
+            RS_Create_Compat.UNIT_PATTERN_MANAGER_BLOCK_ENTITY.get(),
+            (blockEntity, direction) -> direction == null
+                ? ViewOnlyHandlers.item(new InvWrapper(blockEntity.extraSlot()))
+                : null
         );
     }
 

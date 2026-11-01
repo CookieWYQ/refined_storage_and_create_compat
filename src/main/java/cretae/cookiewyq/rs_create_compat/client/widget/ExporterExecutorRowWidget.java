@@ -424,11 +424,11 @@ public class ExporterExecutorRowWidget extends AbstractWidget {
      * <p>可用带 = 条内层左缘 + {@value #HINT_INSET} … <b>固定段</b>（条内右端那颗 30×23 的「普通」按钮）
      * 左缘 − {@value #HINT_GAP}。固定段的几何是死的（{@link #FORCE_X} / {@link #FORCE_W}），
      * 提示文字的可用宽度因此由它推出，而不是反过来。</p>
+     * <p><b>第 104 轮</b>：放不下时不再截断补省略号（{@code HINT_ELLIPSIS} 已删除），
+     * 改为整体缩字号完整显示，见 {@link #drawHintLine}。</p>
      */
     private static final int HINT_INSET = 2;
     private static final int HINT_GAP = 2;
-    /** 截断时补在尾部的省略号（与「类别详细配置」子界面的 {@code trim} 同一做法）。 */
-    private static final String HINT_ELLIPSIS = "...";
 
     /**
      * <b>普通界面（非延长型）下常驻的那颗「普通 / 总线」切换按钮</b>：局部 (62,24) 100×14
@@ -964,13 +964,14 @@ public class ExporterExecutorRowWidget extends AbstractWidget {
      *     <li><b>固定段先算死</b>：条内右端那颗「普通」按钮的几何是常量（30×23 @ {@link #FORCE_X}），
      *     提示行的可用带 = 条内层左缘 + {@value #HINT_INSET} … 按钮左缘 − {@value #HINT_GAP}
      *     （子界面里「固定段」是右对齐的尾句，这里就是这颗按钮；两者都是「先算死、再让文字去适配」）；</li>
-     *     <li><b>逐行按可用带宽截断</b>（{@link #trimToWidth}，尾部补省略号），再在带内居中：
-     *     因为 {@code 0 ≤ 文字宽 ≤ 带宽}，居中的左界恒 ≥ 带左缘、右界恒 ≤ 带右缘 ⇒
+     *     <li><b>逐行完整显示 + 带内居中</b>（第 104 轮起改为 {@link RsccTextFit#drawFitLine}，
+     *     放不下整体缩字号、<b>一个字都不省</b>；此前是 {@code trimToWidth} 截断补省略号）：
+     *     绘制宽度 ≤ 带宽 ⇒ 居中的左界恒 ≥ 带左缘、右界恒 ≤ 带右缘 ⇒
      *     <b>永不压到按钮上、永不出条</b>，任意语言 / 任意字体都成立，不靠「文案够短」这条假设；</li>
      *     <li><b>分成两行</b>（状态一行、去哪改一行）：可用带只有约 128px，而「状态 + 去哪改」整句
-     *     中文约 190px、英文更宽；若照子界面那样做「一行两段」（左右各占半幅），两段都会被截成
-     *     「点「详细配…」」这种读不通的残句。两行的代价为零：提示只在空条这一帧画，
-     *     此时条里没有任何单元格，两行 9px 落在 23px 的条内层里绰绰有余 ——
+     *     中文约 190px、英文更宽；若挤成「一行两段」（左右各占半幅），两段都会被迫缩到很小。
+     *     两行的代价为零：提示只在空条这一帧画，此时条里没有任何单元格，
+     *     两行 9px 落在 23px 的条内层里绰绰有余 ——
      *     <b>面板高度、按钮 Y、控制带几何、既有布局校验（tmp_textures/verify_gui_layout.py）一个都不动</b>。</li>
      * </ol>
      * <p>两行本身也永不互相重叠：它们的垂直区间分别是 {@value #HINT_LINE1_Y}..11 与
@@ -999,44 +1000,32 @@ public class ExporterExecutorRowWidget extends AbstractWidget {
     }
 
     /**
-     * 画空条提示的一行：先按可用带宽截断（尾部补 {@value #HINT_ELLIPSIS}），再在带内居中。
-     * <p>居中不破坏「不可能越界」这一条：截断后 {@code 0 ≤ 文字宽 ≤ bandW}，因此
-     * 左界 = {@code left + (bandW - 文字宽) / 2} ≥ {@code left}、右界 ≤ {@code left + bandW} = 可用带右缘。</p>
+     * 画空条提示的一行：<b>完整显示</b>，放不下就整体缩字号（下限 {@link RsccTextFit#MIN_SCALE}），
+     * 再在带内居中。
+     *
+     * <p><b>第 104 轮（用户口径：不要省略号，改排列 / 完整显示）</b>：这里原来按像素宽
+     * {@code trimToWidth} 截断并补 {@code "..."}，现在改为 {@link RsccTextFit#drawFitLine}
+     * ——<b>一个字都不省</b>。居中仍然安全：绘制宽度 = {@code 完整宽 × 缩放}，
+     * 只要缩放 <b>不小于</b> {@link RsccTextFit#MIN_SCALE}，左界 ≥ {@code left}、右界 ≤ 可用带右缘；
+     * 提示串都是本模组自己的静态语言键（非玩家命名 / 非第三方物品名），中英文在 126px 的带内
+     * 都只需 1.0 倍字号，所以实际连缩放都不会触发。</p>
      */
     private void drawHintLine(final GuiGraphics guiGraphics, final Font font, final String raw,
                               final int left, final int bandW, final int y) {
-        final String text = trimToWidth(font, raw, bandW);
-        if (text.isEmpty()) {
+        if (raw == null || raw.isEmpty() || bandW <= 0) {
             return;
         }
-        guiGraphics.drawString(font, text, left + (bandW - font.width(text)) / 2, y, COLOR_TEXT, false);
-    }
-
-    /**
-     * 按像素宽截断（尾部补省略号）：放不下时逐字符收，直到「正文 + 省略号」塞得进给定宽度。
-     * <p>与「类别详细配置」子界面 {@code BusCategoryConfigScreen#trim} 同一做法 ——
-     * 截断是几何兜底：任意语言、任意字体下都不会溢出，最多变成省略号。</p>
-     * <p><b>返回值恒满足 {@code 0 ≤ width(返回串) ≤ maxWidth}</b>（放不下就连省略号都不画，
-     * 返回空串）—— 这是「居中画」不会越界的<b>唯一前提</b>，因此这里把边角情形也堵死，
-     * 而不是依赖「可用带总是够宽」（可用带现在确实是 128px，但几何证明不该依赖它）。</p>
-     */
-    private static String trimToWidth(final Font font, final String text, final int maxWidth) {
-        if (text == null || text.isEmpty() || maxWidth <= 0) {
-            return "";
+        final Component text = Component.literal(raw);
+        final int full = font.width(text);
+        if (full <= bandW) {
+            guiGraphics.drawString(font, text, left + (bandW - full) / 2, y, COLOR_TEXT, false);
+            return;
         }
-        if (font.width(text) <= maxWidth) {
-            return text;
-        }
-        final int ellipsisWidth = font.width(HINT_ELLIPSIS);
-        if (maxWidth <= ellipsisWidth) {
-            return ""; // 连省略号都塞不下：宁可不画，也不画出比可用宽度更宽的一行
-        }
-        String trimmed = text;
-        while (trimmed.length() > 1 && font.width(trimmed + HINT_ELLIPSIS) > maxWidth) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1);
-        }
-        final String candidate = trimmed + HINT_ELLIPSIS;
-        return font.width(candidate) <= maxWidth ? candidate : "";
+        // 放不下：整体缩字号完整显示（不截断、不补省略号）
+        final float scale = Math.max(RsccTextFit.MIN_SCALE, (float) bandW / (float) full);
+        final int drawn = Math.round(full * scale);
+        RsccTextFit.drawFitLine(guiGraphics, font, text, left + Math.max(0, (bandW - drawn) / 2),
+            y, bandW, COLOR_TEXT);
     }
 
     /**

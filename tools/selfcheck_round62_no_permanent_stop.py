@@ -123,10 +123,22 @@ guard = read(GUARD)
 # ======================================================================================
 section("A. 在制件登记表的「登记点 / 清理点」成对性（源码锚点）")
 
-# A1：登记的唯一写入点仍然只有一处（推料成功路径）。
+# A1：登记的**写入点**仍然只有一处（推料成功路径）。
+#
+# 第 121 轮（1.2.0-beta.23）F4 起 `inFlightUnits` 会落盘，`readInFlightUnits` 里因此多出
+# 一处 `put` —— 那是**读档回填（恢复旧登记）**，不是「新登记点」，不违反本判据的原意。
+# 故判据改为：全文 2 处 put，其中 1 处必须落在 readInFlightUnits 的方法体内。
 writes = [m.start() for m in re.finditer(r"inFlightUnits\.put\(", chamber)]
-check("A1 `inFlightUnits.put` 只有一处（= 唯一登记点，由推料成功路径写入）", len(writes) == 1,
-      "found=%d" % len(writes))
+load_put = 0
+load_start = chamber.find("private void readInFlightUnits(")
+if load_start >= 0:
+    load_end = chamber.find("private ", load_start + 10)
+    if load_end < 0:
+        load_end = len(chamber)
+    load_put = chamber[load_start:load_end].count("inFlightUnits.put(")
+check("A1 `inFlightUnits.put` = 1 处登记（推料成功路径）+ 1 处读档回填（readInFlightUnits）",
+      len(writes) == 2 and load_put == 1,
+      "found=%d load_put=%d" % (len(writes), load_put))
 export_strategy = read(os.path.join(SRC, "support", "RsccChamberExportStrategy.java"))
 has(export_strategy, "chamber.rscc$noteUnitPushed(",
     "A1b 推料策略仍在推成功后登记（RsccChamberExportStrategy → rscc$noteUnitPushed）")

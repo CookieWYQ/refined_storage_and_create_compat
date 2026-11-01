@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "inventory_proxy": {
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "rs_create_compat:inventory_proxy"
+            ]
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": true,
+    "description": {
+      "translate": "advancements.rs_create_compat.inventory_proxy.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "count": 1,
+      "id": "rs_create_compat:inventory_proxy"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancements.rs_create_compat.inventory_proxy.title"
+    }
+  },
+  "parent": "rs_create_compat:root",
+  "requirements": [
+    [
+      "inventory_proxy"
+    ]
+  ]
+}

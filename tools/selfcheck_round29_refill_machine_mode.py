@@ -219,7 +219,8 @@ for row in [(0, False, 64), (1, False, 64), (6, False, 64), (64, True, 64), (100
         gap, "是" if chance else "否", allowed,
         legacy_off(gap, chance, allowed), request_amount(gap, chance, "off", allowed),
         "OK" if legacy_off(gap, chance, allowed) == request_amount(gap, chance, "off", allowed) else "DIFF"))
-check("②a 默认档（off）的请求量在整张网格（缺口×概率性×名额）上与变更前**逐字一致**：%d 组"
+check("②a 默认档（off）在**冷档**（没有任何机器在工作）时的请求量，在整张网格（缺口×概率性×名额）"
+      "上与变更前**逐字一致**：%d 组"
       % (len([1 for g in (0, 1, 2, 6, 63, 64, 65, 1000) for c in (False, True) for a in (1, 2, 3, 64, 1000)]))
       + "（0 处不一致）", not GRID_MISMATCH, "mismatch=%s" % GRID_MISMATCH[:3])
 
@@ -228,12 +229,82 @@ check("②b 与第 14 轮自检公布的那版模型在「名额足够大」时�
       request_amount(6, False, "off", 64) == request_amount_14(6, False, False) == 1
       and request_amount(64, True, "off", 64) == request_amount_14(64, True, False) == 64
       and request_amount(0, False, "off", 64) == request_amount_14(0, False, False) == 0)
-check("②c 默认档下「确定性配方一次只发一份」这条用户认识的旧行为一字未改（缺口 6 也只发 1）",
+check("②c 冷档下「确定性配方一次只发一份」这条用户认识的旧行为一字未改（缺口 6 也只发 1）",
       request_amount(6, False, "off", 64) == 1)
 check("②d gap 档（refill on）语义不变：确定性要足缺口；概率性**仍**分批（绝不按缺口要足 ⇒ 不烧料）",
       request_amount(6, False, "gap", 64) == 6
       and request_amount(1, False, "gap", 64) == 1
       and request_amount(64, True, "gap", 64) == request_amount(64, True, "off", 64) == 64)
+
+
+def hot_batch(machines, allowed):
+    """复刻 2026-10-17 新增的热档批量：hotBatch = max(1, min(64, machineSupplyBatch()))。"""
+    return max(1, min(BUS_AUTOCRAFT_BATCH, machine_supply_batch(machines, allowed)))
+
+
+def request_amount_hot(deficit, chance, mode, allowed, machines=0):
+    """复刻热档（机器正在工作）的请求量。
+
+    源码：`batchCeiling = max(machineRefillBatch, hotBatch)`，然后
+    `min(deficit, batchCeiling)`；gap 档的确定性分支仍会再追加一次 deficit。
+    因此热档**只抬高「一轮发多少」**，缺口与在制名额两条上界一位都没放宽。
+    """
+    if deficit <= 0:
+        return 0
+    if mode == "machines":
+        ceiling = max(hot_batch(machines, allowed), machine_supply_batch(machines, allowed))
+    else:
+        ceiling = hot_batch(machines, allowed)
+    if mode == "gap" and not chance:
+        return deficit
+    return min(deficit, ceiling)
+
+
+# ============================================================ ②' 2026-10-17：热档（机器正在工作）
+section("②') 2026-10-17 热档：机器一在工作，就按「每台机器各一份」**全速**供料（仍夹缺口 / 名额）")
+
+print("  反例表（同一份现场：冷档 vs 热档；默认 off 档）")
+print("  %-46s %-8s %-8s %-8s %-10s" % ("情形", "台数", "名额", "缺口", "热档请求量"))
+HOT_ROWS = [
+    ("金板缺 6 / 本仓喂 3 台机器（订单还剩 64）", 3, 64, 6),
+    ("金板缺 6 / 本仓喂 3 台机器，但名额只剩 1", 3, 1, 6),
+    ("金板缺 1 / 本仓喂 8 台机器", 8, 64, 1),
+    ("求不到机器台数（判不出来）", 0, 64, 6),
+    ("没有缺口（已达标）", 3, 64, 0),
+]
+for label, machines, allowed, gap in HOT_ROWS:
+    print("  %-46s %-8s %-8s %-8s %-10s" % (
+        label, machines if machines else "判不出", allowed, gap,
+        request_amount_hot(gap, False, "off", allowed, machines)))
+check("②'a 热档下默认档不再「一次一份」：缺口 6 / 3 台机器 ⇒ 一轮请求 3（三台同时开工）",
+      request_amount_hot(6, False, "off", 64, 3) == 3
+      and request_amount(6, False, "off", 64) == 1)
+check("②'b 热档仍被在制名额夹紧（不许过料）：名额只剩 1 时 3 台机器也只发 1",
+      request_amount_hot(6, False, "off", 1, 3) == 1)
+check("②'c 热档仍 ≤ 缺口：缺口 1 / 8 台机器 ⇒ 1",
+      request_amount_hot(1, False, "off", 64, 8) == 1)
+check("②'d 热档判不出台数 ⇒ 1（与冷档一致，绝不放量）",
+      request_amount_hot(6, False, "off", 64, 0) == 1)
+check("②'e 热档缺口 ≤ 0 ⇒ 一条请求都不发（热档只改节拍与批量，不改「缺口驱动」）",
+      request_amount_hot(0, False, "off", 64, 3) == 0
+      and request_amount_hot(-2, False, "off", 64, 3) == 0)
+HOT_BOUND = []
+for gap in (0, 1, 3, 6, 64, 1000):
+    for machines in (0, 1, 2, 3, 8, 64):
+        for allowed in (1, 2, 3, 64, 1000):
+            for chance in (False, True):
+                for mode in ("off", "gap", "machines"):
+                    amount = request_amount_hot(gap, chance, mode, allowed, machines)
+                    if amount > max(0, gap):
+                        HOT_BOUND.append(("gap", gap, machines, allowed, mode, amount))
+                    # gap 档的确定性分支是 opt-in 的「按缺口要足」（用户显式打开，第 14 轮既有行为），
+                    # 它本来就不受台数夹紧；这里只对「非 gap-确定性」断言台数 / 名额上界。
+                    if mode == "gap" and not chance:
+                        continue
+                    if amount > max(1, min(max(1, machines), max(1, allowed))):
+                        HOT_BOUND.append(("cap", gap, machines, allowed, mode, amount))
+check("②'f 不变量（整张网格 × 三档）：热档请求量恒 ≤ 缺口、且 ≤ max(1, min(台数, 名额)) —— "
+      "因此「全速」不可能变成「过料」", not HOT_BOUND, "violations=%s" % HOT_BOUND[:3])
 
 # ============================================================ ③ 第三档：按机器台数
 section("③) 第三档（machines）的请求量 = 机器台数（再夹缺口与在制名额）")

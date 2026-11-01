@@ -135,8 +135,11 @@ public class SequenceAssemblyPatternItem extends Item implements PatternProvider
                 "item.rs_create_compat.sequence_assembly_pattern.results_header")
                 .withStyle(ChatFormatting.GRAY));
             for (final SequencePatternData.PatternOutput result : assembly.results()) {
-                tooltip.add(Component.literal(result.stack().getHoverName().getString()
-                        + " x" + result.stack().getCount())
+                // 名字直接交给语言键（不再 getString() 拼 " x"：那样既是硬编码格式，
+                // 又会把物品名压成死字符串，还丢掉名字上的样式）
+                tooltip.add(Component.translatable(
+                    "item.rs_create_compat.sequence_assembly_pattern.output_entry",
+                    result.stack().getHoverName(), result.stack().getCount())
                     .withStyle(ChatFormatting.AQUA));
             }
         }
@@ -145,8 +148,9 @@ public class SequenceAssemblyPatternItem extends Item implements PatternProvider
                 "item.rs_create_compat.sequence_assembly_pattern.scraps_header")
                 .withStyle(ChatFormatting.GRAY));
             for (final SequencePatternData.PatternOutput scrap : assembly.scraps()) {
-                tooltip.add(Component.literal(scrap.stack().getHoverName().getString()
-                        + " x" + scrap.stack().getCount())
+                tooltip.add(Component.translatable(
+                    "item.rs_create_compat.sequence_assembly_pattern.scrap_entry",
+                    scrap.stack().getHoverName(), scrap.stack().getCount())
                     .withStyle(ChatFormatting.DARK_AQUA));
             }
         }
@@ -436,8 +440,10 @@ public class SequenceAssemblyPatternItem extends Item implements PatternProvider
             ? candidates.get(cretae.cookiewyq.rs_create_compat.client.tooltip.ItemCycleTooltipComponent
                 .currentIndex(candidates.size()))
             : candidates.get(0);
-        return Component.literal(new ItemStack(shown).getHoverName().getString() + " x" + amount)
-            .withStyle(color);
+        // 名字 + 数量走语言键（中英的乘号/字母不同：zh「名字 ×N」/ en「name xN」），不再硬编码 " x"
+        return Component.translatable(
+            "item.rs_create_compat.sequence_assembly_pattern.input_entry",
+            new ItemStack(shown).getHoverName(), amount).withStyle(color);
     }
 
     private static InputTotals collectInputs(final SequencePatternData.AssemblyData data) {

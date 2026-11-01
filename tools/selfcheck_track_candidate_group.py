@@ -267,7 +267,8 @@ check("4c 候选组不会让「每批所需量」翻倍：数量取 unit.input()
 check("4d 网络包编解码成对（encode 写候选组、decode 按同一顺序读）",
       packet.count("stepCandidates") >= 6
       and "buf.writeVarInt(candidates.size());" in packet
-      and "final int stepCandidateCount = buf.readVarInt();" in packet)
+      # 第 115 轮：对端计数统一先 Math.max(0, …)（负 count 不许绕过循环），编码端仍是 writeVarInt(size)
+      and "final int stepCandidateCount = Math.max(0, buf.readVarInt());" in packet)
 check("4e 总样板 tooltip 会把候选整组**轮播**出来（玩家放样板前就能看见候选）",
       # 2026-10-05 用户要求：禁止把多种原料拼成「A 或 B（或 C）」文字 ⇒ 改走图标组件轮播。
       "getTooltipImage(" in pattern_item

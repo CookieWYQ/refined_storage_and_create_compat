@@ -6,6 +6,8 @@
           {
             "items": [
               "rs_create_compat:range_charger",
+              "rs_create_compat:fe_energy_cube",
+              "rs_create_compat:decomposition_generator",
               "rs_create_compat:quantity_keeper",
               "rs_create_compat:advanced_quantity_keeper",
               "rs_create_compat:schematic_loader",
@@ -15,7 +17,11 @@
               "rs_create_compat:sequence_execution_chamber",
               "rs_create_compat:unit_pattern_manager",
               "rs_create_compat:collection_cache",
+              "rs_create_compat:advanced_collection_cache",
               "rs_create_compat:intermediate_cache",
+              "rs_create_compat:network_resource_receiver",
+              "rs_create_compat:network_resource_requester",
+              "rs_create_compat:inventory_proxy",
               "rs_create_compat:separation_frame",
               "rs_create_compat:infinite_separation_frame",
               "rs_create_compat:camouflage_frame"
