@@ -374,16 +374,25 @@ OLD_SNIPPET = """
 
 
 def old_source():
-    """优先取 git HEAD 里**真实的**旧文件；HEAD 已包含新写法时退回内置等价片段。
+    """取**真实的旧文件**：在 git 历史里回溯「最近一个仍含 NOT_FOUND_LOGGED」的版本。
+
+    第 130 轮修：以前写的是 `git show HEAD:`，隐含「HEAD = 修前」；修复一提交进 HEAD，
+    这里拿到的就是修后代码，C2 于是恒报「问题 0 条」。现在与 HEAD 长什么样无关
+    （见 tools/_prefix_history.py 的说明）；历史里也找不到时退回内置等价片段，并把出处写出来。
 
     返回 (文本, 出处说明, 是否真实旧文件)。
     """
-    proc = subprocess.run(["git", "show", "HEAD:" + LOCATOR_REL], cwd=ROOT,
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace")
-    if proc.returncode == 0 and "NOT_FOUND_LOGGED" in (proc.stdout or ""):
-        return proc.stdout, "git HEAD:%s（真实旧文件）" % LOCATOR_REL, True
-    return OLD_SNIPPET, "内置等价片段（HEAD 里已无旧写法）", False
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _prefix_history import find_last_version
+    # 判据用 `newKeySet` 而不是 `NOT_FOUND_LOGGED`：后者在**修后的注释里**也被提到（解释旧写法），
+    # 拿它当标记会取到 HEAD 自己的修后版本（第 130 轮实测：ab819fdd 就是修后代码 ⇒ C2 恒 0 条）。
+    # newKeySet 是旧写法「每玩家一个永久 Set」的独有构造，修复后彻底消失。
+    sha, text = find_last_version(ROOT, LOCATOR_REL.replace(
+        "src/main/java/cretae/cookiewyq/rs_create_compat/", ""), marker="newKeySet")
+    if text is not None:
+        return text, "git 历史 %s:%s（真实旧文件）" % (sha, LOCATOR_REL), True
+    return OLD_SNIPPET, "内置等价片段（git 历史里也找不到含 NOT_FOUND_LOGGED 的版本）", False
 
 
 old_text, provenance, genuine = old_source()

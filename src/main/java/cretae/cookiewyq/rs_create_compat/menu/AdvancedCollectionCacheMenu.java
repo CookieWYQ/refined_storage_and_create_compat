@@ -4,6 +4,7 @@ import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.AdvancedCollectionCacheBlockEntity;
 import cretae.cookiewyq.rs_create_compat.block.entity.CollectionCacheBlockEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -391,8 +392,57 @@ public class AdvancedCollectionCacheMenu extends CollectionCacheMenu {
         }
         final cretae.cookiewyq.rs_create_compat.support.MarkerEntry existing =
             advanced.getAreaMarker(editingAreaIndex, markerIndex);
+        if (existing == null || existing.isEmpty()) {
+            // 第 130 轮（用户原话：「我在匹配器中匹配就应该是可以直接拖进去」）：
+            // **空格子 + JEI 拖入 / 粘贴** 这条路径以前是**静默丢包** —— 下面那行只做 update，
+            // setAreaMarkerConfig 找不到条目就 return false，于是玩家把物品从 JEI 拖到空格子上
+            // 什么都不会发生（最坏的一种坏）。这里改成真的新增一条（去重 / 容量 / 体积预算在
+            // addAreaMarkerEntry 内部，与 Shift+点击那条路同一口径），再把数量 / 严格 NBT / 标签套上去。
+            if (id == null) {
+                return; // 既没有条目也没有 id：没有可写的东西（不编造一条空标记）
+            }
+            final cretae.cookiewyq.rs_create_compat.support.MarkerEntry marker =
+                new cretae.cookiewyq.rs_create_compat.support.MarkerEntry(false, id,
+                    nbt == null ? new net.minecraft.nbt.CompoundTag() : nbt,
+                    Math.max(1L, amount), matchNbt,
+                    tags == null ? java.util.List.of() : tags);
+            final CollectionCacheBlockEntity.MarkerAddResult result =
+                advanced.addAreaMarkerEntry(editingAreaIndex, marker);
+            notifyMarkerResult(result);
+            syncMarkers();
+            return;
+        }
         advanced.setAreaMarkerConfig(editingAreaIndex, markerIndex, amount, matchNbt,
             tags != null ? tags : existing.tags());
+        syncMarkers();
+    }
+
+    /**
+     * 新增标记失败时给玩家一句话（与基础版 Shift+点击那套文案用<b>同一组语言键</b>，
+     * 见 {@code CollectionCacheMenu} 的 {@code LANG_MARK}）。成功不提示：匹配区里当场就看得见。
+     */
+    private void notifyMarkerResult(final CollectionCacheBlockEntity.MarkerAddResult result) {
+        final net.minecraft.server.level.ServerPlayer player = rscc$getServerPlayer();
+        if (player == null) {
+            return;
+        }
+        final String lang = "gui.rs_create_compat.collection_cache.";
+        switch (result) {
+            case DUPLICATE -> player.displayClientMessage(
+                Component.translatable(lang + "duplicate"), true);
+            case FULL -> player.displayClientMessage(
+                Component.translatable(lang + "shift_mark.full",
+                    CollectionCacheMenu.MATCH_CAPACITY), true);
+            case TOO_COMPLEX -> player.displayClientMessage(
+                Component.translatable(lang + "shift_mark.too_complex",
+                    cretae.cookiewyq.rs_create_compat.support.MarkerBudget.MAX_TOTAL_WIRE_BYTES / 1024),
+                true);
+            case INVALID -> player.displayClientMessage(
+                Component.translatable(lang + "shift_mark.invalid"), true);
+            default -> {
+                // OK / COVERED_BY_TAG：成功不需要一句话（匹配区里当场就看得见）
+            }
+        }
     }
 
     @Override

@@ -1150,16 +1150,6 @@ public class RS_Create_Compat {
             (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.AreaMarkEditPacket.handle(
                 packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
-        // 区域选定器（第 125 轮）：把「一个具体的物品栈」加进某区域的标记（JEI 拖入 / 侧栏标记网格用）。
-        // 为什么不复用上面的 AreaMarkEditPacket：它的 ACTION_ADD 从**背包槽**取物品（第 5 参 inventorySlot），
-        // 而 JEI 拖出来的是配方幽灵栈、不在背包 ⇒ 那条路永远静默丢包。本包直接带 itemId + 组件补丁 +
-        // 数量 + 是否流体，服务端自己还原 ItemStack 并按 AreaMarks 的既有口径去重 / 归一化。
-        registrar.playToServer(
-            cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.TYPE,
-            cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.STREAM_CODEC,
-            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket.handle(
-                packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
-        );
         registrar.playToServer(
             cretae.cookiewyq.rs_create_compat.network.SetCollectionMarkerConfigPacket.TYPE,
             cretae.cookiewyq.rs_create_compat.network.SetCollectionMarkerConfigPacket.STREAM_CODEC,

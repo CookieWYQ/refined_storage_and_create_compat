@@ -1,6 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.client.screen;
 
-import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.AreaOutline;
 import cretae.cookiewyq.rs_create_compat.client.AreaStripBounds;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
@@ -9,12 +8,9 @@ import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.SptScrollbarWidget;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedCollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket;
-import cretae.cookiewyq.rs_create_compat.network.AreaMarkAddItemPacket;
-import cretae.cookiewyq.rs_create_compat.network.AreaMarkEditPacket;
 import cretae.cookiewyq.rs_create_compat.network.AreaSelectorEditPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetAreaFilterContextPacket;
 import cretae.cookiewyq.rs_create_compat.support.Area;
-import cretae.cookiewyq.rs_create_compat.support.AreaMarks;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -23,7 +19,6 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.renderer.Rect2i;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
 
@@ -63,27 +58,47 @@ import java.util.List;
  *     「一进界面就把名字抹掉」（用户 2-1 的一条真实成因）在结构上不可能发生。</li>
  * </ol>
  *
+ * <h2>第 130 轮：标记网格整页删除，区域过滤改在「匹配区」里编辑</h2>
+ * <p>用户原话：「我选择某一个区域，我在匹配器中匹配就应该是可以直接拖进去，而不是说在这一个界面中
+ * 单独出现一个标记什么的东西，把那一部分删除」。因此本类<b>不再</b>有任何 ghost 标记格子 /
+ * 清空 / 返回那一层子页面（那 12 格的读写与「匹配区」的 48 格读写本来就是同一份
+ * {@code AreaMarks}，留两份只会让玩家在两处之间来回跑）。点行 = 把「匹配区」的编辑上下文切到这个区域
+ * （{@code SetAreaFilterContextPacket}），拖入物品 / 流体 / JEI 条目全部走机器界面那一套既有通道。</p>
+ * <p>同时按用户第 5 条（「有些字很小、有些没必要的废话」）把面板加宽到 {@code W = 176}
+ * （128 宽必然把坐标行缩到 0.6 倍字），坐标行改成紧凑写法学 {@code 100,64,100→120,80,120}，
+ * 顶部加一个常驻搜索框（名字 / 坐标都能搜），tooltip 从 6 行砍到 3 行。</p>
+ *
  * <h2>数据源（契约 §4「数据源」一行）</h2>
  * <p>行列表、过滤图标摘要、当前行、可用位次<b>全部</b>只读
  * {@link AdvancedAreaSnapshotPacket#lastFor(int)}；客户端<b>不判断</b>区域可用性、<b>不读</b>方块实体。
- * 唯一的例外是「标记网格」里的标记清单：它必须读<b>选定器物品自己</b>的 {@link AreaMarks}
- * （带注册表，与 {@code AreaMarkScreen#clientMarks} 同一条口径），因为快照里的
- * {@code AreaEntry#filters()} 是「前 8 条、已过滤空/流体」的<b>展示用子集</b>，
- * 拿它的下标去删标记会删错条目（那正是第 119/120 轮修过的「下标错位」）。见 {@link #markList(Area)}。</p>
+ * 本类<b>不再</b>读选定器物品上的标记表（第 130 轮起那份数据的唯一界面是匹配区）。</p>
  */
 public final class AreaStripPanel {
     private static final String LANG = "gui.rs_create_compat.area_strip.";
     /** 无名区域的显示名（复用旧区域列表的键，两处说得一样）。 */
     private static final String LANG_REGION = "gui.rs_create_compat.area_selector.region";
 
+    /**
+     * 「当前在干活」常驻世界框的 Outliner slot。
+     * <p>必须是 <b>static final 常量</b>：Outliner 用它当键，原来每次 {@code AreaOutline.slot("strip/focus")}
+     * 都 new 一个 String，等于每帧给 Outliner 递一个全新键（纯浪费，也是「框偶尔不更新」的嫌疑源）。</p>
+     */
+    private static final Object FOCUS_SLOT = AreaOutline.slot("strip/focus");
+
     // ==================== 契约 §2：几何（字面量不得改） ====================
 
-    /** 侧栏理想宽。 */
-    public static final int W = 128;
+    /**
+     * 侧栏理想宽（第 130 轮 128 → 176）。
+     * <p><b>为什么必须加宽</b>：128 宽时可用文字宽 = 128-8-6 = 114px，坐标串
+     * {@code (100,64,100)→(120,80,120)} 要 ~150px，{@link RsccTextFit#drawFitLine} 只好缩到
+     * 0.6 倍 —— 这就是用户说的「有一些字很小」。176 宽下紧凑写法
+     * {@code 100,64,100→120,80,120}（≈120px）1.0 倍放得下。</p>
+     */
+    public static final int W = 176;
     /** 屏幕挤时的最小宽。 */
-    public static final int MIN_W = 96;
+    public static final int MIN_W = 140;
     /** 低于此宽：不画侧栏，chat 提示一次。 */
-    public static final int HARD_MIN_W = 72;
+    public static final int HARD_MIN_W = 108;
     /** 与 GUI 右边缘的间隙。 */
     public static final int GAP = 6;
     /** 距屏幕右边缘至少留这么多。 */
@@ -106,29 +121,32 @@ public final class AreaStripPanel {
     // ==================== 内部几何 ====================
     /** 标题行高（一行文字 + 1px 间隔）。 */
     private static final int TITLE_H = 12;
+    /** 搜索框高（第 130 轮：常驻，不是点了才出现）。 */
+    private static final int SEARCH_H = 12;
+    /** 标题下沿 → 搜索框的缝。 */
+    private static final int SEARCH_GAP = 3;
+    /** 搜索框底 → 行列表起点的缝。 */
+    private static final int SEARCH_ROWS_GAP = 3;
     /** 底部按钮行高 / 两钮之间的缝。 */
     private static final int FOOTER_H = 16;
     private static final int FOOTER_GAP = 3;
     /** 行内最多画几个过滤图标（与坐标行争宽度，2 个刚好）。 */
     private static final int ROW_ICON_MAX = 2;
     private static final int ROW_ICON_PITCH = 9;
-    /** 行内动作区：标记 / 改名 / 删除 三个 8px 图标，从右往左排。 */
+    /**
+     * 行内动作区：改名（✎）/ 删除（✕）两个 8px 图标，从右往左排。
+     * <p>第 130 轮把原计划的第三个「看（◎）」撤掉了：{@link #peekArea(int)} 已经绑在
+     * <b>右键行</b>上（同样的 5 秒世界框），而动作区少一个图标正好多出 10px 给坐标行 ——
+     * 常见三位数坐标串（141px）因此能 1.0 倍放下，不再被缩到 0.93。用户要的「字别太小」优先。</p>
+     */
     private static final int ACT_ICON = 8;
     private static final int ACT_PITCH = 9;
-    private static final int ACT_COUNT = 3;
+    private static final int ACT_COUNT = 2;
     /** 名称行高 / 坐标行高（相对行顶）。 */
     private static final int NAME_LINE_H = 11;
     private static final int COORD_LINE_H = 10;
     /** 展开坐标编辑的额外高（两行数字框 + 一行错误提示）。 */
     private static final int EXPAND_H = 40;
-    /** 标记网格：3 列 × 4 行、18×18、每页 12 个。 */
-    private static final int MARK_COLS = 3;
-    private static final int MARK_ROWS = 4;
-    private static final int MARK_CELL = 18;
-    private static final int MARK_PAGE_SIZE = MARK_COLS * MARK_ROWS;
-    private static final int MARK_GRID_H = MARK_ROWS * MARK_CELL + 2;
-    /** 标记网格的标题行（「标记：区域 N」+ 清空 / 返回）。 */
-    private static final int MARK_HEADER_H = 12;
     /** 滚动条宽（契约：右侧 6px）。 */
     private static final int SCROLL_W = 6;
     /** 当前行左侧亮条宽（契约 3px）。 */
@@ -197,10 +215,25 @@ public final class AreaStripPanel {
     /** 「屏幕太窄」只提示一次（重新可见后复位）。 */
     private boolean narrowWarned;
 
-    /** 本帧从服务端快照重建出来的行。 */
+    /** 本帧从服务端快照重建出来的<b>全部</b>行（搜索过滤前）。 */
+    private final List<Row> allRows = new ArrayList<>();
+    /** 本帧要显示的行（= {@link #allRows} 经搜索过滤后的结果）。 */
     private final List<Row> rows = new ArrayList<>();
     /** 行滚动偏移（行单位）。 */
     private int scrollRows;
+
+    // ---------- 搜索（第 130 轮） ----------
+    /**
+     * 常驻搜索框（名字 / 坐标都能搜）。
+     * <p>为什么是 EditBox 而不是自己画 + 自己收字符：工程里「就地改名」已经证明自绘 EditBox +
+     * owner 转发 {@code charTyped} 这条路是通的（见 {@code beginRename}），不再造第二套输入法。</p>
+     */
+    @Nullable
+    private EditBox searchBox;
+    /** 上一次收到焦点的搜索框状态（用于「失焦即过滤」这类边界，避免每帧重算）。 */
+    private boolean searchFocused;
+    /** 本帧的过滤串（小写、已去首尾空白；空串 = 不过滤）。 */
+    private String query = "";
 
     /** 本帧可见行的布局结果（绘制与命中测试同源）。 */
     private final int[] vrTop = new int[MAX_VISIBLE_ROWS];
@@ -208,7 +241,7 @@ public final class AreaStripPanel {
     private final int[] vrRaw = new int[MAX_VISIBLE_ROWS];
     private final int[] vrUsable = new int[MAX_VISIBLE_ROWS];
     private final int[] vrListIndex = new int[MAX_VISIBLE_ROWS];
-    /** 本帧每行三个动作图标的左边界（屏幕坐标）。 */
+    /** 本帧每行动作图标的左边界（屏幕坐标）。 */
     private final int[] vrActionX = new int[MAX_VISIBLE_ROWS];
     private int vrCount;
     /** 本帧行区顶 / 底（绝对 y；命中测试用）。 */
@@ -252,22 +285,12 @@ public final class AreaStripPanel {
     // ---------- 删除二次确认 ----------
     private int deleteArmedRaw = -1;
     private long deleteArmedAt = Long.MIN_VALUE;
-
-    // ---------- 标记网格 ----------
-    /** 网格显示哪个区域的标记（rawIndex；{@code -1} = 没打开，即行列表模式）。 */
-    private int markGridRaw = -1;
-    private int markPage;
-    /** 清空二次确认（{@code -1} = 未武装；否则 = 武装时的 rawIndex）。 */
-    private int clearArmedRaw = -1;
-    private long clearArmedAt = Long.MIN_VALUE;
-    /** 删除某条标记的二次确认（{@code -1} = 未武装）。 */
-    private int markRemoveArmedIndex = -1;
-    private long markRemoveArmedAt = Long.MIN_VALUE;
-    /** 本帧网格 12 格的屏幕坐标（绘制与命中 / JEI 目标同源）。 */
-    private final Rect2i[] markCells = new Rect2i[MARK_PAGE_SIZE];
-    /** 本帧网格区域（整块，含标题行），命中测试用。 */
+    /** 本帧 armed 行上「✓ / ✗」两颗确认按钮的屏幕矩形（{@code null} = 本帧没有 armed 行）。 */
     @Nullable
-    private Rect2i markGridRect;
+    private Rect2i confirmYesRect;
+    @Nullable
+    private Rect2i confirmNoRect;
+
     /** 上一次「显示全部」喂过几个盒子（关界面 / 再点一次时按它清 slot）。 */
     private int shownAll;
     /** 上一次已提示过的「服务端拒绝序号」（只在序号变大时提示一次，不刷屏）。 */
@@ -278,10 +301,6 @@ public final class AreaStripPanel {
     private Rect2i showAllRect;
     @Nullable
     private Rect2i closeRect;
-    @Nullable
-    private Rect2i clearRect;
-    @Nullable
-    private Rect2i backRect;
     @Nullable
     private SptScrollbarWidget scrollbar;
     /** 滚动条上次的几何（变了就重建，避免每帧 new）。 */
@@ -305,28 +324,82 @@ public final class AreaStripPanel {
         return visible;
     }
 
-    /** 侧栏正在编辑（有 EditBox 打开）⇒ owner 必须把 keyPressed / charTyped 先给本面板。 */
+    /** 侧栏正在编辑（有 EditBox 打开 / 搜索框聚焦）⇒ owner 必须把 keyPressed / charTyped 先给本面板。 */
     public boolean isEditing() {
-        return nameBox != null || coordBoxes[0] != null;
+        return nameBox != null || coordBoxes[0] != null
+            || (searchBox != null && searchBox.isFocused());
     }
 
-    /** 标记网格是否打开（JEI 插件据此把拖放目标换成侧栏格子，契约 §4.5）。 */
-    public boolean isMarkGridOpen() {
-        return markGridRaw >= 0;
+    /** 搜索框是否聚焦（自检 / 诊断可读）。 */
+    public boolean isSearchFocused() {
+        return searchFocused;
     }
 
-    /** 关闭标记网格，回到行列表（关界面时必须调，契约 §4.5-3）。 */
-    public void closeMarkGrid() {
-        markGridRaw = -1;
-        markPage = 0;
-        clearArmedRaw = -1;
-        clearArmedAt = Long.MIN_VALUE;
-        markRemoveArmedIndex = -1;
-        markRemoveArmedAt = Long.MIN_VALUE;
-        markGridRect = null;
-        for (int i = 0; i < markCells.length; i++) {
-            markCells[i] = null;
+    /** 当前过滤串（小写；空串 = 不过滤）。 */
+    public String query() {
+        return query;
+    }
+
+    // ==================== 搜索（第 130 轮） ====================
+
+    /**
+     * 搜索框的几何（与 {@link #drawTitle} 同源计算，命中与绘制不会漂）。
+     * <p>放在标题行下面第二行、占满整条内容宽 —— 常驻可见，玩家一打开就知道能搜。</p>
+     */
+    private int searchY() {
+        return y + PAD + TITLE_H + 1 + SEARCH_GAP;
+    }
+
+    private int searchW() {
+        return contentW();
+    }
+
+    /** 懒创建搜索框（第一次可见时才造：{@code init()} 阶段拿不到本类的最终宽）。 */
+    private void ensureSearchBox() {
+        if (searchBox != null) {
+            return;
         }
+        final EditBox box = new EditBox(font(), contentX(), searchY(), searchW(), SEARCH_H,
+            Component.translatable(LANG + "search.hint"));
+        box.setMaxLength(64);
+        box.setTextShadow(false);
+        box.setBordered(true);
+        // hint 文案里带「/」与中文：EditBox 的提示只在空值且未聚焦时画，正合适
+        box.setHint(Component.translatable(LANG + "search.hint"));
+        box.setResponder(text -> query = text == null ? "" : text.trim().toLowerCase(java.util.Locale.ROOT));
+        searchBox = box;
+    }
+
+    /**
+     * 一行是否命中当前过滤串。
+     * <p>口径（契约 §3.1）：输入按空格切成 token，<b>全部</b> token 都要命中；单 token 命中 =
+     * 名字（不区分大小写）{@code contains} <b>或</b> 坐标串 {@code contains}。
+     * 坐标串把 6 个数字用逗号拼起来、去掉所有空格 —— 于是 {@code "100"}、
+     * {@code "100,64"}、{@code "64100"} 都能命中 {@code 100,64,100}，玩家不用记格式。</p>
+     */
+    private boolean matchesQuery(final Row row) {
+        if (query.isEmpty()) {
+            return true;
+        }
+        final Area area = row.area();
+        final String fallback = Component.translatable(LANG_REGION, row.rawIndex() + 1).getString();
+        final String name = area.displayName(fallback).toLowerCase(java.util.Locale.ROOT);
+        final String coords = coordSearchText(area);
+        for (final String token : query.split("\\s+")) {
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (!name.contains(token) && !coords.contains(token)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 坐标的「可搜索文本」：6 个数字用逗号连起来（无空格、无括号），见 {@link #matchesQuery}。 */
+    private static String coordSearchText(final Area area) {
+        return area.minX() + "," + area.minY() + "," + area.minZ() + ","
+            + area.maxX() + "," + area.maxY() + "," + area.maxZ();
     }
 
     // ==================== 布局（每帧） ====================
@@ -354,8 +427,13 @@ public final class AreaStripPanel {
             visible = false;
             AreaStripBounds.set(null);
             // 侧栏不可见 ⇒ 「当前在干活」的常驻世界框也必须立刻消失（否则收起侧栏后框还留在世界里）
-            AreaOutline.remove(AreaOutline.slot("strip/focus"));
-            closeMarkGrid();
+            AreaOutline.remove(FOCUS_SLOT);
+            // 第 130 轮：搜索框的焦点也要放掉 —— 否则「聚焦搜索框 → 收起侧栏」之后 owner 仍会把
+            // keyPressed / charTyped 转发给一个看不见的面板（玩家按 E 关不掉界面，像卡死）。
+            if (searchBox != null && searchBox.isFocused()) {
+                searchBox.setFocused(false);
+                searchFocused = false;
+            }
             if (AdvancedCollectionCacheScreen.isStripOpen() && hasSelector
                 && avail < HARD_MIN_W && !narrowWarned) {
                 narrowWarned = true; // 「一帧内只提示一次」（这里做得更强：一次可见期内只一次）
@@ -396,20 +474,16 @@ public final class AreaStripPanel {
     }
 
     private int rowsAreaTop() {
-        return y + PAD + TITLE_H;
+        return searchY() + SEARCH_H + SEARCH_ROWS_GAP;
     }
 
     private int rowsAreaBottom() {
-        final int footerTop = y + h - PAD - FOOTER_H - 2;
-        if (markGridRaw >= 0) {
-            return footerTop - (MARK_HEADER_H + MARK_GRID_H + 2);
-        }
-        return footerTop;
+        return y + h - PAD - FOOTER_H - 2;
     }
 
     // ==================== 渲染 ====================
 
-    /** 每帧：提交到期输入 → 重建行 → 画面板 / 行 / 网格 / 底部 → 喂世界框。 */
+    /** 每帧：提交到期输入 → 重建行 → 画面板 / 标题 / 搜索框 / 行 / 底部 → 喂世界框。 */
     public void render(final GuiGraphics guiGraphics, final int mouseX, final int mouseY,
                        final float partialTick) {
         if (!visible) {
@@ -417,25 +491,35 @@ public final class AreaStripPanel {
         }
         // 二次确认到期就自动解除武装（3 秒后必须自己回到安全态，不能一直「确认？」挂着）
         expireArming();
+        ensureSearchBox();
         rebuildRows();
         // 服务端对最近一次区域写入的拒绝原因（改名 / 改坐标 / 删除被拒）⇒ 明说一句，绝不静默
         handleServerReject();
         drawPanelBackground(guiGraphics);
         drawTitle(guiGraphics);
+        confirmYesRect = null;
+        confirmNoRect = null;
         layoutRows();
         drawRows(guiGraphics, mouseX, mouseY);
-        if (markGridRaw >= 0) {
-            drawMarkGrid(guiGraphics, mouseX, mouseY);
-        } else {
-            markGridRect = null;
-            for (int i = 0; i < markCells.length; i++) {
-                markCells[i] = null;
-            }
-        }
         drawFooter(guiGraphics, mouseX, mouseY);
         renderScrollbar(guiGraphics, mouseX, mouseY, partialTick);
+        renderSearchBox(guiGraphics, mouseX, mouseY, partialTick);
         renderInputs(guiGraphics, mouseX, mouseY, partialTick);
         feedWorldOutline();
+    }
+
+    /** 搜索框：每帧跟面板摆位（与 {@link #searchY()} / {@link #searchW()} 同源）。 */
+    private void renderSearchBox(final GuiGraphics guiGraphics, final int mouseX, final int mouseY,
+                                 final float partialTick) {
+        final EditBox box = searchBox;
+        if (box == null) {
+            return;
+        }
+        box.setX(contentX());
+        box.setY(searchY());
+        box.setWidth(searchW());
+        box.render(guiGraphics, mouseX, mouseY, partialTick);
+        searchFocused = box.isFocused();
     }
 
     /**
@@ -500,6 +584,10 @@ public final class AreaStripPanel {
         final Component title;
         if (snapshot == null) {
             title = Component.translatable(LANG + "waiting.short");
+        } else if (!query.isEmpty()) {
+            // 过滤中：标题第二段直接说「命中几行」——玩家不用自己数（用户要的「搜索」闭环）
+            title = Component.translatable(LANG + "title.filtered",
+                ordinal < 0 ? 0 : ordinal + 1, total, rows.size());
         } else if (ordinal < 0) {
             title = Component.translatable(LANG + "title.none", total);
         } else {
@@ -527,7 +615,7 @@ public final class AreaStripPanel {
 
     private Component currentName() {
         final int raw = currentRaw();
-        for (final Row row : rows) {
+        for (final Row row : allRows) {
             if (row.rawIndex() == raw) {
                 return Component.literal(row.area().displayName(
                     Component.translatable(LANG_REGION, raw + 1).getString()));
@@ -548,7 +636,7 @@ public final class AreaStripPanel {
     @Nullable
     private Area currentArea() {
         final int raw = currentRaw();
-        for (final Row row : rows) {
+        for (final Row row : allRows) {
             if (row.rawIndex() == raw) {
                 return row.area();
             }
@@ -558,8 +646,13 @@ public final class AreaStripPanel {
 
     // ---------- 行 ----------
 
-    /** 从服务端快照重建本帧的行（客户端不做任何取舍）。 */
+    /**
+     * 从服务端快照重建本帧的行（客户端不做任何取舍），再按搜索框过滤。
+     * <p>{@link #allRows} 是权威全集（改名 / 坐标 / 当前行 / 去重判定都读它），{@link #rows} 只是
+     * 「这一屏画哪些」—— 搜索只影响显示，<b>绝不影响</b>服务端的编辑上下文与操作。</p>
+     */
     private void rebuildRows() {
+        allRows.clear();
         rows.clear();
         final AdvancedAreaSnapshotPacket snapshot = snapshotOrNull();
         if (snapshot == null) {
@@ -570,8 +663,13 @@ public final class AreaStripPanel {
             if (entry == null || entry.area() == null) {
                 continue;
             }
-            rows.add(new Row(entry.rawIndex(), i, entry.area(),
+            allRows.add(new Row(entry.rawIndex(), i, entry.area(),
                 entry.filters() == null ? List.of() : entry.filters()));
+        }
+        for (final Row row : allRows) {
+            if (matchesQuery(row)) {
+                rows.add(row);
+            }
         }
     }
 
@@ -626,9 +724,15 @@ public final class AreaStripPanel {
 
     private void drawRows(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         if (rows.isEmpty()) {
-            final String note = snapshotOrNull() == null
-                ? Component.translatable(LANG + "waiting").getString()
-                : Component.translatable(LANG + "empty").getString();
+            // 三种空态说三句不同的话（第 130 轮：搜索无命中和「一条区域都没有」是两回事）
+            final String note;
+            if (snapshotOrNull() == null) {
+                note = Component.translatable(LANG + "waiting").getString();
+            } else if (!allRows.isEmpty()) {
+                note = Component.translatable(LANG + "search.none").getString();
+            } else {
+                note = Component.translatable(LANG + "empty").getString();
+            }
             RsccTextFit.drawFitBlock(guiGraphics, font(), Component.literal(note),
                 contentX(), rowsTopAbs + 2, contentW(), 3, 10, COLOR_DIM);
             return;
@@ -661,56 +765,120 @@ public final class AreaStripPanel {
         if (current) {
             guiGraphics.drawString(font(), "▶", contentX(), top + 2, COLOR_ACCENT, false);
         }
-        // 第一行：N. 名字（删除二次确认期间换成红字「确认删？」）
         final boolean armed = deleteArmedRaw == row.rawIndex() && isArmed(deleteArmedAt);
+        // 第一行：N. 名字（删除二次确认期间换成红字「确认删除 #N？」）
         final String name = (row.rawIndex() + 1) + ". " + row.area().displayName(
             Component.translatable(LANG_REGION, row.rawIndex() + 1).getString());
         if (armed) {
             RsccTextFit.drawFitLine(guiGraphics, font(),
-                Component.translatable(LANG + "delete.confirm.this"), textX, top + 2,
-                nameW + actW, COLOR_ERROR);
+                Component.translatable(LANG + "delete.confirm.this", row.rawIndex() + 1),
+                textX, top + 2, nameW + actW, COLOR_ERROR);
+            // 确认态：动作区换成 ✓ / ✗ 两颗按钮（命中区与本帧矩形同源，见 onRowClicked）
+            final int yesX = contentRight() - 2 * ACT_PITCH - 1;
+            confirmYesRect = new Rect2i(yesX, top + 1, ACT_PITCH, 10);
+            confirmNoRect = new Rect2i(yesX + ACT_PITCH, top + 1, ACT_PITCH, 10);
+            drawActionIcon(guiGraphics, yesX, top + 2,
+                Component.translatable(LANG + "confirm.glyph"), mouseX, mouseY);
+            drawActionIcon(guiGraphics, yesX + ACT_PITCH, top + 2,
+                Component.translatable(LANG + "cancel.glyph"), mouseX, mouseY);
         } else {
             RsccTextFit.drawFitLine(guiGraphics, font(), Component.literal(name),
                 textX, top + 2, nameW, current ? COLOR_TITLE : COLOR_TEXT);
+            // 两个动作图标：改名（✎）/ 删除（✕，二次确认）；「看」= 右键行（见 onRowClicked）
+            final int ax = vrActionX[slotIndex];
+            drawActionIcon(guiGraphics, ax, top + 2,
+                Component.translatable(LANG + "rename.glyph"), mouseX, mouseY);
+            drawActionIcon(guiGraphics, ax + ACT_PITCH, top + 2,
+                Component.translatable(LANG + "delete.glyph"), mouseX, mouseY);
         }
-        // 三个动作图标：标记（标）/ 改名（✎）/ 删除（✕）
-        final int ax = vrActionX[slotIndex];
-        drawActionIcon(guiGraphics, ax, top + 2, Component.translatable(LANG + "mark.glyph"),
-            mouseX, mouseY);
-        drawActionIcon(guiGraphics, ax + ACT_PITCH, top + 2,
-            Component.translatable(LANG + "rename.glyph"), mouseX, mouseY);
-        drawActionIcon(guiGraphics, ax + ACT_PITCH * 2, top + 2,
-            Component.translatable(LANG + "delete.glyph"), mouseX, mouseY);
-        // 第二行：坐标缩略 (+ 右侧过滤图标摘要)
-        drawRowCoords(guiGraphics, row, top + NAME_LINE_H, textX, actW);
+        // 第二行：坐标紧凑串 (+ 右侧过滤图标摘要)
+        // 起点固定 contentX()+2（不跟名字行的 ▶ 缩进）：坐标行多这 6px 就能让常见串 1.0 倍放下
+        drawRowCoords(guiGraphics, row, top + NAME_LINE_H, contentX() + 2, actW);
         // 展开：6 个数字框（框本身由 renderInputs 画；这里画「从 / 到」标签与出错描红）
         if (row.rawIndex() == expandedRaw) {
             drawCoordLabels(guiGraphics, top + ROW_H);
         }
     }
 
+    /**
+     * 第二行：坐标。
+     *
+     * <h2>为什么要「三段式择优」而不是一句 {@code drawFitLine}</h2>
+     * <p>用户第 130 轮原话「有一些字很小」的算术根因：128 宽 + 括号坐标串（≈150px）必然被缩到 0.6 倍。
+     * 但现在即便缩到 0.6 也不该再出现 —— 常见坐标串（含负号的三位数）要 132~153px，
+     * 而一行可用宽只有 131px（176 宽 - 动作图标 29 - 左边距 2）。于是按优先级择优：</p>
+     * <ol>
+     *     <li><b>最优</b>：{@code min→max} 一整串放得下 ⇒ 1.0 倍画；</li>
+     *     <li><b>次优</b>：放不下 ⇒ 拆成「左下角…右上角两个端点」，<b>去掉箭头</b>分别贴左右画
+     *     （省 9px，视觉上仍是一行坐标，玩家不会误解）；</li>
+     *     <li><b>兜底</b>：两个端点加起来还放不下（极值 / 超长负数）⇒ 才交给 {@link RsccTextFit}
+     *     缩字号（<b>缩之前先让位给文字</b>：过滤图标摘要在这条路上直接不画 —— 图标是摘要，文字才是信息）。</li>
+     * </ol>
+     * <p>过滤图标只在「画完文字还剩 ≥ 图标宽 + 2px」时才画：它是锦上添花，绝不能挤占坐标。</p>
+     */
     private void drawRowCoords(final GuiGraphics guiGraphics, final Row row, final int lineTop,
                                final int textX, final int actW) {
+        final int fullW = Math.max(12, contentRight() - textX - actW);
+        final Area area = row.area();
+        final String joined = compactCoords(area);
+        final String low = cornerText(area.minX(), area.minY(), area.minZ());
+        final String high = cornerText(area.maxX(), area.maxY(), area.maxZ());
+        final int joinedW = font().width(joined);
+        final int lowW = font().width(low);
+        final int highW = font().width(high);
+        // 端点之间的最小呼吸位（0：两个端点紧贴也算「放得下」—— 它们之间没有分隔符就不会读错）
+        final int gap = 2;
+
         int icons = 0;
-        for (final MarkerEntry entry : row.filters()) {
-            if (icons >= ROW_ICON_MAX) {
-                break;
-            }
-            if (entry != null && !entry.isEmpty() && !entry.fluid()) {
-                icons++;
+        boolean drewJoined = joinedW <= fullW;
+        boolean drewSplit = !drewJoined && lowW + gap + highW <= fullW;
+        final int usedByText = drewJoined ? joinedW : (drewSplit ? lowW + gap + highW : joinedW);
+        if (usedByText + 2 * ROW_ICON_PITCH + 2 <= fullW) {
+            for (final MarkerEntry entry : row.filters()) {
+                if (icons >= ROW_ICON_MAX) {
+                    break;
+                }
+                if (entry != null && !entry.isEmpty() && !entry.fluid()) {
+                    icons++;
+                }
             }
         }
+        if (icons > 0 && !drewSplit && joinedW + icons * ROW_ICON_PITCH + 2 > fullW) {
+            // 画了图标就放不下整串 ⇒ 退回端点式（图标优先给「有图标的行」保留空间）
+            drewJoined = false;
+            drewSplit = lowW + gap + highW <= fullW;
+        }
         final int iconW = icons <= 0 ? 0 : icons * ROW_ICON_PITCH + 2;
-        final int coordW = Math.max(12, contentRight() - textX - actW - iconW);
-        final String coords = "(" + row.area().describeMin() + ")→(" + row.area().describeMax() + ")";
-        RsccTextFit.drawFitLine(guiGraphics, font(), Component.literal(coords), textX, lineTop,
-            coordW, COLOR_DIM);
+        final int textW = Math.max(12, fullW - iconW);
+
+        if (drewJoined) {
+            guiGraphics.drawString(font(), joined, textX, lineTop, COLOR_DIM, false);
+        } else if (drewSplit) {
+            guiGraphics.drawString(font(), low, textX, lineTop, COLOR_DIM, false);
+            guiGraphics.drawString(font(), high, textX + textW - highW, lineTop, COLOR_DIM, false);
+        } else {
+            // 兜底：真的放不下（极值）⇒ 缩字号，且**不画图标**（文字优先）
+            RsccTextFit.drawFitLine(guiGraphics, font(), Component.literal(joined), textX, lineTop,
+                fullW, COLOR_DIM);
+            return;
+        }
         if (icons > 0) {
             // 图标从右往左排，最后留 2px 呼吸位（与坐标文本的可用宽同源计算）
             final int startX = contentRight() - icons * ROW_ICON_PITCH;
             AdvancedCollectionCacheScreen.drawFilterIcons(guiGraphics, startX, lineTop,
                 visibleItemFilters(row.filters()), ROW_ICON_MAX);
         }
+    }
+
+    /** 一个角的紧凑串：{@code x,y,z}（无空格无括号）。 */
+    private static String cornerText(final int x, final int y, final int z) {
+        return x + "," + y + "," + z;
+    }
+
+    /** 一行的坐标紧凑串：{@code minX,minY,minZ→maxX,maxY,maxZ}（无空格无括号，见契约 §2）。 */
+    private static String compactCoords(final Area area) {
+        return cornerText(area.minX(), area.minY(), area.minZ())
+            + "→" + cornerText(area.maxX(), area.maxY(), area.maxZ());
     }
 
     private static List<MarkerEntry> visibleItemFilters(final List<MarkerEntry> filters) {
@@ -766,125 +934,6 @@ public final class AreaStripPanel {
         return rowTop + ROW_H + (index / 3) * (FIELD_H + 2);
     }
 
-    // ---------- 标记网格 ----------
-
-    /**
-     * 侧栏下半部的「标记网格」（契约 §4.5）：3 列 × 4 行、18×18、每页 12 个。
-     * <p>这就是用户「标记界面没有 JEI」的正解 —— 它<b>就长在方块界面旁边</b>，
-     * JEI 拖放目标由 {@code CollectionCacheJeiPlugin} 直接指向这里的格子（不用再开新界面）。</p>
-     */
-    private void drawMarkGrid(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
-        final Area area = markGridArea();
-        if (area == null) {
-            closeMarkGrid();
-            return;
-        }
-        final int gridBottom = rowsAreaBottom() + MARK_HEADER_H + MARK_GRID_H + 2 - 2;
-        final Rect2i body = new Rect2i(x + 1, rowsAreaBottom(), w - 2,
-            MARK_HEADER_H + MARK_GRID_H + 2);
-        markGridRect = body;
-        // 背景：比行区略深一档，让「下半部切了模式」一眼可见
-        guiGraphics.fill(body.getX(), body.getY(), body.getX() + body.getWidth(),
-            body.getY() + body.getHeight(), 0x20000000);
-        guiGraphics.fill(contentX(), body.getY(), contentRight(), body.getY() + 1, 0x60FF9F1C);
-        // 标题行：标记：区域 N  +  [清空] [返回]
-        final int headerY = body.getY() + 2;
-        final Component title = Component.translatable(LANG + "mark.title", area.displayName(
-            Component.translatable(LANG_REGION, markGridRaw + 1).getString()));
-        backRect = new Rect2i(contentRight() - 12, headerY - 1, 12, 10);
-        clearRect = new Rect2i(backRect.getX() - 26, headerY - 1, 24, 10);
-        RsccTextFit.drawFitLine(guiGraphics, font(), title, contentX(), headerY,
-            Math.max(12, clearRect.getX() - contentX() - 2), COLOR_TITLE);
-        final boolean clearArmed = clearArmedRaw == markGridRaw && isArmed(clearArmedAt);
-        drawTinyButton(guiGraphics, clearRect, clearArmed
-            ? Component.translatable(LANG + "mark.clear.confirm")
-            : Component.translatable(LANG + "mark.clear"), clearArmed, mouseX, mouseY);
-        drawTinyButton(guiGraphics, backRect, Component.translatable(LANG + "mark.back"),
-            false, mouseX, mouseY);
-
-        // 12 个格子（3 × 4），整体水平居中
-        final List<MarkerEntry> marks = markList(area);
-        final int gridW = MARK_COLS * MARK_CELL + (MARK_COLS - 1);
-        final int gridX = contentX() + Math.max(0, (contentW() - gridW) / 2);
-        final int gridY = headerY + MARK_HEADER_H - 2;
-        final int pageStart = markPage * MARK_PAGE_SIZE;
-        for (int cell = 0; cell < MARK_PAGE_SIZE; cell++) {
-            final int cx = gridX + (cell % MARK_COLS) * (MARK_CELL + 1);
-            final int cy = gridY + (cell / MARK_COLS) * (MARK_CELL + 1);
-            markCells[cell] = new Rect2i(cx, cy, MARK_CELL - 1, MARK_CELL - 1);
-            McGui.slotFrame(guiGraphics, cx, cy);
-            final int index = pageStart + cell;
-            if (index < marks.size() && marks.get(index) != null && !marks.get(index).isEmpty()) {
-                final boolean armed = markRemoveArmedIndex == index && isArmed(markRemoveArmedAt);
-                AdvancedCollectionCacheScreen.drawFilterIcons(guiGraphics, cx + 5, cy + 5,
-                    List.of(marks.get(index)), 1);
-                if (armed) {
-                    // 删除二次确认：红框 + 红字「删」
-                    guiGraphics.fill(cx, cy, cx + MARK_CELL - 1, cy + 1, COLOR_ERROR);
-                    guiGraphics.fill(cx, cy + MARK_CELL - 2, cx + MARK_CELL - 1, cy + MARK_CELL - 1, COLOR_ERROR);
-                    guiGraphics.fill(cx, cy, cx + 1, cy + MARK_CELL - 1, COLOR_ERROR);
-                    guiGraphics.fill(cx + MARK_CELL - 2, cy, cx + MARK_CELL - 1, cy + MARK_CELL - 1, COLOR_ERROR);
-                    RsccTextFit.drawFitLine(guiGraphics, font(),
-                        Component.translatable(LANG + "mark.remove.confirm"), cx - 2, cy + 5,
-                        MARK_CELL + 2, COLOR_ERROR);
-                }
-            }
-            final boolean hovered = mouseX >= cx && mouseX < cx + MARK_CELL - 1
-                && mouseY >= cy && mouseY < cy + MARK_CELL - 1;
-            if (hovered) {
-                guiGraphics.fill(cx + 1, cy + 1, cx + MARK_CELL - 2, cy + MARK_CELL - 2, COLOR_HOVER);
-            }
-        }
-        // 超出本页：右下角画 +N（契约「超出显示 +N」）
-        final int rest = Math.max(0, marks.size() - (pageStart + MARK_PAGE_SIZE));
-        if (rest > 0) {
-            // 契约 §4.5：超出本页的部分画「+N」（滚轮 / 翻页看剩下的）
-            RsccTextFit.drawFitLine(guiGraphics, font(),
-                Component.literal("+" + rest),
-                gridX + gridW + 3, gridY + MARK_GRID_H - 12, 20, COLOR_DIM);
-        }
-        // 提示行（在最下面，放不下就缩字号，绝不省略）
-        RsccTextFit.drawFitLine(guiGraphics, font(),
-            Component.translatable(LANG + "mark.hint"), contentX(), gridBottom - 1,
-            contentW(), COLOR_DIM);
-    }
-
-    /** 标记网格对应的区域（{@code null} = 该行已经不存在 / 网格已关）。 */
-    @Nullable
-    private Area markGridArea() {
-        if (markGridRaw < 0) {
-            return null;
-        }
-        for (final Row row : rows) {
-            if (row.rawIndex() == markGridRaw) {
-                return row.area();
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 网格区域的标记清单。
-     * <p><b>为什么这里破例读物品而不是快照</b>：快照里的 {@code AreaEntry#filters()} 是
-     * 「前 8 条、已剔掉空/流体」的<b>展示子集</b>，而右键删除是<b>按下标</b>删的
-     * （{@code AreaMarkEditPacket#ACTION_REMOVE}）。用子集下标去删真实列表，玩家删掉的就是另一条
-     * —— 第 119/120 轮修过一次的「下标错位」。因此这里与 {@code AreaMarkScreen#clientMarks}
-     * <b>逐字同源</b>：读选定器物品上的 {@link AreaMarks}（带注册表；拿不到注册表就显示空表，
-     * 绝不退回无注册表读法产生一份更短的列表）。</p>
-     */
-    private List<MarkerEntry> markList(final Area area) {
-        final ItemStack stack = menu.getAreaSelectorStack();
-        if (!stack.is(RS_Create_Compat.AREA_SELECTOR.get()) || area == null) {
-            return List.of();
-        }
-        final net.minecraft.core.HolderLookup.Provider registries =
-            minecraft.level == null ? null : minecraft.level.registryAccess();
-        if (registries == null) {
-            return List.of();
-        }
-        return AreaMarks.get(stack, area, registries);
-    }
-
     // ---------- 底部 / 滚动条 ----------
 
     private void drawFooter(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
@@ -915,26 +964,6 @@ public final class AreaStripPanel {
         guiGraphics.fill(right - 1, top, right, bottom, COLOR_BTN_LIGHT);
         RsccTextFit.drawFitLine(guiGraphics, font(), label, left + 2, top + 4,
             rect.getWidth() - 4, COLOR_TITLE);
-    }
-
-    /** 顶部小按钮（清空 / 返回）：比底部按钮再矮 2px、字号一样但可用宽更小。 */
-    private void drawTinyButton(final GuiGraphics guiGraphics, final Rect2i rect,
-                                final Component label, final boolean armed,
-                                final int mouseX, final int mouseY) {
-        if (rect == null) {
-            return;
-        }
-        final boolean hovered = rect.contains((int) mouseX, (int) mouseY);
-        final int left = rect.getX();
-        final int top = rect.getY();
-        final int right = left + rect.getWidth();
-        final int bottom = top + rect.getHeight();
-        guiGraphics.fill(left, top, right, bottom,
-            armed ? COLOR_BTN_ARMED : (hovered ? COLOR_BTN_HOVER : COLOR_BTN));
-        guiGraphics.fill(left, top, right, top + 1, COLOR_BTN_DARK);
-        guiGraphics.fill(left, bottom - 1, right, bottom, COLOR_BTN_LIGHT);
-        RsccTextFit.drawFitLine(guiGraphics, font(), label, left + 1, top + 1,
-            rect.getWidth() - 2, COLOR_TITLE);
     }
 
     private void renderScrollbar(final GuiGraphics guiGraphics, final int mouseX, final int mouseY,
@@ -1027,55 +1056,40 @@ public final class AreaStripPanel {
     private void feedWorldOutline() {
         final Area area = currentArea();
         if (area == null) {
-            AreaOutline.remove(AreaOutline.slot("strip/focus"));
+            AreaOutline.remove(FOCUS_SLOT);
             return;
         }
-        AreaOutline.chase(AreaOutline.slot("strip/focus"), area);
+        AreaOutline.chase(FOCUS_SLOT, area);
     }
 
     // ==================== 提示 / 工具提示 ====================
 
-    /** 悬停 tooltip（由 owner 在 {@code strip.render} 之后调；自绘元素没有自动 tooltip）。 */
+    /**
+     * 悬停 tooltip（由 owner 在 {@code strip.render} 之后调；自绘元素没有自动 tooltip）。
+     * <p>第 130 轮按用户「有些没必要的废话」砍到 <b>3 行</b>：名字 / 从角 / 尺寸（有过滤才多带过滤数）。
+     * 原来那行 howto（「点行选中 / 双击改名 / 点坐标行改坐标」）删掉 —— 图标本身就是说明书。</p>
+     */
     public void renderTooltip(final GuiGraphics guiGraphics, final int mouseX, final int mouseY) {
         if (!visible || !isInside(mouseX, mouseY)) {
             return;
         }
-        final List<Component> lines = new ArrayList<>(4);
-        if (markGridRaw >= 0) {
-            final int cell = markCellAt(mouseX, mouseY);
-            if (cell >= 0) {
-                final Area gridArea = markGridArea();
-                final List<MarkerEntry> marks = markList(gridArea);
-                final int index = markPage * MARK_PAGE_SIZE + cell;
-                if (index < marks.size() && marks.get(index) != null && !marks.get(index).isEmpty()) {
-                    lines.addAll(AdvancedCollectionCacheScreen.filterIconTooltipLines(marks.get(index)));
-                    lines.add(Component.translatable(LANG + "mark.cell.tip"));
-                } else {
-                    lines.add(Component.translatable(LANG + "mark.cell.empty.tip"));
-                }
-            } else if (backRect != null && backRect.contains((int) mouseX, (int) mouseY)) {
-                lines.add(Component.translatable(LANG + "mark.back.tip"));
-            } else if (clearRect != null && clearRect.contains((int) mouseX, (int) mouseY)) {
-                lines.add(Component.translatable(LANG + "mark.clear.tip"));
-            }
-        } else {
-            final int slot = rowAt(mouseX, mouseY);
-            if (slot >= 0) {
-                final Row row = rows.get(vrListIndex[slot]);
-                lines.add(Component.literal("#" + (row.rawIndex() + 1) + "  " + row.area().displayName(
-                    Component.translatable(LANG_REGION, row.rawIndex() + 1).getString())));
-                lines.add(Component.translatable(LANG + "tip.from", row.area().describeMin()));
-                lines.add(Component.translatable(LANG + "tip.to", row.area().describeMax()));
+        final List<Component> lines = new ArrayList<>(3);
+        final int slot = rowAt(mouseX, mouseY);
+        if (slot >= 0) {
+            final Row row = rows.get(vrListIndex[slot]);
+            lines.add(Component.literal("#" + (row.rawIndex() + 1) + "  " + row.area().displayName(
+                Component.translatable(LANG_REGION, row.rawIndex() + 1).getString())));
+            lines.add(Component.translatable(LANG + "tip.from", row.area().describeMin()));
+            if (row.filters().isEmpty()) {
                 lines.add(Component.translatable(LANG + "tip.size", row.area().describeSize()));
-                if (!row.filters().isEmpty()) {
-                    lines.add(Component.translatable(LANG + "tip.filters", row.filters().size()));
-                }
-                lines.add(Component.translatable(LANG + "tip.howto"));
-            } else if (showAllRect != null && showAllRect.contains((int) mouseX, (int) mouseY)) {
-                lines.add(Component.translatable(LANG + "show_all.tip"));
-            } else if (closeRect != null && closeRect.contains((int) mouseX, (int) mouseY)) {
-                lines.add(Component.translatable(LANG + "close.tip"));
+            } else {
+                lines.add(Component.translatable(LANG + "tip.size.filters",
+                    row.area().describeSize(), row.filters().size()));
             }
+        } else if (showAllRect != null && showAllRect.contains((int) mouseX, (int) mouseY)) {
+            lines.add(Component.translatable(LANG + "show_all.tip"));
+        } else if (closeRect != null && closeRect.contains((int) mouseX, (int) mouseY)) {
+            lines.add(Component.translatable(LANG + "close.tip"));
         }
         if (!lines.isEmpty()) {
             guiGraphics.renderTooltip(font(), lines, java.util.Optional.empty(), mouseX, mouseY);
@@ -1099,7 +1113,18 @@ public final class AreaStripPanel {
         if (!isInside(mouseX, mouseY)) {
             return false;
         }
-        // ② 输入框自己先拿点击（光标定位）
+        // ② 搜索框（常驻，占标题下方一整行）：先吃点击；点在别处 = 取消聚焦（否则打字会一直进搜索框）
+        if (searchBox != null) {
+            if (searchBox.mouseClicked(mouseX, mouseY, button)) {
+                searchFocused = true;
+                return true;
+            }
+            if (searchBox.isFocused()) {
+                searchBox.setFocused(false);
+                searchFocused = false;
+            }
+        }
+        // ②b 输入框自己先拿点击（光标定位）
         if (nameBox != null && nameBox.mouseClicked(mouseX, mouseY, button)) {
             return true;
         }
@@ -1126,24 +1151,6 @@ public final class AreaStripPanel {
             setOpen(false);
             return true;
         }
-        // ⑤ 标记网格
-        if (markGridRaw >= 0 && button == 0 && backRect != null
-            && backRect.contains((int) mouseX, (int) mouseY)) {
-            closeMarkGrid();
-            return true;
-        }
-        if (markGridRaw >= 0 && button == 0 && clearRect != null
-            && clearRect.contains((int) mouseX, (int) mouseY)) {
-            armOrClearMarks();
-            return true;
-        }
-        if (markGridRaw >= 0 && (button == 0 || button == 1)) {
-            final int cell = markCellAt(mouseX, mouseY);
-            if (cell >= 0) {
-                onMarkCellClicked(cell, button);
-                return true;
-            }
-        }
         // ⑥ 行
         if (button == 0) {
             final int slot = rowAt(mouseX, mouseY);
@@ -1153,9 +1160,10 @@ public final class AreaStripPanel {
             return true; // 点在面板里就算消费掉（面板区域不允许穿透到 GUI）
         }
         if (button == 1) {
+            // 右键一行 = 「看这块地」（5 秒世界框，关界面也继续画完）
             final int slot = rowAt(mouseX, mouseY);
             if (slot >= 0) {
-                openMarkGrid(vrRaw[slot]);
+                peekArea(vrRaw[slot]);
             }
             return true;
         }
@@ -1182,11 +1190,6 @@ public final class AreaStripPanel {
             return false;
         }
         final int direction = delta > 0 ? -1 : 1;
-        if (markGridRaw >= 0 && markGridRect != null
-            && markGridRect.contains((int) mouseX, (int) mouseY)) {
-            turnMarkPage(direction);
-            return true;
-        }
         // 行列表滚动：一行 = ROW_H 高（可视高 / ROW_H = 一屏能放几行；maxScroll 用同一条口径）
         final int fitRows = Math.max(1, (rowsAreaBottom() - rowsAreaTop()) / ROW_H);
         final int max = Math.max(0, rows.size() - fitRows);
@@ -1212,19 +1215,28 @@ public final class AreaStripPanel {
         lastClickOnName = onName;
         lastClickMs = now;
 
-        // 三个动作图标（命中区与 drawRow 同源）
+        // armed 态：只认 ✓ / ✗ 两颗确认按钮（第二次点 ✓ 才真的删；✗ / 3 秒到期 = 回退）
+        if (deleteArmedRaw == raw && isArmed(deleteArmedAt)) {
+            if (confirmYesRect != null && confirmYesRect.contains((int) mouseX, (int) mouseY)) {
+                armOrDelete(raw);
+                return;
+            }
+            if (confirmNoRect != null && confirmNoRect.contains((int) mouseX, (int) mouseY)) {
+                deleteArmedRaw = -1;
+                deleteArmedAt = Long.MIN_VALUE;
+                return;
+            }
+            return;
+        }
+        // 两个动作图标（命中区与 drawRow 同源）
         final int ax = vrActionX[slot];
         if (mouseY < top + 10) {
             if (within(mouseX, ax, ACT_ICON)) {
-                openMarkGrid(raw);
-                return;
-            }
-            if (within(mouseX, ax + ACT_PITCH, ACT_ICON)) {
                 selectRow(slot);
                 beginRename(raw);
                 return;
             }
-            if (within(mouseX, ax + ACT_PITCH * 2, ACT_ICON)) {
+            if (within(mouseX, ax + ACT_PITCH, ACT_ICON)) {
                 armOrDelete(raw);
                 return;
             }
@@ -1282,30 +1294,21 @@ public final class AreaStripPanel {
         return -1;
     }
 
-    /** 网格格子命中（0..11；{@code -1} = 不在任何一格上）。 */
-    private int markCellAt(final double mouseX, final double mouseY) {
-        for (int i = 0; i < markCells.length; i++) {
-            if (markCells[i] != null && markCells[i].contains((int) mouseX, (int) mouseY)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private void turnMarkPage(final int direction) {
-        final Area area = markGridArea();
-        if (area == null) {
-            return;
-        }
-        final int pages = Math.max(1, (markList(area).size() + MARK_PAGE_SIZE - 1) / MARK_PAGE_SIZE);
-        markPage = Math.max(0, Math.min(pages - 1, markPage + direction));
-        markRemoveArmedIndex = -1;
-        markRemoveArmedAt = Long.MIN_VALUE;
-    }
-
     // ==================== 输入：键盘 ====================
 
     public boolean keyPressed(final int keyCode, final int scanCode, final int modifiers) {
+        // 搜索框聚焦：Esc = 清空并取消聚焦（不关界面），其余键全给它（否则按 E 会把界面关掉）
+        if (searchBox != null && searchBox.isFocused()) {
+            if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+                searchBox.setValue("");
+                query = "";
+                searchBox.setFocused(false);
+                searchFocused = false;
+                return true;
+            }
+            searchBox.keyPressed(keyCode, scanCode, modifiers);
+            return true;
+        }
         if (nameBox != null) {
             if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
                 || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER) {
@@ -1337,17 +1340,14 @@ public final class AreaStripPanel {
             }
             return true;
         }
-        // 非编辑态：Esc 先关「标记网格」这一层（第一次 Esc 回行列表，第二次才关界面 —— 与
-        // 子界面逐层返回的习惯一致；否则玩家想退出网格只能去点那个小「返回」，很容易误关整个 GUI）
-        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE && markGridRaw >= 0) {
-            closeMarkGrid();
-            return true;
-        }
         return false;
     }
 
     /** 字符输入（原版只把 charTyped 路由给 children；自绘 EditBox 必须由 owner 转发到这里）。 */
     public boolean charTyped(final char codePoint, final int modifiers) {
+        if (searchBox != null && searchBox.isFocused()) {
+            return searchBox.charTyped(codePoint, modifiers);
+        }
         if (nameBox != null) {
             return nameBox.charTyped(codePoint, modifiers);
         }
@@ -1390,14 +1390,23 @@ public final class AreaStripPanel {
         }
     }
 
-    /** 打开某一个区域的标记网格（契约 §4.5）。 */
-    private void openMarkGrid(final int raw) {
-        markGridRaw = raw;
-        markPage = 0;
-        clearArmedRaw = -1;
-        clearArmedAt = Long.MIN_VALUE;
-        markRemoveArmedIndex = -1;
-        markRemoveArmedAt = Long.MIN_VALUE;
+    /**
+     * 「看」某一块地：{@link AreaOutline#showForView} 喂 5 秒 TTL（每个 rawIndex 一个独立 slot）。
+     * <p>为什么用 {@code showForView} 而不是 {@code chase}：用户的实际动作是「点一下 → 关界面 → 抬头看」，
+     * 所以框必须<b>在关掉 GUI 之后继续画完</b>（这正是「显示边框还是没用」的正解，
+     * 与 {@link #removed()} 里同一段处理同源）。</p>
+     */
+    private void peekArea(final int raw) {
+        final Area area = areaOfRaw(raw);
+        if (area == null) {
+            return;
+        }
+        if (AreaOutline.isDisabled()) {
+            // 真话：描边渲染出口不可用（Ponder / Outliner 被禁用或替换）⇒ 别让玩家猜
+            owner.stripHint("gui.rs_create_compat.advanced_collection_cache.show.failed");
+            return;
+        }
+        AreaOutline.showForView(AreaOutline.slot("strip/peek/" + raw), area, AreaOutline.VIEW_TTL);
     }
 
     // ---------- 改名 ----------
@@ -1413,7 +1422,7 @@ public final class AreaStripPanel {
             return;
         }
         Area area = null;
-        for (final Row row : rows) {
+        for (final Row row : allRows) {
             if (row.rawIndex() == raw) {
                 area = row.area();
             }
@@ -1601,7 +1610,7 @@ public final class AreaStripPanel {
         if (area.sameGeometry(current)) {
             return; // 一个数字都没改：不发包
         }
-        for (final Row row : rows) {
+        for (final Row row : allRows) {
             if (row.rawIndex() != raw && row.area().sameGeometry(area)) {
                 owner.stripHint(LANG + "err.duplicate");
                 return;
@@ -1621,9 +1630,6 @@ public final class AreaStripPanel {
             deleteArmedAt = Long.MIN_VALUE;
             send(new AreaSelectorEditPacket(menu.containerId, AreaSelectorEditPacket.ACTION_DELETE,
                 raw, AreaSelectorEditPacket.PLACEHOLDER));
-            if (markGridRaw == raw) {
-                closeMarkGrid();
-            }
             return;
         }
         deleteArmedRaw = raw;
@@ -1639,157 +1645,6 @@ public final class AreaStripPanel {
             deleteArmedRaw = -1;
             deleteArmedAt = Long.MIN_VALUE;
         }
-        if (clearArmedRaw >= 0 && !isArmed(clearArmedAt)) {
-            clearArmedRaw = -1;
-            clearArmedAt = Long.MIN_VALUE;
-        }
-        if (markRemoveArmedIndex >= 0 && !isArmed(markRemoveArmedAt)) {
-            markRemoveArmedIndex = -1;
-            markRemoveArmedAt = Long.MIN_VALUE;
-        }
-    }
-
-    // ---------- 标记网格动作 ----------
-
-    /** 网格格子上的一次点击：左键空格加主手物品；右键已有标记删（二次确认）。 */
-    private void onMarkCellClicked(final int cell, final int button) {
-        final Area area = markGridArea();
-        if (area == null) {
-            return;
-        }
-        final List<MarkerEntry> marks = markList(area);
-        final int index = markPage * MARK_PAGE_SIZE + cell;
-        if (button == 1) {
-            // 右键 = 删除（二次确认）
-            if (index >= marks.size()) {
-                return;
-            }
-            if (markRemoveArmedIndex == index && isArmed(markRemoveArmedAt)) {
-                markRemoveArmedIndex = -1;
-                markRemoveArmedAt = Long.MIN_VALUE;
-                send(new AreaMarkEditPacket(menu.containerId, AreaMarkEditPacket.ACTION_REMOVE,
-                    area, index, AreaMarkEditPacket.NO_INDEX));
-                return;
-            }
-            markRemoveArmedIndex = index;
-            markRemoveArmedAt = System.currentTimeMillis();
-            return;
-        }
-        // 左键：只有空格子才加（已有标记的格子左键不做事，避免误删 / 误加）
-        if (index < marks.size() && marks.get(index) != null && !marks.get(index).isEmpty()) {
-            return;
-        }
-        final ItemStack hand = mainHandStack();
-        if (hand.isEmpty()) {
-            owner.stripHint(LANG + "mark.no_hand");
-            return;
-        }
-        addMarkFromMainHand(area, hand);
-    }
-
-    /**
-     * 主手物品加进当前区域的标记（与 {@code AreaMarkScreen#addFromInventory} 同一条通道：
-     * {@code AreaMarkEditPacket.ACTION_ADD} 第 5 参 = <b>背包格下标</b>，服务端自己取物品、不消耗）。
-     */
-    private void addMarkFromMainHand(final Area area, final ItemStack hand) {
-        final int slot = inventorySlotOf(hand);
-        if (slot < 0) {
-            owner.stripHint(LANG + "mark.no_hand");
-            return;
-        }
-        // 条数上限 / 单条体积 / 整表预算全在服务端（AreaMarkEditPacket.ACTION_ADD 的服务端分支），
-        // 客户端不复制一份判据 —— 「客户端判断可用性」正是契约 §4 明令禁止的那件事。
-        send(new AreaMarkEditPacket(menu.containerId, AreaMarkEditPacket.ACTION_ADD, area,
-            AreaMarkEditPacket.NO_INDEX, slot));
-    }
-
-    /** 清空：第一次武装（「确认清？」3 秒），第二次才真的发 ACTION_CLEAR。 */
-    private void armOrClearMarks() {
-        if (clearArmedRaw == markGridRaw && isArmed(clearArmedAt)) {
-            clearArmedRaw = -1;
-            clearArmedAt = Long.MIN_VALUE;
-            final Area area = markGridArea();
-            if (area != null) {
-                send(new AreaMarkEditPacket(menu.containerId, AreaMarkEditPacket.ACTION_CLEAR,
-                    area, AreaMarkEditPacket.NO_INDEX, AreaMarkEditPacket.NO_INDEX));
-            }
-            return;
-        }
-        clearArmedRaw = markGridRaw;
-        clearArmedAt = System.currentTimeMillis();
-    }
-
-    // ==================== JEI 拖入（契约 §4.5-2） ====================
-
-    /** 本帧标记网格 12 格的屏幕坐标（JEI 目标区；与绘制同源）。 */
-    public List<Rect2i> markGridCellAreas() {
-        final List<Rect2i> out = new ArrayList<>(MARK_PAGE_SIZE);
-        if (!visible || markGridRaw < 0) {
-            return out;
-        }
-        for (final Rect2i cell : markCells) {
-            if (cell != null) {
-                out.add(cell);
-            }
-        }
-        return out;
-    }
-
-    /** 标记网格当前对应的区域（JEI 侧不需要，但自检 / 诊断要用）。 */
-    @Nullable
-    public Area markGridAreaForJei() {
-        return markGridArea();
-    }
-
-    /**
-     * JEI 把一件物品拖到标记网格上（契约 §4.5 的<b>唯一接缝</b>：JEI 回调只调它，不自己发包）。
-     * <p>两条路，都<b>真的会写进去</b>（绝不允许「不在背包就提示一句然后什么也不做」）：</p>
-     * <ol>
-     *     <li><b>快路径</b>：这件物品真的在玩家背包里（同 id + 同组件补丁）⇒ 走既有的
-     *     {@code AreaMarkEditPacket.ACTION_ADD(inventorySlot)}，与标记界面完全同一条通道；</li>
-     *     <li><b>幽灵路径</b>：JEI 拖出来的通常是<b>配方幽灵栈</b>（背包里没有）⇒ 走第 125 轮新包
-     *     {@link AreaMarkAddItemPacket}，把 id + 组件补丁直接带过去，服务端自己还原成 ItemStack。</li>
-     * </ol>
-     * <p>签名按契约定稿为 {@code void}：目标格子已经由 JEI 侧判定命中，接缝只需要「写进去」这一个结果。</p>
-     */
-    public void acceptGhostIngredient(final ItemStack stack) {
-        final Area area = markGridArea();
-        if (area == null || stack == null || stack.isEmpty()) {
-            return;
-        }
-        final int slot = inventorySlotOf(stack);
-        try {
-            if (slot >= 0) {
-                PacketDistributor.sendToServer(new AreaMarkEditPacket(menu.containerId,
-                    AreaMarkEditPacket.ACTION_ADD, area, AreaMarkEditPacket.NO_INDEX, slot));
-                return;
-            }
-            final net.minecraft.resources.ResourceLocation id =
-                net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
-            if (id == null) {
-                return;
-            }
-            PacketDistributor.sendToServer(new AreaMarkAddItemPacket(menu.containerId, area, id,
-                MarkerEntry.encodeComponents(stack.getComponentsPatch()),
-                Math.max(1, stack.getCount()), false));
-        } catch (final RuntimeException error) {
-            warn("C2S 包未注册（主类缺 registerPayloadHandlers 条目）⇒ 本次拖入没有写进服务端", error);
-        }
-    }
-
-    /**
-     * JEI 把一桶流体拖到标记网格上。
-     * <p><b>如实说明</b>：每区域过滤器目前只支持物品标记（服务端 48 格窗口那条路
-     * {@code AdvancedCollectionCacheBlockEntity#addAreaMarker} 也只吃 ItemStack），
-     * 流体标记要走机器的全局匹配区。因此这里不发包，只给一句明确的话 ——
-     * 比「拖进去没反应」强。</p>
-     */
-    public boolean acceptGhostFluid(final FluidStack fluid) {
-        if (markGridArea() == null || fluid == null || fluid.isEmpty()) {
-            return false;
-        }
-        owner.stripHint(LANG + "mark.fluid_unsupported");
-        return true;
     }
 
     // ==================== 关界面 ====================
@@ -1804,9 +1659,15 @@ public final class AreaStripPanel {
     public void removed() {
         finishRename(true);
         finishCoords(true);
-        AreaOutline.remove(AreaOutline.slot("strip/focus"));
+        // 第 130 轮：**不再**直接 remove —— 玩家的实际动作是「点行 → 关界面 → 转头看那块地」，
+        // 一关界面框就消失，看起来就是「显示边框根本没用」（用户第 4 条）。改成按 5 秒重新武装。
+        final Area last = currentArea();
+        if (last != null) {
+            AreaOutline.showForView(FOCUS_SLOT, last, AreaOutline.VIEW_TTL);
+        } else {
+            AreaOutline.remove(FOCUS_SLOT);
+        }
         clearShownAllOutlines();
-        closeMarkGrid();
         AreaStripBounds.clear();
         visible = false;
         scrollbar = null;
@@ -1897,36 +1758,12 @@ public final class AreaStripPanel {
 
     @Nullable
     private Area areaOfRaw(final int raw) {
-        for (final Row row : rows) {
+        for (final Row row : allRows) {
             if (row.rawIndex() == raw) {
                 return row.area();
             }
         }
         return null;
-    }
-
-    private ItemStack mainHandStack() {
-        return minecraft.player == null ? ItemStack.EMPTY : minecraft.player.getMainHandItem();
-    }
-
-    /**
-     * 这件物品在「背包里」的格下标（{@code -1} = 不在背包）。
-     * <p>口径与 {@code AreaMarkScreen#inventoryStack} 完全一致：{@code Inventory#getItem(slot)}，
-     * 前 9 格是快捷栏（主手 = {@code Inventory#selected}）。这里只用于「快路径」判断；
-     * 不在背包的幽灵栈走新包，绝不因为「找不到槽」就放弃。
-     */
-    private int inventorySlotOf(final ItemStack stack) {
-        if (minecraft.player == null || stack == null || stack.isEmpty()) {
-            return -1;
-        }
-        final net.minecraft.world.entity.player.Inventory inventory = minecraft.player.getInventory();
-        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
-            final ItemStack candidate = inventory.getItem(slot);
-            if (!candidate.isEmpty() && ItemStack.isSameItemSameComponents(candidate, stack)) {
-                return slot;
-            }
-        }
-        return -1;
     }
 
     private void send(final net.minecraft.network.protocol.common.custom.CustomPacketPayload payload) {

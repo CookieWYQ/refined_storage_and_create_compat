@@ -4,6 +4,7 @@ import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.AreaOutline;
 import cretae.cookiewyq.rs_create_compat.client.AreaStripBounds;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
+import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedCollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.menu.CollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket;
@@ -509,14 +510,69 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
     @Override
     public void removed() {
         if (strip != null) {
-            // 契约 §4.5：关界面时「标记网格」必须真的收起（否则下次打开还停在上一个区域的标记页，
-            // 玩家会以为那是新界面）。closeMarkGrid() 幂等，提前调一次不会与 removed() 冲突。
-            strip.closeMarkGrid();
+            // 第 130 轮：标记网格整页删除，这里不再有 closeMarkGrid()。
+            // removed() 内部会把「当前在干活」的世界框按 5 秒重新武装（用户第 4 条「显示边框没用」的正解）。
             strip.removed();
         }
         strip = null;
         AreaStripBounds.clear();
         super.removed();
+    }
+
+    // ==================== 匹配区 = 区域过滤的唯一编辑入口（第 130 轮） ====================
+
+    /**
+     * 匹配区标题带：有正在编辑的区域时直接写「区域 3 · 铁场」。
+     * <p>用户原话：「让这一个编辑的时候在匹配区中编辑」—— 那就必须让人一眼看出<b>这块 48 格现在是谁的</b>。
+     * 第 106 轮用的是状态带上那句「区域 3/7 · 只吸 4 种」（在 GUI 内 y210 那条带），离匹配区隔了一整块缓存区；
+     * 标题带就在匹配区头顶，挪到这里才是「上下文与其编辑对象挨着」。</p>
+     */
+    @Override
+    protected Component matchRegionLabel() {
+        final int editing = advancedMenu().getEditingAreaIndex();
+        if (editing < 0) {
+            return Component.translatable(LANG + "match_label.none");
+        }
+        return Component.translatable(LANG + "match_label", editing + 1, editingAreaName(editing));
+    }
+
+    /** 正在编辑的区域名（无名区域退回「区域 N」；快照还没到时也退回序号）。 */
+    private String editingAreaName(final int editingIndex) {
+        final AdvancedAreaSnapshotPacket snapshot = AdvancedAreaSnapshotPacket.lastFor(menu.containerId);
+        if (snapshot != null && editingIndex >= 0 && editingIndex < snapshot.entries().size()) {
+            final AdvancedAreaSnapshotPacket.AreaEntry entry = snapshot.entries().get(editingIndex);
+            if (entry != null && entry.area() != null) {
+                return entry.area().displayName(Component.translatable(
+                    "gui.rs_create_compat.area_selector.region", editingIndex + 1).getString());
+            }
+        }
+        return Component.translatable("gui.rs_create_compat.area_selector.region",
+            editingIndex + 1).getString();
+    }
+
+    /**
+     * 没选区域时匹配区里的那句提示（否则那 48 格显示的是<b>全局匹配区</b>，
+     * 玩家会以为自己在配「这个区域」的过滤）。
+     * <p>几何用字面量 7/32..251/105：那两对常量在基类是 {@code private}
+     * （{@code MATCH_PANEL_X1/Y1/X2/Y2}），这里是同一块面板的镜像；自检脚本钉住两边相等。</p>
+     */
+    @Override
+    protected void drawMatchAreaHint(final GuiGraphics guiGraphics) {
+        if (advancedMenu().getEditingAreaIndex() >= 0) {
+            return;
+        }
+        final int panelX = leftPos + 7;
+        final int panelY = topPos + 32;
+        final int panelW = 244;
+        final int panelH = 73;
+        // 半透明底：文字压在第 1 行 ghost 格子（16×16 图标）上仍然读得清
+        guiGraphics.fill(panelX, panelY + panelH / 2 - 10, panelX + panelW, panelY + panelH / 2 + 10,
+            0xB0000000);
+        final Component hint = Component.translatable(
+            "gui.rs_create_compat.collection_cache.match_area.pick_hint");
+        final int textW = Math.min(panelW - 8, font.width(hint));
+        RsccTextFit.drawFitLine(guiGraphics, font, hint,
+            panelX + (panelW - textW) / 2, panelY + panelH / 2 - 4, textW, 0xFFFFE08A);
     }
 
     /**

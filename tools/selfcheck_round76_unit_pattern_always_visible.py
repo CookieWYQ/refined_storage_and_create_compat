@@ -180,16 +180,18 @@ def assembly_failures(assembly_item, assembly_comp):
     return fails
 
 
-def head_source(rel_path):
-    """取 git HEAD 版本的源码（无 git / 不在工作树 ⇒ None）。"""
-    import subprocess
-    try:
-        proc = subprocess.run(
-            ["git", "show", "HEAD:src/main/java/cretae/cookiewyq/rs_create_compat/" + rel_path],
-            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    except Exception:
-        return None
-    return proc.stdout if proc.returncode == 0 else None
+def pre_fix_source(rel_path):
+    """取**真·修前**源码：git 历史里「最近一个仍会被 visibility_failures 判负」的版本。
+
+    第 130 轮修：以前是 `git show HEAD:`（隐含 HEAD = 修前），修复一提交进 HEAD 就恒返回修后代码，
+    这条反例自证于是变成「一个都抓不到」的假失败（见 tools/_prefix_history.py）。现在与 HEAD 无关。
+    返回 (sha8, 文本) 或 (None, None)。
+    """
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _prefix_history import find_last_version
+    return find_last_version(ROOT, rel_path,
+                             predicate=lambda text: len(visibility_failures(text)) >= 2)
 
 
 # =====================================================================
@@ -227,14 +229,14 @@ def section_counterexample():
           "反例 a 同时点名 machineVisible 与 inputVisible")
     cap = cap_failures(BEFORE_CAP)
     check(len(cap) >= 1, "反例 b（没有 MAX_ALWAYS_ROWS / visibleRows 收缩）被行数判据抓到", str(cap[:3]))
-    # 真·反例：git HEAD = 本轮改动前的同一文件。
-    head = head_source("client/tooltip/UnitPatternTooltipComponent.java")
+    # 真·反例：git 历史里最近一个「仍按 Shift」的版本（与 HEAD 现在是什么无关）。
+    sha, head = pre_fix_source("client/tooltip/UnitPatternTooltipComponent.java")
     if head is None:
-        print("       （无 git 工作树 / HEAD 取不到 ⇒ 跳过真源码反例；合成反例仍已判负）")
+        print("       （git 历史里找不到仍按 Shift 的版本 ⇒ 跳过真源码反例；合成反例仍已判负）")
         return
     head_fails = visibility_failures(head)
     check(len(head_fails) >= 2,
-          "反例 c（git HEAD = 修前）的机器 / 输入原料仍按 Shift ⇒ 同批判据判负",
+          "反例 c（git 历史 %s = 修前）的机器 / 输入原料仍按 Shift ⇒ 同批判据判负" % sha,
           str(head_fails[:3]))
 
 

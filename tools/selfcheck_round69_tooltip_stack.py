@@ -486,15 +486,26 @@ def section_counterexample():
           "反例 e（两个出口之间没有 return）会被 ② 的阶梯不变式抓到", str(bad))
 
 
-def head_source(rel):
-    """取 git HEAD 版本的源码（没有 git / 不在工作树里 ⇒ 返回 None）。"""
-    import subprocess
-    try:
-        proc = subprocess.run(["git", "show", "HEAD:src/main/java/cretae/cookiewyq/rs_create_compat/" + rel],
-                              cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    except Exception:
-        return None
-    return proc.stdout if proc.returncode == 0 else None
+def pre_fix_source(rel, name):
+    """取**真·修前**源码：git 历史里「最近一个目标方法仍缺 vanillaSlotTooltipWillDraw」的版本。
+
+    第 130 轮修：原来用 `git show HEAD:`（隐含 HEAD = 修前）。修复提交进 HEAD 后这里拿到的就是修后代码，
+    head_failures 恒为空 ⇒ 这条反例自证变成假失败（见 tools/_prefix_history.py 的说明）。
+    返回 (sha8, 文本) 或 (None, None)。
+    """
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _prefix_history import find_last_version
+
+    def still_broken(text):
+        for method_name, start, end in methods(text):
+            if method_name != name:
+                continue
+            body = "\n".join(text.split("\n")[start:end + 1])
+            return "vanillaSlotTooltipWillDraw" not in body
+        return False
+
+    return find_last_version(ROOT, rel, predicate=still_broken)
 
 
 def section_head_counterexample():
@@ -502,12 +513,12 @@ def section_head_counterexample():
 
     这就是「修前的写法会被这条自检抓到」的可复跑证据（不在 git 工作树里时自动跳过）。
     """
-    print("=== 反例自证 · 真源码（git HEAD = 修前） ===")
+    print("=== 反例自证 · 真源码（git 历史里最近一个「仍缺判据」的版本） ===")
     targets = GEOMETRY_KEYED + GEOMETRY_WITH_SLOT_EXCEPTION
     checked = 0
     head_failures = []
     for rel, name in targets:
-        text = head_source(rel)
+        sha, text = pre_fix_source(rel, name)
         if text is None:
             continue
         checked += 1
@@ -516,9 +527,9 @@ def section_head_counterexample():
             if method_name == name:
                 body = "\n".join(text.split("\n")[start:end + 1])
         if body is None or "vanillaSlotTooltipWillDraw" not in body:
-            head_failures.append("%s#%s" % (rel.split("/")[-1], name))
+            head_failures.append("%s#%s@%s" % (rel.split("/")[-1], name, sha))
     if checked == 0:
-        print("       （没有 git 工作树 / HEAD 取不到源码 ⇒ 跳过；合成反例见上一节）")
+        print("       （git 历史里也找不到「仍缺判据」的版本 ⇒ 跳过；合成反例见上一节）")
         return
     check(len(head_failures) == checked,
           "修前的全部 %d 个几何命中站点都会被 ③ 抓到（这就是修前会 FAIL 的证据）" % checked,

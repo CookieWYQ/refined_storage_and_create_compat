@@ -1,5 +1,13 @@
 # 第 125 轮 · 契约书：区域条（AreaStrip）取代独立区域界面
 
+> **⚠️ 第 130 轮已修订（2025-11-01）**：本契约中的 **§2 侧栏宽 128 / MIN_W 96 / HARD_MIN_W 72**
+> 与 **§4.5 侧栏标记网格（`isMarkGridOpen` / `closeMarkGrid` / `acceptGhostIngredient` /
+> 3×4 网格 / `AreaMarkAddItemPacket`）** 已被 **`docs/ROUND130_AREA_STRIP_REWORK.md`** 取代：
+> 侧栏加宽到 176/140/108（用户「有一些字很小」），标记网格整页删除、区域过滤改在机器界面
+> **匹配区 48 格**里编辑（用户「让这一个编辑的时候在匹配区中编辑」）。
+> 本文件其余条款（§3.1 Bounds / §3.2 六处转发 / §3.3 JEI 让位 / §4 行为）仍然有效。
+> 对应自检：`selfcheck_round125_area_strip.py`（几何已更新）+ `selfcheck_round130_area_strip_rework.py`（新契约）。
+
 > 本文件是**规格**，不是实现说明。实现方（area-strip）与验收方（strip-verify）都以此为准；
 > 任何一方要改这里的名字/常量，必须先通知 Lead。
 

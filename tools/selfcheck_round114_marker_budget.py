@@ -1403,6 +1403,21 @@ def check_review_round114():
                    and "advanced.setAreaMarkerConfig(editingAreaIndex, markerIndex, amount, matchNbt,"
                        not in broken_forward)
 
+    # ---- ⑥-E2 第 130 轮：空格子 + JEI 拖入必须**真的新增**一条（以前只 update ⇒ 静默丢包） ----
+    check("⑥-25 空格子（该下标还没有条目）走 addAreaMarkerEntry 新增，而不是只调 setAreaMarkerConfig"
+          "（setAreaMarkerConfig 找不到条目就 return false ⇒ JEI 拖到空格子上什么都不发生）",
+          six_arg is not None
+          and "advanced.getAreaMarker(editingAreaIndex, markerIndex)" in six_arg
+          and "advanced.addAreaMarkerEntry(editingAreaIndex, marker)" in six_arg
+          and "notifyMarkerResult(result)" in six_arg
+          and six_arg.index("existing == null || existing.isEmpty()")
+          < six_arg.index("advanced.addAreaMarkerEntry(")
+          and six_arg.index("advanced.addAreaMarkerEntry(")
+          < six_arg.index("advanced.setAreaMarkerConfig(editingAreaIndex, markerIndex, amount, matchNbt,"))
+    broken_add = (six_arg or "").replace("advanced.addAreaMarkerEntry(editingAreaIndex, marker)", "false")
+    counterexample("⑥-26 把新增分支改回「只 update」⇒ ⑥-25 判负（JEI 拖入空格子静默丢包）",
+                   broken_add != six_arg and "advanced.addAreaMarkerEntry(" not in broken_add)
+
     # ================= ⑥-F H1：tagCount DoS =================
     anchor("⑥", SET_PACKET, raw_packet, "public static final int TAG_CAP = 256;",
            "标签解码上限")

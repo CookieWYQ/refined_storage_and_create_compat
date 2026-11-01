@@ -1106,8 +1106,12 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
         // 已开启：匹配区失效，半径内物品全收）在紧邻的「全收」按钮 tooltip 里完整显示，
         // 因此这里只画短标题，不再拼「（全收中已失效）」这个会被截断的后缀。
         final boolean matchDisabled = menu.isCollectAll();
-        guiGraphics.drawString(font, Component.translatable(LANG + "region_marker"),
-            MATCH_LABEL_X, MATCH_LABEL_Y, matchDisabled ? COLOR_DISABLED : 0xFF333333, false);
+        // 第 130 轮：标题带文案走 protected 钩子（高级版覆写成「区域 3 · 铁场」），
+        // 绘制口径仍在本类 —— RsccTextFit.drawFitLine 保证「放不下就整行缩字号、绝不省略字符」。
+        // 基础版 matchRegionLabel() 返回的就是 LANG + "region_marker"，画面与旧实现逐字等价。
+        RsccTextFit.drawFitLine(guiGraphics, font, matchRegionLabel(),
+            MATCH_LABEL_X, MATCH_LABEL_Y, MATCH_LABEL_BAND_W,
+            matchDisabled ? COLOR_DISABLED : 0xFF333333);
         guiGraphics.drawString(font, Component.translatable(LANG + "region_cache"),
             CACHE_LABEL_X, CACHE_LABEL_Y, 0xFF333333, false);
         // 删除模式复选框的文字标签（缓存区标题带；整组左移 + 86px 带宽，中英都完整显示）
@@ -1131,6 +1135,31 @@ public class CollectionCacheScreen extends AbstractContainerScreen<CollectionCac
                 ABSORB_BTN_X[i] + ABSORB_LABEL_DX, ABSORB_LABEL_Y,
                 ABSORB_GROUP_W - ABSORB_LABEL_DX - 2, 0xFF333333);
         }
+        // 匹配区面板内的空态提示（基础版不画；高级版在「没选区域」时叠一行灰字）。
+        // 放在最后：它压在匹配区面板内，必须在所有标题 / 标签之后画才不会被盖住。
+        drawMatchAreaHint(guiGraphics);
+    }
+
+    /**
+     * 匹配区标题带的文案（基础版 = 「匹配区」；高级版覆写成「区域 3 · 铁场」）。
+     * <p>第 130 轮：区域过滤的唯一编辑入口回到匹配区 48 格 —— 玩家必须一眼看出
+     * 「我现在在配哪个区域的过滤」（用户原话：「我在匹配器中匹配就应该是可以直接拖进去」）。
+     * 文案由子类给，绘制与宽度口径留在本类（{@link #MATCH_LABEL_BAND_W} + {@link RsccTextFit}），
+     * 基础版因此<b>逐字等价</b>于旧实现（仍然只画「匹配区」/「Markers」）。</p>
+     */
+    protected Component matchRegionLabel() {
+        return Component.translatable(LANG + "region_marker");
+    }
+
+    /**
+     * 匹配区面板内的空态提示（基础版什么都不画）。
+     * <p>第 130 轮：高级版在「没选区域」时叠一行灰字
+     * （{@code collection_cache.match_area.pick_hint}）—— 否则 48 格里显示的是<b>全局匹配区</b>的
+     * 内容，很容易被玩家误当成「当前区域的过滤」。钩子放在基类，是为了让绘制顺序固定
+     * （两分区标签之后、tooltip 之前），子类只决定「画不画、画什么」。</p>
+     */
+    protected void drawMatchAreaHint(final GuiGraphics guiGraphics) {
+        // 基础版：匹配区就是全局匹配区，没有「在编辑谁」的歧义，不需要提示
     }
 
     /**

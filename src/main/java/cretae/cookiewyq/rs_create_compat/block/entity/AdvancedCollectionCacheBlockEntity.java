@@ -603,6 +603,52 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
         return MarkerAddResult.OK;
     }
 
+    /**
+     * 机器侧菜单：把一条<b>已解码好的</b>过滤条目直接追加到某区域（第 130 轮）。
+     *
+     * <h2>为什么需要它</h2>
+     * <p>用户第 130 轮原话：「我选择某一个区域，我在匹配器中<b>匹配就应该是可以直接拖进去</b>」。
+     * 而 JEI 把物品拖进匹配区时走的是 {@code SetCollectionMarkerConfigPacket} → 菜单
+     * {@code applyMarkerConfig(markerIndex, fluid, id, nbt, amount, matchNbt, tags)}，
+     * 那条路在高级版里只做 <b>update</b>（{@code setAreaMarkerConfig} 找不到条目就返回 false）——
+     * 于是「拖到一个空格子上」永远什么都不会发生（静默丢包，最坏的一种坏）。
+     * <p>{@link #addAreaMarker(int, ItemStack)} 收的是 ItemStack（拿不到 packet 里的数据组件补丁 /
+     * 数量 / 严格 NBT / 标签集合），所以这里补一个条目级入口：调用方已把 id + 组件补丁解成
+     * {@link MarkerEntry}，本方法只负责<b>去重 / 容量 / 体积预算</b>这三道闸门（与
+     * {@code addAreaMarker} 逐条同口径），然后落盘。</p>
+     */
+    public MarkerAddResult addAreaMarkerEntry(final int areaIndex, @Nullable final MarkerEntry marker) {
+        if (marker == null || marker.isEmpty()) {
+            return MarkerAddResult.INVALID;
+        }
+        final Area area = areaAtUsableIndex(areaIndex);
+        if (area == null) {
+            return MarkerAddResult.INVALID;
+        }
+        final List<MarkerEntry> entries = marksFor(area);
+        // 与 addAreaMarker 同口径：同一种物品（同 id）只允许一条 —— 否则「拖同一个物品两次」
+        // 会悄悄变成两条重复条目，吸收侧按条目分桶时看起来就像「数量门槛翻倍」。
+        for (final MarkerEntry entry : entries) {
+            if (entry != null && !entry.isEmpty() && !entry.fluid() && !marker.fluid()
+                && marker.id() != null && marker.id().equals(entry.id())) {
+                return MarkerAddResult.DUPLICATE;
+            }
+        }
+        if (entries.size() >= CollectionCacheBlockEntity.MATCH_CAPACITY) {
+            return MarkerAddResult.FULL;
+        }
+        if (cretae.cookiewyq.rs_create_compat.support.MarkerBudget.isEntryTooBig(marker)) {
+            return MarkerAddResult.TOO_COMPLEX;
+        }
+        final List<MarkerEntry> next = new ArrayList<>(entries);
+        next.add(marker);
+        if (AreaMarks.isOverBudget(selectorStack(), area, next)) {
+            return MarkerAddResult.TOO_COMPLEX;
+        }
+        withAreaFilter(areaIndex, list -> list.add(marker));
+        return MarkerAddResult.OK;
+    }
+
     /** 清除某区域的第 {@code markerIndex} 条过滤条目。 */
     public boolean removeAreaMarker(final int areaIndex, final int markerIndex) {
         final Area area = areaAtUsableIndex(areaIndex);

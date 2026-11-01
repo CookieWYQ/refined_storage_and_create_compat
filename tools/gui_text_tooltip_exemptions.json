@@ -1,299 +1,709 @@
 {
   "schema": "rscc-gui-text-tooltip-exemptions/1",
   "round": 126,
-  "note": "第 126 轮一次性盘点的存量未覆盖点（谁、哪一行、为什么暂时不补）。冻结 ≠ 认可：本轮之后新增的未覆盖点不在这张表里就 FAIL（tools/selfcheck_round126_gui_text_tooltip.py）。修好一处就删掉对应 site；残留站点会被脚本报成 stale WARN（不判负），清理是收尾项。规则原文见 docs/ROUND126_GUI_TEXT_TOOLTIP.md §2。",
+  "note": "第 126 轮一次性盘点的存量未覆盖点（谁、哪一行、为什么暂时不补）。冻结 ≠ 认可：本轮之后新增的未覆盖点不在这张表里就 FAIL（tools/selfcheck_round126_gui_text_tooltip.py）。修好一处就删掉对应 site；残留站点会被脚本报成 stale WARN（不判负），清理是收尾项。规则原文见 docs/ROUND126_GUI_TEXT_TOOLTIP.md §2。 第 130 轮：区域条重构后清理 4 条失效冻结、追加 2 条新站点点位（标题带 / 空态提示句）。",
   "groups": [
     {
       "file": "grid/ResourcePickerScreen.java",
       "reason": "存量：订单网格面板的提示行与数量列。该文件属 grid 包、不在本轮写域（本轮只许动 client/screen/**），且面板本身已有行级 tooltip；数量列是纯数字读数。第 127 轮由 grid 线负责补 hover。",
       "sites": [
-        {"fingerprint": "a5c3ad2aada3", "line": 999, "text": "Component.translatable(hintKey, hintArgs)"},
-        {"fingerprint": "cef4f8435823", "line": 1036, "text": "Component.literal(amount)"}
+        {
+          "fingerprint": "a5c3ad2aada3",
+          "line": 999,
+          "text": "Component.translatable(hintKey, hintArgs)"
+        },
+        {
+          "fingerprint": "cef4f8435823",
+          "line": 1036,
+          "text": "Component.literal(amount)"
+        }
       ]
     },
     {
       "file": "screen/AdvancedQuantityKeeperScreen.java",
       "reason": "标题折行 + 两列固定标签。lines 来自固定 lang 文案的 font.split（不是玩家自由文本），line1/line2 是固定的「目标 / 数量」类列名；长度由语言文件控制，防溢出走第 104 轮口径（改 lang 值），不需要 hover 兜底。",
       "sites": [
-        {"fingerprint": "7f326dca4d2e", "line": 439, "text": "lines.get(i)"},
-        {"fingerprint": "5a609a7c09b5", "line": 457, "text": "line1"},
-        {"fingerprint": "c9a45d29a85e", "line": 459, "text": "line2"}
+        {
+          "fingerprint": "7f326dca4d2e",
+          "line": 439,
+          "text": "lines.get(i)"
+        },
+        {
+          "fingerprint": "5a609a7c09b5",
+          "line": 457,
+          "text": "line1"
+        },
+        {
+          "fingerprint": "c9a45d29a85e",
+          "line": 459,
+          "text": "line2"
+        }
       ]
     },
     {
       "file": "screen/AdvancedSchematicLoaderScreen.java",
       "reason": "固定语言键数组 TOGGLE_LABEL_KEYS 的按钮文字（编译期常量键，无运行时参数），长度由语言文件控制；按钮本身有 tooltip。",
       "sites": [
-        {"fingerprint": "8ba151e26f11", "line": 274, "text": "Component.translatable(TOGGLE_LABEL_KEYS[i])"}
+        {
+          "fingerprint": "8ba151e26f11",
+          "line": 274,
+          "text": "Component.translatable(TOGGLE_LABEL_KEYS[i])"
+        }
       ]
     },
     {
       "file": "screen/AreaMarkScreen.java",
       "reason": "标记格里的数量数字 + 底部一句固定提示（hint 由固定键拼出）。数字长度有界；提示句是固定文案，长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "ecd3499ed2eb", "line": 535, "text": "amount"},
-        {"fingerprint": "d0f24ec68465", "line": 601, "text": "Component.literal(hint)"}
+        {
+          "fingerprint": "ecd3499ed2eb",
+          "line": 535,
+          "text": "amount"
+        },
+        {
+          "fingerprint": "d0f24ec68465",
+          "line": 601,
+          "text": "Component.literal(hint)"
+        }
       ]
     },
     {
       "file": "screen/AreaSelectorScreen.java",
       "reason": "世界内全屏区域选择界面（第 125 轮起机器界面改走 AreaStripPanel 侧栏，这里只剩主手世界路径）。轴标签 / 列表头 / 坐标行都是固定格式文本（坐标是数字），区域名那几行由列表行 tooltip 承担。第 127 轮若还要保留该界面再补 hover。",
       "sites": [
-        {"fingerprint": "f77c979087ff", "line": 1048, "text": "axes[row]"},
-        {"fingerprint": "ed27116b89cd", "line": 1082, "text": "Component.literal(head)"},
-        {"fingerprint": "edafce885f90", "line": 1085, "text": "Component.literal(coordinateLine(area))"},
-        {"fingerprint": "4046756401af", "line": 1179, "text": "Component.literal(text)"},
-        {"fingerprint": "bdb1d8a1a289", "line": 1186, "text": "text"},
-        {"fingerprint": "05cfae9c7c09", "line": 1193, "text": "Component.literal(text)"}
+        {
+          "fingerprint": "f77c979087ff",
+          "line": 1048,
+          "text": "axes[row]"
+        },
+        {
+          "fingerprint": "ed27116b89cd",
+          "line": 1082,
+          "text": "Component.literal(head)"
+        },
+        {
+          "fingerprint": "edafce885f90",
+          "line": 1085,
+          "text": "Component.literal(coordinateLine(area))"
+        },
+        {
+          "fingerprint": "4046756401af",
+          "line": 1179,
+          "text": "Component.literal(text)"
+        },
+        {
+          "fingerprint": "bdb1d8a1a289",
+          "line": 1186,
+          "text": "text"
+        },
+        {
+          "fingerprint": "05cfae9c7c09",
+          "line": 1193,
+          "text": "Component.literal(text)"
+        }
       ]
     },
     {
       "file": "screen/AreaStripPanel.java",
-      "reason": "侧栏（第 125 轮新面板）。行名本身**已经**有 hover tooltip：renderTooltip 里给出「#N 名称 + 起止 + 大小 + 筛选数 + 用法」整行信息（第 1065-1073 行），脚本的 key/变量启发式认不出「把行名拼进 tooltip 行」这种写法。其余是确认条 / from-to 标签 / 「+N」溢出 / 侧栏提示，都是固定键文案。真正的缺口是这些行内文本与 tooltip 行不同源，第 127 轮可把行名 Component 直接放进 tooltip 列表（一行改动）。",
+      "reason": "侧栏（第 125 轮新面板 / 第 130 轮重构）。行名本身**已经**有 hover tooltip：renderTooltip 里给出「#N 名称 + 起点 + 尺寸（有过滤再加过滤数）」；搜索框 hint、底部按钮、坐标紧凑串都是固定短文本 / 数字，长度由语言文件与坐标上界决定。第 130 轮删掉整个标记网格后，原来的 6 条冻结站点已失效，已从本表移除。 第 130 轮追加：坐标行「三段式择优」的三种画法（整串 / 左端点 / 右端点）都是纯数字坐标串，完整 from→to 在行 tooltip 里。",
       "sites": [
-        {"fingerprint": "8dd0970c2980", "line": 632, "text": "Component.literal(note)"},
-        {"fingerprint": "aa12d8142718", "line": 669, "text": "Component.translatable(LANG + \"delete.confirm.this\")"},
-        {"fingerprint": "d5d78f80d8d3", "line": 673, "text": "Component.literal(name)"},
-        {"fingerprint": "92150bb70ffd", "line": 706, "text": "Component.literal(coords)"},
-        {"fingerprint": "8b27c3a2c337", "line": 734, "text": "glyph"},
-        {"fingerprint": "6aee29a14674", "line": 739, "text": "Component.translatable(LANG + \"from\")"},
-        {"fingerprint": "518a04e6fa4e", "line": 742, "text": "Component.translatable(LANG + \"to\")"},
-        {"fingerprint": "e4611a52fc93", "line": 746, "text": "Component.translatable(errorKey)"},
-        {"fingerprint": "2d83fd559362", "line": 827, "text": "Component.translatable(LANG + \"mark.remove.confirm\")"},
-        {"fingerprint": "391fd88f40a2", "line": 842, "text": "Component.literal(\"+\" + rest)"},
-        {"fingerprint": "008f3fdccd19", "line": 847, "text": "Component.translatable(LANG + \"mark.hint\")"},
-        {"fingerprint": "3eabb17f4e05", "line": 916, "text": "label"},
-        {"fingerprint": "1ca2d6c54842", "line": 936, "text": "label"}
+        {
+          "fingerprint": "8dd0970c2980",
+          "line": 632,
+          "text": "Component.literal(note)"
+        },
+        {
+          "fingerprint": "d5d78f80d8d3",
+          "line": 673,
+          "text": "Component.literal(name)"
+        },
+        {
+          "fingerprint": "8b27c3a2c337",
+          "line": 734,
+          "text": "glyph"
+        },
+        {
+          "fingerprint": "6aee29a14674",
+          "line": 739,
+          "text": "Component.translatable(LANG + \"from\")"
+        },
+        {
+          "fingerprint": "518a04e6fa4e",
+          "line": 742,
+          "text": "Component.translatable(LANG + \"to\")"
+        },
+        {
+          "fingerprint": "e4611a52fc93",
+          "line": 746,
+          "text": "Component.translatable(errorKey)"
+        },
+        {
+          "fingerprint": "3eabb17f4e05",
+          "line": 916,
+          "text": "label"
+        },
+        {
+          "fingerprint": "1de2c5bd4900",
+          "line": 855,
+          "text": "joined"
+        },
+        {
+          "fingerprint": "67b03ccf6bdd",
+          "line": 857,
+          "text": "low"
+        },
+        {
+          "fingerprint": "41d2851cb906",
+          "line": 858,
+          "text": "high"
+        },
+        {
+          "fingerprint": "3213b7d05d15",
+          "line": 861,
+          "text": "Component.literal(joined)"
+        }
       ]
     },
     {
       "file": "screen/AssemblyPatternRebindScreen.java",
       "reason": "「当前步骤 / 操作提示」两行是固定流程文案（固定语言键按步骤拼出），不是玩家自由文本；长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "5df940064a0d", "line": 217, "text": "line"},
-        {"fingerprint": "b2af8ef6d06d", "line": 238, "text": "line"}
+        {
+          "fingerprint": "5df940064a0d",
+          "line": 217,
+          "text": "line"
+        },
+        {
+          "fingerprint": "b2af8ef6d06d",
+          "line": 238,
+          "text": "line"
+        }
       ]
     },
     {
       "file": "screen/BusCategoryConfigScreen.java",
       "reason": "存量缺口：标签页名 / 列表行文本 / 空列表提示 / 行后缀。行文本与标签名是数据驱动的（分类名、条目名），行上有 tooltip 但文本由变量拼进 tooltip 行，启发式连不上。第 127 轮按「行名进 tooltip」统一处理。",
       "sites": [
-        {"fingerprint": "5f22a0851d4a", "line": 2101, "text": "label"},
-        {"fingerprint": "f054d4eb226a", "line": 2165, "text": "Component.literal(tabDisplayName(tabKey))"},
-        {"fingerprint": "17a6f4d499ab", "line": 2192, "text": "Component.literal(tabDisplayName(tabKey))"},
-        {"fingerprint": "6519a81e2d08", "line": 2249, "text": "emptyListText()"},
-        {"fingerprint": "4102adb04a03", "line": 2296, "text": "Component.literal(line.text())"},
-        {"fingerprint": "2780811f814c", "line": 2311, "text": "Component.literal(line.text())"},
-        {"fingerprint": "2780811f814c", "line": 2326, "text": "Component.literal(line.text())"},
-        {"fingerprint": "ecbef462299f", "line": 2405, "text": "Component.literal(rowText)"},
-        {"fingerprint": "32a697c2ce9e", "line": 2575, "text": "suffix"},
-        {"fingerprint": "59fc6ab55fbb", "line": 2671, "text": "head"},
-        {"fingerprint": "d4c412b26049", "line": 2673, "text": "tail"}
+        {
+          "fingerprint": "5f22a0851d4a",
+          "line": 2101,
+          "text": "label"
+        },
+        {
+          "fingerprint": "f054d4eb226a",
+          "line": 2165,
+          "text": "Component.literal(tabDisplayName(tabKey))"
+        },
+        {
+          "fingerprint": "17a6f4d499ab",
+          "line": 2192,
+          "text": "Component.literal(tabDisplayName(tabKey))"
+        },
+        {
+          "fingerprint": "6519a81e2d08",
+          "line": 2249,
+          "text": "emptyListText()"
+        },
+        {
+          "fingerprint": "4102adb04a03",
+          "line": 2296,
+          "text": "Component.literal(line.text())"
+        },
+        {
+          "fingerprint": "2780811f814c",
+          "line": 2311,
+          "text": "Component.literal(line.text())"
+        },
+        {
+          "fingerprint": "2780811f814c",
+          "line": 2326,
+          "text": "Component.literal(line.text())"
+        },
+        {
+          "fingerprint": "ecbef462299f",
+          "line": 2405,
+          "text": "Component.literal(rowText)"
+        },
+        {
+          "fingerprint": "32a697c2ce9e",
+          "line": 2575,
+          "text": "suffix"
+        },
+        {
+          "fingerprint": "59fc6ab55fbb",
+          "line": 2671,
+          "text": "head"
+        },
+        {
+          "fingerprint": "d4c412b26049",
+          "line": 2673,
+          "text": "tail"
+        }
       ]
     },
     {
       "file": "screen/ChamberBindingConfigScreen.java",
       "reason": "状态行 chainStatusLine() 已有对应的 chainStatusTooltip()（同文件），但两者方法名/变量不同，脚本启发式连不上 —— 实际是有 hover 兜底的。第 127 轮可让 tooltip 直接复用 chainStatusLine() 消除启发式盲区。",
       "sites": [
-        {"fingerprint": "6682fed0d164", "line": 433, "text": "chainStatusLine()"}
+        {
+          "fingerprint": "6682fed0d164",
+          "line": 433,
+          "text": "chainStatusLine()"
+        }
       ]
     },
     {
       "file": "screen/ChamberFaceConfigScreen.java",
       "reason": "面朝方向名 / 状态模式名 / 图例行：全部是固定枚举名（固定语言键按 Direction / Mode 拼出），不随玩家数据变长；该界面头注释已写明「tooltip 全部手动渲染」。格子里的面名与模式短名已按 §2.3 加 `rscc:no-tooltip 固定短标签` 注释，这里剩的是逐条折行的图例行（font.split 全量画出）。",
       "sites": [
-        {"fingerprint": "5f52715db002", "line": 260, "text": "ignored"},
-        {"fingerprint": "be96f3c1d9f4", "line": 275, "text": "line"}
+        {
+          "fingerprint": "5f52715db002",
+          "line": 260,
+          "text": "ignored"
+        },
+        {
+          "fingerprint": "be96f3c1d9f4",
+          "line": 275,
+          "text": "line"
+        }
       ]
     },
     {
       "file": "screen/ChamberUnitsSummaryScreen.java",
       "reason": "drawSmallText 是「整段按缩放画」的公共小字（多用于固定标签）；另一处是按钮 getMessage()。按钮标签长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "08c644cd1b5c", "line": 334, "text": "text"},
-        {"fingerprint": "278459907595", "line": 505, "text": "getMessage()"}
+        {
+          "fingerprint": "08c644cd1b5c",
+          "line": 334,
+          "text": "text"
+        },
+        {
+          "fingerprint": "278459907595",
+          "line": 505,
+          "text": "getMessage()"
+        }
       ]
     },
     {
       "file": "screen/ChargerFilterScreen.java",
       "reason": "空列表提示（固定键）、行后缀（固定键 + 数字）与分组行名。分组行 tooltip 已含组名统计，启发式认不出拼接写法；第 127 轮随侧栏一起统一。",
       "sites": [
-        {"fingerprint": "8d23248be42d", "line": 1444, "text": "emptyListText()"},
-        {"fingerprint": "c8e99b155afd", "line": 1501, "text": "suffix"},
-        {"fingerprint": "575ad7e2ee9b", "line": 1542, "text": "Component.literal(group.label())"}
+        {
+          "fingerprint": "8d23248be42d",
+          "line": 1444,
+          "text": "emptyListText()"
+        },
+        {
+          "fingerprint": "c8e99b155afd",
+          "line": 1501,
+          "text": "suffix"
+        },
+        {
+          "fingerprint": "575ad7e2ee9b",
+          "line": 1542,
+          "text": "Component.literal(group.label())"
+        }
       ]
     },
     {
       "file": "screen/CollectionCacheScreen.java",
-      "reason": "吸收名（固定键按类型拼出）与列表行文本；该界面行级 tooltip 在全屏界面（Advanced…）里已经做了，基础界面属第 125 轮后遗留。",
+      "reason": "吸收名（固定键按类型拼出）与列表行文本；该界面行级 tooltip 在全屏界面（Advanced…）里已经做了，基础界面属第 125 轮后遗留。 / 第 130 轮追加：匹配区标题带（基础版「匹配区 / Markers」，高级版覆写成「区域 3 · 铁场」）。这是固定 lang 短标题、无运行时自由文本；长度由语言文件与区域名（玩家自由文本）决定，而区域名在侧栏行里有 hover tooltip。",
       "sites": [
-        {"fingerprint": "9b4aec6607f0", "line": 1129, "text": "Component.translatable(absorbNameKey(types[i]))"},
-        {"fingerprint": "43c16607f486", "line": 1169, "text": "line"}
+        {
+          "fingerprint": "9b4aec6607f0",
+          "line": 1129,
+          "text": "Component.translatable(absorbNameKey(types[i]))"
+        },
+        {
+          "fingerprint": "43c16607f486",
+          "line": 1169,
+          "text": "line"
+        },
+        {
+          "fingerprint": "3ea01fe00280",
+          "line": 1112,
+          "text": "matchRegionLabel()"
+        }
       ]
     },
     {
       "file": "screen/CollectionDeleteModeConfirmScreen.java",
       "reason": "两句**固定**警示文案（confirm.warning / confirm.rule）。trim() 只是去掉首尾空白（不是截断），整句完整绘制；长度由语言文件控制，放不下按第 104 轮口径改 lang 值。",
       "sites": [
-        {"fingerprint": "da9fd043fba7", "line": 72, "text": "trim(Component.translatable(LANG + \"confirm.warning\").getString())"},
-        {"fingerprint": "18db1c74797f", "line": 74, "text": "trim(Component.translatable(LANG + \"confirm.rule\").getString())"}
+        {
+          "fingerprint": "da9fd043fba7",
+          "line": 72,
+          "text": "trim(Component.translatable(LANG + \"confirm.warning\").getString())"
+        },
+        {
+          "fingerprint": "18db1c74797f",
+          "line": 74,
+          "text": "trim(Component.translatable(LANG + \"confirm.rule\").getString())"
+        }
       ]
     },
     {
       "file": "screen/CollectionInputFaceConfigScreen.java",
       "reason": "面朝方向名 / 状态名 / 图例行：固定枚举名（与 ChamberFaceConfigScreen 同一套文案），不随玩家数据变长。",
       "sites": [
-        {"fingerprint": "0e8c60687132", "line": 164, "text": "dirName"},
-        {"fingerprint": "dd7e4e046f1c", "line": 168, "text": "stateName"},
-        {"fingerprint": "c8430382c3bc", "line": 183, "text": "line"}
+        {
+          "fingerprint": "0e8c60687132",
+          "line": 164,
+          "text": "dirName"
+        },
+        {
+          "fingerprint": "dd7e4e046f1c",
+          "line": 168,
+          "text": "stateName"
+        },
+        {
+          "fingerprint": "c8430382c3bc",
+          "line": 183,
+          "text": "line"
+        }
       ]
     },
     {
       "file": "screen/CollectionMarkerConfigScreen.java",
       "reason": "流体 / 标签模式的固定分支文案（三元里两个固定语言键）、标签类目名、标记格文字（固定键 + 数字）。这些行都是固定 key，长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "0e73caac871d", "line": 548, "text": "Component.translatable(fluid ? ... : ...)"},
-        {"fingerprint": "80e1502d56e3", "line": 569, "text": "Component.translatable(tagMode ? ... : ...)"},
-        {"fingerprint": "e886008fa5c5", "line": 583, "text": "label"},
-        {"fingerprint": "c9f24fdd559b", "line": 597, "text": "Component.translatable(matchedPreview ? ... : ...)"},
-        {"fingerprint": "f5153130dc65", "line": 646, "text": "Component.literal(mark + tag)"}
+        {
+          "fingerprint": "0e73caac871d",
+          "line": 548,
+          "text": "Component.translatable(fluid ? ... : ...)"
+        },
+        {
+          "fingerprint": "80e1502d56e3",
+          "line": 569,
+          "text": "Component.translatable(tagMode ? ... : ...)"
+        },
+        {
+          "fingerprint": "e886008fa5c5",
+          "line": 583,
+          "text": "label"
+        },
+        {
+          "fingerprint": "c9f24fdd559b",
+          "line": 597,
+          "text": "Component.translatable(matchedPreview ? ... : ...)"
+        },
+        {
+          "fingerprint": "f5153130dc65",
+          "line": 646,
+          "text": "Component.literal(mark + tag)"
+        }
       ]
     },
     {
       "file": "screen/CollectionRangeConfigScreen.java",
       "reason": "轴名（A/B/C 之类的固定字母）与「∞」符号行，都是单字符/固定符号，宽度恒定。",
       "sites": [
-        {"fingerprint": "e1bdc401016a", "line": 224, "text": "Component.literal(axes[axis])"},
-        {"fingerprint": "6ce8fd1b1fb0", "line": 226, "text": "Component.literal(infinite ? \"∞\" : ...)"}
+        {
+          "fingerprint": "e1bdc401016a",
+          "line": 224,
+          "text": "Component.literal(axes[axis])"
+        },
+        {
+          "fingerprint": "6ce8fd1b1fb0",
+          "line": 226,
+          "text": "Component.literal(infinite ? \"∞\" : ...)"
+        }
       ]
     },
     {
       "file": "screen/EnergyAuditScreen.java",
       "reason": "空列表提示文字（固定键）与节点位置行 where（维度 + 坐标，数字为主）。展开箭头已按 §2.3 加 `rscc:no-tooltip 纯装饰` 注释；该界面的提示行 / 跨维度提示 / 列表行早已有 hover 兜底。",
       "sites": [
-        {"fingerprint": "66b5cf445f4d", "line": 501, "text": "text"},
-        {"fingerprint": "f914fd34448e", "line": 565, "text": "Component.literal(where)"}
+        {
+          "fingerprint": "66b5cf445f4d",
+          "line": 501,
+          "text": "text"
+        },
+        {
+          "fingerprint": "f914fd34448e",
+          "line": 565,
+          "text": "Component.literal(where)"
+        }
       ]
     },
     {
       "file": "screen/FEEnergyCubeScreen.java",
       "reason": "存量缺口：FE 能量立方只有一行读数（能量 / 容量），是纯数字读数、长度有界；第 127 轮补一行 hover 即可。",
       "sites": [
-        {"fingerprint": "4b19015c2398", "line": 406, "text": "text"}
+        {
+          "fingerprint": "4b19015c2398",
+          "line": 406,
+          "text": "text"
+        }
       ]
     },
     {
       "file": "screen/InventoryProxyScreen.java",
       "reason": "状态行是多行 `font.split` 的结果，全部行都完整画出（不缩字号、不截断），只是行高固定；状态句由固定键 + 数量拼出。",
       "sites": [
-        {"fingerprint": "7d6967118b8f", "line": 180, "text": "lines.get(line)"}
+        {
+          "fingerprint": "7d6967118b8f",
+          "line": 180,
+          "text": "lines.get(line)"
+        }
       ]
     },
     {
       "file": "screen/NetworkResourceReceiverScreen.java",
       "reason": "第 126 轮已给「名称提示 / 状态 / 缓存摘要 / 流体摘要」四行补了 hover 兜底（见该文件的 renderReadoutLineTooltips）。剩下的三处：页码 N/M（数字）、资源行名三元表达式、行内数量 —— 其中行名与数量已由 renderEntryTooltip 的行 tooltip 覆盖（含完整名称 + 数量），脚本的启发式认不出三元/数字写法。",
       "sites": [
-        {"fingerprint": "e7ed67caf176", "line": 436, "text": "(page + 1) + \"/\" + pageCount"},
-        {"fingerprint": "a5e0fd244671", "line": 487, "text": "name == null ? Component.empty() : name"},
-        {"fingerprint": "37c17fbfefad", "line": 491, "text": "amount"}
+        {
+          "fingerprint": "e7ed67caf176",
+          "line": 436,
+          "text": "(page + 1) + \"/\" + pageCount"
+        },
+        {
+          "fingerprint": "a5e0fd244671",
+          "line": 487,
+          "text": "name == null ? Component.empty() : name"
+        },
+        {
+          "fingerprint": "37c17fbfefad",
+          "line": 491,
+          "text": "amount"
+        }
       ]
     },
     {
       "file": "screen/QuantityKeeperScreen.java",
       "reason": "「目标：物品名」行。物品名是自由文本、该行也走 drawFitLine，属于真实缺口；但该界面有全屏大界面版本（AdvancedQuantityKeeperScreen，已修），基础版留待第 127 轮。",
       "sites": [
-        {"fingerprint": "cc387104793b", "line": 233, "text": "targetLabel"}
+        {
+          "fingerprint": "cc387104793b",
+          "line": 233,
+          "text": "targetLabel"
+        }
       ]
     },
     {
       "file": "screen/RangeChargerScreen.java",
       "reason": "范围充电器的图例 / 单位标签 / 跳过计数：图例与单位是固定键，跳过计数是数字；图例行的完整说明在既有 tooltip 里。",
       "sites": [
-        {"fingerprint": "c8eb77c07ba7", "line": 408, "text": "Component.translatable(\"gui.rs_create_compat.range_charger.u...\")"},
-        {"fingerprint": "aa815d59d65b", "line": 430, "text": "Component.literal(text)"},
-        {"fingerprint": "192110e70c4a", "line": 473, "text": "Component.literal(skipped)"},
-        {"fingerprint": "2e1c926ed192", "line": 501, "text": "Component.literal(label)"},
-        {"fingerprint": "9bb77d970eb3", "line": 606, "text": "Component.literal(text)"}
+        {
+          "fingerprint": "c8eb77c07ba7",
+          "line": 408,
+          "text": "Component.translatable(\"gui.rs_create_compat.range_charger.u...\")"
+        },
+        {
+          "fingerprint": "aa815d59d65b",
+          "line": 430,
+          "text": "Component.literal(text)"
+        },
+        {
+          "fingerprint": "192110e70c4a",
+          "line": 473,
+          "text": "Component.literal(skipped)"
+        },
+        {
+          "fingerprint": "2e1c926ed192",
+          "line": 501,
+          "text": "Component.literal(label)"
+        },
+        {
+          "fingerprint": "9bb77d970eb3",
+          "line": 606,
+          "text": "Component.literal(text)"
+        }
       ]
     },
     {
       "file": "screen/SchematicLoaderScreen.java",
       "reason": "固定语言键数组 BTN_LABEL_KEYS 的按钮文字（编译期常量键），长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "965fbda6e534", "line": 191, "text": "Component.translatable(BTN_LABEL_KEYS[i])"}
+        {
+          "fingerprint": "965fbda6e534",
+          "line": 191,
+          "text": "Component.translatable(BTN_LABEL_KEYS[i])"
+        }
       ]
     },
     {
       "file": "screen/SequenceExecutionChamberScreen.java",
       "reason": "按钮标签（NoShadowButton 自绘 getMessage()）：按钮文案由固定语言键给出，界面里针对按钮的 tooltip 由按钮自己的悬停逻辑负责。",
       "sites": [
-        {"fingerprint": "d942c4d15a61", "line": 298, "text": "getMessage()"}
+        {
+          "fingerprint": "d942c4d15a61",
+          "line": 298,
+          "text": "getMessage()"
+        }
       ]
     },
     {
       "file": "screen/SequencePatternTerminalScreen.java",
       "reason": "存量缺口：按钮标签、操作 / 机器名行、计数文本、跳过开关文字、标题提示。前两类是固定键或注册名（长度有界），后两类是数字；该界面行级 tooltip 已做了一部分，但脚本的启发式连不上「同一个 Component 拆成变量再拼」的写法。",
       "sites": [
-        {"fingerprint": "06d1af0ef214", "line": 440, "text": "getMessage()"},
-        {"fingerprint": "66566576136e", "line": 1398, "text": "shown"},
-        {"fingerprint": "58d04d363fca", "line": 1568, "text": "hint"},
-        {"fingerprint": "02d289f3a534", "line": 1641, "text": "Component.literal(op)"},
-        {"fingerprint": "56976b431ebb", "line": 1643, "text": "countText"},
-        {"fingerprint": "fe42a7b78896", "line": 1672, "text": "Component.literal(machine)"},
-        {"fingerprint": "91b4e9c59f65", "line": 1701, "text": "text"}
+        {
+          "fingerprint": "06d1af0ef214",
+          "line": 440,
+          "text": "getMessage()"
+        },
+        {
+          "fingerprint": "66566576136e",
+          "line": 1398,
+          "text": "shown"
+        },
+        {
+          "fingerprint": "58d04d363fca",
+          "line": 1568,
+          "text": "hint"
+        },
+        {
+          "fingerprint": "02d289f3a534",
+          "line": 1641,
+          "text": "Component.literal(op)"
+        },
+        {
+          "fingerprint": "56976b431ebb",
+          "line": 1643,
+          "text": "countText"
+        },
+        {
+          "fingerprint": "fe42a7b78896",
+          "line": 1672,
+          "text": "Component.literal(machine)"
+        },
+        {
+          "fingerprint": "91b4e9c59f65",
+          "line": 1701,
+          "text": "text"
+        }
       ]
     },
     {
       "file": "screen/UnitPatternConfigScreen.java",
       "reason": "标题三元（编辑态换一个固定键）与输入提示行（固定键）：都是固定文案。",
       "sites": [
-        {"fingerprint": "9c8234bb8a01", "line": 255, "text": "editing == null ? title : Component.translatable(...)"},
-        {"fingerprint": "17fcfd4a370b", "line": 280, "text": "hint"}
+        {
+          "fingerprint": "9c8234bb8a01",
+          "line": 255,
+          "text": "editing == null ? title : Component.translatable(...)"
+        },
+        {
+          "fingerprint": "17fcfd4a370b",
+          "line": 280,
+          "text": "hint"
+        }
       ]
     },
     {
       "file": "screen/UnitPatternManagerScreen.java",
       "reason": "分区带标题（固定键）与底部提示句（固定键）；都是固定文案，长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "af917838bd4d", "line": 281, "text": "bandTitle(section)"},
-        {"fingerprint": "1cfdd11baa07", "line": 337, "text": "text"}
+        {
+          "fingerprint": "af917838bd4d",
+          "line": 281,
+          "text": "bandTitle(section)"
+        },
+        {
+          "fingerprint": "1cfdd11baa07",
+          "line": 337,
+          "text": "text"
+        }
       ]
     },
     {
       "file": "widget/ExporterExecutorRowWidget.java",
       "reason": "行控件的按钮标签 / 提示横幅 / 页码：该 widget 自己有 rscc$renderTooltip（8 处行级 tooltip），但按钮文字是「按钮自己画」的固定键文案，页面数字是计数。",
       "sites": [
-        {"fingerprint": "a14868b7d979", "line": 1021, "text": "text"},
-        {"fingerprint": "114bfc7cb2b8", "line": 1027, "text": "text"},
-        {"fingerprint": "bfc8b6f00c2d", "line": 1081, "text": "label"},
-        {"fingerprint": "05dc135bee96", "line": 1172, "text": "banner"},
-        {"fingerprint": "95c08502fcb5", "line": 1183, "text": "label"}
+        {
+          "fingerprint": "a14868b7d979",
+          "line": 1021,
+          "text": "text"
+        },
+        {
+          "fingerprint": "114bfc7cb2b8",
+          "line": 1027,
+          "text": "text"
+        },
+        {
+          "fingerprint": "bfc8b6f00c2d",
+          "line": 1081,
+          "text": "label"
+        },
+        {
+          "fingerprint": "05dc135bee96",
+          "line": 1172,
+          "text": "banner"
+        },
+        {
+          "fingerprint": "95c08502fcb5",
+          "line": 1183,
+          "text": "label"
+        }
       ]
     },
     {
       "file": "widget/RsccStationBadge.java",
       "reason": "「面朝 / 站点」两行短标签（固定键 + 枚举名），字段本身是宽度固定的徽章；徽章不是界面，不在本轮「GUI 界面」口径内。",
       "sites": [
-        {"fingerprint": "34ffa132c6e6", "line": 86, "text": "facingLine"},
-        {"fingerprint": "02e8996f0850", "line": 90, "text": "stationLine"},
-        {"fingerprint": "78d12528bfec", "line": 102, "text": "line"},
-        {"fingerprint": "7c122d33ada3", "line": 122, "text": "facingLine"},
-        {"fingerprint": "f6bf3734cc01", "line": 126, "text": "stationLine"}
+        {
+          "fingerprint": "34ffa132c6e6",
+          "line": 86,
+          "text": "facingLine"
+        },
+        {
+          "fingerprint": "02e8996f0850",
+          "line": 90,
+          "text": "stationLine"
+        },
+        {
+          "fingerprint": "78d12528bfec",
+          "line": 102,
+          "text": "line"
+        },
+        {
+          "fingerprint": "7c122d33ada3",
+          "line": 122,
+          "text": "facingLine"
+        },
+        {
+          "fingerprint": "f6bf3734cc01",
+          "line": 126,
+          "text": "stationLine"
+        }
       ]
     },
     {
       "file": "widget/ScrollSelectWidget.java",
       "reason": "下拉窗口的空提示（固定键）与当前选项文本（选项来自固定候选表）；窗口本身有 renderTooltip 显示完整当前项。",
       "sites": [
-        {"fingerprint": "05ced9177ed4", "line": 216, "text": "empty"},
-        {"fingerprint": "da1b1bceec08", "line": 268, "text": "component"}
+        {
+          "fingerprint": "05ced9177ed4",
+          "line": 216,
+          "text": "empty"
+        },
+        {
+          "fingerprint": "da1b1bceec08",
+          "line": 268,
+          "text": "component"
+        }
       ]
     },
     {
       "file": "widget/SptTabButton.java",
       "reason": "标签页按钮标签（自绘 getMessage()，固定语言键）。按钮文案长度由语言文件控制。",
       "sites": [
-        {"fingerprint": "2cbd49a6a6cb", "line": 44, "text": "getMessage()"}
+        {
+          "fingerprint": "2cbd49a6a6cb",
+          "line": 44,
+          "text": "getMessage()"
+        }
+      ]
+    },
+    {
+      "file": "screen/AdvancedCollectionCacheScreen.java",
+      "reason": "「先选一个区域」空态提示句（固定 lang 文案，且在匹配区面板正中被半透明底衬托，本身就是提示）。它不承载数据、长度由语言文件控制。",
+      "sites": [
+        {
+          "fingerprint": "23eecca1a0f4",
+          "line": 574,
+          "text": "hint"
+        }
       ]
     }
   ]

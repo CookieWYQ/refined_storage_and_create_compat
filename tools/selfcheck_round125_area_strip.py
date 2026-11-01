@@ -29,14 +29,9 @@
    改名**打字时捕获 rawIndex** 且提交后复位、✕ 二次确认 3 秒、`AreaOutline.chase` 每帧重喂 +
    slot `strip/focus`、关界面清框、行高亮 `0xFF9F1C`/`0x30FF9F1C`/`▶`、「显示全部」5 秒、滚动、
    6 个数字框、数据源只读 `AdvancedAreaSnapshotPacket#lastFor`（不读方块实体 / 不判断可用性）。
-§4.5 标记编辑就地做：`isMarkGridOpen()` / `closeMarkGrid()` / `acceptGhostIngredient(ItemStack)`
-   三个 API + `removed()` 调 `closeMarkGrid()`；标记网格 3 列 × 4 行 / 格子 18 / 上限 12 / `+N` 溢出 /
-   主手添加 / 右键 `ACTION_REMOVE` / 「清空」`ACTION_CLEAR` / 不用匹配区 `globalIndex`；
-   JEI `MarkerGhostHandler` 的 `isMarkGridOpen` 分支走唯一接缝、**不发** `AreaMarkEditPacket` /
-   `SetCollectionMarkerConfigPacket`；新包 `AreaMarkAddItemPacket` record **6 分量逐字**；
-   旧包 `AreaMarkEditPacket` 仍 5 参不扩字段；机器路径（`AdvancedCollectionCacheScreen` +
-   `AreaStripPanel`）`new AreaMarkScreen` 0 次且 `AreaMarkScreen.java` 保留；
-   `RS_Create_Compat` 里有新包注册行（Lead 补）。
+§4.5 标记编辑就地做（**第 130 轮已整页删除**；本节只保留「退役范围」三条：
+   `AreaMarkScreen.java` 文件保留、机器路径 0 次 `new AreaMarkScreen`、`AreaMarkEditPacket`
+   线格式仍 5 参。网格 / 接缝 / 新包的判据移交 tools/selfcheck_round130_area_strip_rework.py）：
 反例（≥15，实际 38）：把上面每一条改坏都必须**判负**（常量改数字、volatile 删掉、clear 空实现、
    JEI 回 null、机器路径复活 `new AreaSelectorScreen` / `new AreaMarkScreen`、转发少一条、
    keyPressed 不判 isEditing、`(186,219)` 按钮复活、removed 不清框、方法体空实现、Rect2i 用 GUI
@@ -79,8 +74,6 @@ FILES = (
     ("area", os.path.join(JAVA, "client", "screen", "AreaSelectorScreen.java")),
     #: §4.5：`AreaMarkScreen` **文件必须保留**（主手世界路径仍用它），只是机器路径不再打开它。
     ("mark", os.path.join(JAVA, "client", "screen", "AreaMarkScreen.java")),
-    #: §4.5-2 第 125 轮新包（JEI 拖入侧栏标记格走它，刻意不扩旧包线格式）。
-    ("addpkt", os.path.join(JAVA, "network", "AreaMarkAddItemPacket.java")),
     #: §4.5 旧包：线格式必须仍是 5 参（反例：被扩字段）。
     ("maredit", os.path.join(JAVA, "network", "AreaMarkEditPacket.java")),
     #: §4.5-5 新包的 payload 注册行由 Lead 补进这里（area-strip 不改该文件）。
@@ -89,9 +82,12 @@ FILES = (
 
 #: §2 的字面量契约（键 = 常量名，值 = 字面量）。**不许改这些数字**（改就是改契约）。
 GEOMETRY = (
-    ("W", 128),
-    ("MIN_W", 96),
-    ("HARD_MIN_W", 72),
+    # 第 130 轮：128 → 176（用户「有一些字很小」；128 宽必然把坐标行缩到 0.6 倍），
+    # MIN_W / HARD_MIN_W 同比上调。新契约见 docs/ROUND130_AREA_STRIP_REWORK.md §2 与
+    # tools/selfcheck_round130_area_strip_rework.py。
+    ("W", 176),
+    ("MIN_W", 140),
+    ("HARD_MIN_W", 108),
     ("GAP", 6),
     ("SCREEN_MARGIN", 4),
     ("ROW_H", 22),
@@ -683,133 +679,40 @@ def record_components(source, record_name):
 
 
 def _mark_grid_checks(src, checks):
-    panel, adv, jei = src["panel"], src["adv"], src["jei"]
+    """§4.5：第 130 轮起「侧栏标记网格」整页删除，区域过滤只在匹配区 48 格里编辑。
 
-    add(checks, "4.5", "侧栏有 `public boolean isMarkGridOpen()`（标记网格是否展开）",
-        has(panel, r"public\s+boolean\s+isMarkGridOpen\s*\(\s*\)"),
-        "public boolean isMarkGridOpen()", "签名不存在")
-    add(checks, "4.5", "侧栏有 `public void closeMarkGrid()`（关界面 / 退出标记模式时收起）",
-        has(panel, r"public\s+void\s+closeMarkGrid\s*\(\s*\)"),
-        "public void closeMarkGrid()", "签名不存在")
-    add(checks, "4.5", "侧栏有唯一 ghost 接缝 `public void acceptGhostIngredient(ItemStack stack)`",
-        has(panel, r"public\s+void\s+acceptGhostIngredient\s*\(\s*(?:final\s+)?ItemStack\s+\w+\s*\)"),
-        "public void acceptGhostIngredient(ItemStack stack)", "签名不存在")
-    ghost_body = method_body(panel, r"public\s+void\s+acceptGhostIngredient\s*\(") or ""
-    add(checks, "4.5", "`acceptGhostIngredient` 里发**新包** `new AreaMarkAddItemPacket(...)`",
-        "new AreaMarkAddItemPacket(" in ghost_body,
-        "接缝方法体里 `new AreaMarkAddItemPacket(`", "没找到（会退回旧包 = JEI 幽灵栈静默丢包）")
-    add(checks, "4.5", "`acceptGhostIngredient` 走 `PacketDistributor.sendToServer(...)`",
-        "PacketDistributor.sendToServer(" in ghost_body,
-        "接缝方法体里 `PacketDistributor.sendToServer(`", "没找到")
+    第 130 轮契约（docs/ROUND130_AREA_STRIP_REWORK.md §3 / §4.3）把这一节的判据**移交**给
+    tools/selfcheck_round130_area_strip_rework.py（那边逐条断言 isMarkGridOpen / markGridCellAreas /
+    acceptGhost* / AreaMarkAddItemPacket / `area_strip.mark.*` 全部为 0，且 48 格通道必须仍在）。
+    这里只保留**仍然成立**的「退役范围」判据（契约 §5：不许一刀切删能力 / 不许顺手改线格式）。
+    """
+    mark, maredit, adv, panel = src.get("mark", ""), src["maredit"], src["adv"], src["panel"]
 
-    removed = method_body(adv, r"protected\s+void\s+removed\s*\(") or method_body(
-        adv, r"public\s+void\s+removed\s*\(") or ""
-    add(checks, "4.5", "`AdvancedCollectionCacheScreen#removed()` 调 `closeMarkGrid()`（关界面时真的收起）",
-        "closeMarkGrid()" in removed, "removed() 里有 closeMarkGrid()",
-        "removed body 里 %d 处" % removed.count("closeMarkGrid()"))
+    add(checks, "4.5", "`AreaMarkScreen.java` **文件保留**（主手世界路径仍用它；§5 不许一刀切删能力）",
+        bool(mark.strip()), "文件存在且非空", "文件被删了（§5 明令保留）")
+    add(checks, "4.5", "机器界面 `AdvancedCollectionCacheScreen` 里 `new AreaMarkScreen` **0 次**",
+        count(adv, "new AreaMarkScreen") == 0, "0 次",
+        "出现 %d 次" % count(adv, "new AreaMarkScreen"))
+    add(checks, "4.5", "侧栏 `AreaStripPanel` 里 `new AreaMarkScreen` **0 次**（标记在匹配区里配）",
+        count(panel, "new AreaMarkScreen") == 0, "0 次",
+        "出现 %d 次" % count(panel, "new AreaMarkScreen"))
 
-    cols = re.search(r"(?:MARK|FILTER|GRID)\w*(?:COLS?|COLUMNS)\s*=\s*(\d+)", panel)
-    rows = re.search(r"(?:MARK|FILTER|GRID)\w*ROWS?\s*=\s*(\d+)", panel)
-    add(checks, "4.5", "标记网格 3 列（常量名含 MARK/FILTER/GRID + COLS）",
-        cols is not None and cols.group(1) == "3", "标记列数常量 = 3",
-        "实际 = %s" % (cols.group(1) if cols else None))
-    add(checks, "4.5", "标记网格 4 行（常量名含 MARK/FILTER/GRID + ROWS）",
-        rows is not None and rows.group(1) == "4", "标记行数常量 = 4",
-        "实际 = %s" % (rows.group(1) if rows else None))
-
-    cell = re.search(r"(?:MARK|FILTER|GRID)\w*(?:CELL|SLOT|SIZE|PIXEL|PX)\s*=\s*(\d+)", panel)
-    add(checks, "4.5", "标记格子 18×18（常量名含 MARK/FILTER/GRID + CELL/SLOT/SIZE = 18）",
-        cell is not None and cell.group(1) == "18", "标记格子边长常量 = 18",
-        "实际 = %s" % (cell.group(1) if cell else None))
-
-    cap = re.search(r"(?:MARK|FILTER|GRID)\w*(?:MAX|CAP|CAPACITY|LIMIT|PAGE_SIZE)\s*=\s*(\d+)", panel)
-    product = re.search(r"(?:MARK|FILTER|GRID)\w*(?:COLS?|COLUMNS)\s*\*\s*(?:MARK|FILTER|GRID)\w*ROWS?",
-                        panel)
-    add(checks, "4.5", "上限 12（3 列 × 4 行；要么常量 = 12，要么用 cols × rows 推导）",
-        (cap is not None and cap.group(1) == "12") or (cap is None and product is not None),
-        "标记上限常量 = 12，或（没有常量时）cols × rows 表达式",
-        "常量=%s 乘积=%s" % (cap.group(1) if cap else None, product is not None))
-
-    add(checks, "4.5", "超出上限显示 `+N` 溢出标记（面板里有 \"+\" 字面量拼接）",
-        has(panel, r'"\+"') or has(panel, r'"\+"\s*\+'), "`\"+\"` 字面量（+N）", "没找到")
-
-    add(checks, "4.5", "空格子：主手有物品 ⇒ 添加（读 `getMainHandItem()`）",
-        "getMainHandItem" in panel, "`getMainHandItem()`", "没找到")
-    add(checks, "4.5", "右键格子删除走 `AreaMarkEditPacket.ACTION_REMOVE`（标记下标，不是匹配区下标）",
-        re.search(r"AreaMarkEditPacket\.ACTION_REMOVE\b", panel) is not None,
-        "`AreaMarkEditPacket.ACTION_REMOVE`", "没找到")
-    add(checks, "4.5", "「清空」走 `AreaMarkEditPacket.ACTION_CLEAR`（二次确认）",
-        re.search(r"AreaMarkEditPacket\.ACTION_CLEAR\b", panel) is not None,
-        "`AreaMarkEditPacket.ACTION_CLEAR`", "没找到")
-
-    add(checks, "4.5", "标记网格**不用**匹配区的 `globalIndex`（下标是 MarkerEntry 下标）",
-        "globalIndex" not in panel, "panel 里没有 globalIndex", "出现了 globalIndex")
-
-    # ---- §4.5-2 JEI 拖入：侧栏分支 → 唯一接缝 acceptGhostIngredient → 新包 ----
-    branch = enclosing_block(jei, "isMarkGridOpen()")
-    add(checks, "4.5", "JEI `MarkerGhostHandler#getTargetsTyped` 保留（匹配区通道没被删）",
-        "getTargetsTyped" in jei, "`getTargetsTyped`", "没找到")
-    add(checks, "4.5", "JEI 侧栏分支判据 `isMarkGridOpen()` 存在，且分支块能配平取出",
-        bool(branch), "包含 isMarkGridOpen() 的 if 分支块",
-        "没找到分支块（判据缺失或括号不配平）")
-    add(checks, "4.5", "侧栏分支只对 `AdvancedCollectionCacheScreen` 生效（instanceof / 类型判据）",
-        "AdvancedCollectionCacheScreen" in jei, "`AdvancedCollectionCacheScreen` 出现在 JEI 分支",
-        "没找到")
-    add(checks, "4.5", "侧栏分支的目标格 `getArea()` 用屏幕坐标（`leftPos` / `getGuiLeft` 参与）",
-        has(jei, r"getGuiLeft\(\)|leftPos"), "侧栏格子命中区 = 屏幕坐标", "没找到屏幕坐标换算")
-    add(checks, "4.5", "侧栏分支的 `accept()` 走**唯一接缝** `acceptGhostIngredient(...)`",
-        "acceptGhostIngredient(" in branch, "分支里调用 `acceptGhostIngredient(`",
-        "分支里没找到（JEI 回调绕过接缝自己发包 = 两份逻辑）")
-    add(checks, "4.5", "侧栏分支**不得**发 `AreaMarkEditPacket`（第 5 参是背包格下标，JEI 幽灵栈永远丢包）",
-        "AreaMarkEditPacket" not in branch, "分支里没有 AreaMarkEditPacket",
-        "分支里出现了 AreaMarkEditPacket")
-    add(checks, "4.5", "侧栏分支**不得**发 `SetCollectionMarkerConfigPacket`（那是匹配区 48 格通道）",
-        "SetCollectionMarkerConfigPacket" not in branch, "分支里没有 SetCollectionMarkerConfigPacket",
-        "分支里出现了匹配区通道")
-
-    # ---- §4.5-2 新包 `AreaMarkAddItemPacket`（6 分量，顺序/类型逐字） ----
-    addpkt = src["addpkt"]
-    expected = [("int", "containerId"), ("Area", "area"), ("ResourceLocation", "itemId"),
-                ("CompoundTag", "patch"), ("int", "count"), ("boolean", "fluid")]
-    components = record_components(addpkt, "AreaMarkAddItemPacket")
-    add(checks, "4.5", "新包 `network/AreaMarkAddItemPacket.java` 存在且是 `public record`",
-        components is not None, "public record AreaMarkAddItemPacket(...)", "文件/record 不存在")
-    add(checks, "4.5", "新包 record 分量恰为 6 个且顺序/类型逐字：%s"
-        % ", ".join("%s %s" % pair for pair in expected),
-        components == expected,
-        "分量 = %s" % expected, "实际 = %s（契约定稿 6 分量）" % components)
-    add(checks, "4.5", "新包实现 `CustomPacketPayload`",
-        has(addpkt, r"implements\s+[^{]*CustomPacketPayload"), "implements CustomPacketPayload", "没实现")
-
-    # ---- §4.5 `AreaMarkEditPacket` 线格式不许扩 ----
-    old_components = record_components(src["maredit"], "AreaMarkEditPacket")
-    add(checks, "4.5", "`AreaMarkEditPacket` 仍是 5 参 record（不扩字段：作者注释明确反对）",
+    old_components = record_components(maredit, "AreaMarkEditPacket")
+    add(checks, "4.5", "`AreaMarkEditPacket` 仍是 5 参 record（线格式没为侧栏功能被扩）",
         old_components == [("int", "containerId"), ("int", "action"), ("Area", "area"),
                            ("int", "markerIndex"), ("int", "inventorySlot")],
         "5 参 (int containerId, int action, Area area, int markerIndex, int inventorySlot)",
         "实际 = %s" % old_components)
     # 只查 record 头：注释里出现 fluid / count 是作者说明，不是字段（原来的全文匹配会误报）。
-    _old_head = (src["maredit"].split("public record", 1)[1][:240]
-                 if "public record" in src["maredit"] else "")
+    _old_head = (maredit.split("public record", 1)[1][:240]
+                 if "public record" in maredit else "")
     add(checks, "4.5", "`AreaMarkEditPacket` record 头里没有 componentsPatch / count / fluid 字段",
         not re.search(r"\bcomponentsPatch\b|\bfluid\b|\bcount\b", _old_head),
         "旧包 record 头里没有这三个字段",
         "旧包 record 头里混入了新包字段：%s" % _old_head[:120])
 
-    # ---- 注册行（Lead 补 `RS_Create_Compat`，area-strip 不许自己改） ----
-    add(checks, "4.5", "新包已在 `RS_Create_Compat` 注册（Lead 补的那一行；area-strip 不改该文件）",
-        "AreaMarkAddItemPacket" in src["mod"],
-        "RS_Create_Compat 里出现 AreaMarkAddItemPacket（注册/引用）", "没找到")
-
-    # ---- 退役范围 ----
-    add(checks, "4.5", "机器界面 `AdvancedCollectionCacheScreen` 里 `new AreaMarkScreen` **0 次**",
-        count(adv, "new AreaMarkScreen") == 0, "0 次",
-        "出现 %d 次" % count(adv, "new AreaMarkScreen"))
-    add(checks, "4.5", "侧栏 `AreaStripPanel` 里 `new AreaMarkScreen` **0 次**（就地画，不弹界面）",
-        count(panel, "new AreaMarkScreen") == 0, "0 次",
-        "出现 %d 次" % count(panel, "new AreaMarkScreen"))
-    add(checks, "4.5", "`AreaMarkScreen.java` **文件保留**（主手世界路径仍可给单区域配标记，§5）",
-        bool(src.get("mark", "").strip()), "文件存在且非空", "文件被删了（§5 明令保留）")
+    # 第 130 轮整页删除的 21 条断言（网格 / 接缝 / 新包）不在这里逐条 SKIP：反例 `failures_of`
+    # 每次都会重跑本函数，写成 SKIP 会刷出几十行噪声。删除本身由 round130 脚本逐 token 判零承担。
 
 
 # ======================================================================================
@@ -860,12 +763,12 @@ def counterexample_specs():
     """[(标签, 文件键, 正则, 替换, 期望判负的断言前缀)]。全部 count=1。"""
     return (
         # ---- §2 常量/几何 ----
-        ("C-1 把 `W` 改成 127（理想宽被偷偷缩 1px）",
-         "panel", r"\bW\s*=\s*128\s*;", "W = 127;", ("§2 W = 128",)),
+        ("C-1 把 `W` 改成 160（理想宽被偷偷缩 16px）",
+         "panel", r"\bW\s*=\s*176\s*;", "W = 160;", ("§2 W = 176",)),
         ("C-2 把 `MIN_W` 改成 64（挤的时候收得比契约更窄）",
-         "panel", r"\bMIN_W\s*=\s*96\s*;", "MIN_W = 64;", ("§2 MIN_W = 96",)),
+         "panel", r"\bMIN_W\s*=\s*140\s*;", "MIN_W = 64;", ("§2 MIN_W = 140",)),
         ("C-3 把 `HARD_MIN_W` 改成 64（屏幕很窄时仍硬画侧栏）",
-         "panel", r"\bHARD_MIN_W\s*=\s*72\s*;", "HARD_MIN_W = 64;", ("§2 HARD_MIN_W = 72",)),
+         "panel", r"\bHARD_MIN_W\s*=\s*108\s*;", "HARD_MIN_W = 64;", ("§2 HARD_MIN_W = 108",)),
         ("C-4 把 `GAP` 改成 0（侧栏贴死 GUI 右缘）",
          "panel", r"\bGAP\s*=\s*6\s*;", "GAP = 0;", ("§2 GAP = 6",)),
         ("C-5 把 `ROW_H` 改成 18（行高与 22 契约不符 ⇒ 命中区/滚动全错）",
@@ -919,41 +822,14 @@ def counterexample_specs():
         ("C-24 用 `AreaSelection.get(...)` 自己读选定器算几何（客户端读权威数据）",
          "panel", r"(public\s+void\s+render\s*\(\s*(?:final\s+)?GuiGraphics[^)]*\)\s*\{)",
          r"\1\n        AreaSelection.get(null);", ("§4",)),
-        # ---- §4.5 标记编辑就地做 ----
-        ("C-25 `isMarkGridOpen()` 改名（JEI 侧栏分支与机器界面都判不出「标记网格开着」）",
-         "panel", r"public\s+boolean\s+isMarkGridOpen\s*\(\s*\)",
-         "public boolean isMarkGridOpenX()", ("§4.5",)),
-        ("C-26 标记网格列数改成 2（3 列契约被破坏）",
-         "panel", r"((?:MARK|FILTER|GRID)\w*(?:COLS?|COLUMNS)\s*=\s*)3\b", r"\g<1>2", ("§4.5",)),
-        ("C-27 标记上限改成 16（12 个契约被破坏）",
-         "panel", r"(MARK_COLS\s*=\s*)3\b", r"\g<1>4", ("§4.5",)),
-        ("C-28 删掉标记删除通道（`ACTION_REMOVE` 改名成不存在的常量）",
-         "panel", r"AreaMarkEditPacket\.ACTION_REMOVE\b", "AreaMarkEditPacket.REMOVE_ACTION", ("§4.5",)),
-        ("C-29 删掉「清空」通道（`ACTION_CLEAR` 改名成不存在的常量）",
-         "panel", r"AreaMarkEditPacket\.ACTION_CLEAR\b", "AreaMarkEditPacket.CLEAR_ACTION", ("§4.5",)),
-        ("C-30 侧栏接缝退回旧包（`AreaMarkAddItemPacket` → `AreaMarkEditPacket`：JEI 幽灵栈会静默丢包）",
-         "panel", r"new\s+AreaMarkAddItemPacket\(", "new AreaMarkEditPacket(", ("§4.5",)),
-        ("C-31 JEI 侧栏分支绕过接缝自己发 `AreaMarkEditPacket`（用错包：第 5 参是背包格下标）",
-         "jei", r"(isMarkGridOpen\(\)[^{]*\{)",
-         r"\1\n            acceptBad(new AreaMarkEditPacket(0, 0, null, -1, 0));", ("§4.5",)),
-        ("C-32 JEI 侧栏分支误发匹配区通道（`SetCollectionMarkerConfigPacket`）」",
-         "jei", r"(isMarkGridOpen\(\)[^{]*\{)",
-         r"\1\n            acceptBad(new SetCollectionMarkerConfigPacket(0, 0, false, null, null, 1, false, null));",
-         ("§4.5",)),
-        ("C-33 新包少一个分量（删 `boolean fluid` ⇒ 不再是契约的 6 分量）",
-         "addpkt", r",\s*(?:final\s+)?boolean\s+fluid", "", ("§4.5",)),
+        # ---- §4.5 退役范围（标记网格已在第 130 轮删除；这里只剩「文件保留 / 线格式不扩」）----
         ("C-34 扩旧包线格式（`AreaMarkEditPacket` record 头插 tags 字段）",
          "maredit", r"(int\s+inventorySlot)", r"\1, java.util.List<String> tags", ("§4.5",)),
-        ("C-35 新包不实现 `CustomPacketPayload`",
-         "addpkt", r"\s+implements\s+[^{]*CustomPacketPayload", "", ("§4.5",)),
         ("C-36 机器路径又弹 `AreaMarkScreen`（`new AreaMarkScreen` 复活）",
          "adv", r"(public\s+void\s+removed\s*\(\s*\)\s*\{)",
          r"\1\n        minecraft.setScreen(new AreaMarkScreen(this, 0, null));", ("§4.5",)),
         ("C-37 把 `AreaMarkScreen.java` 删掉（§5 明令文件保留）",
          "mark", None, "", ("§4.5",)),
-        ("C-38 标记网格用匹配区的 `globalIndex`（下标语义错：会删/加错标记）",
-         "panel", r"(public\s+void\s+render\s*\(\s*(?:final\s+)?GuiGraphics[^)]*\)\s*\{)",
-         r"\1\n        globalIndex(0);", ("§4.5",)),
     )
 
 
