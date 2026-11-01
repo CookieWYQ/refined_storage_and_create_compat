@@ -1,7 +1,8 @@
 package cretae.cookiewyq.rs_create_compat.network;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
-import cretae.cookiewyq.rs_create_compat.menu.NetworkResourceRequesterMenu;
+import cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend;
+import cretae.cookiewyq.rs_create_compat.support.SenderBackend;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -18,7 +19,7 @@ import net.minecraft.server.level.ServerPlayer;
  *
  * <h2>服务端才是判据</h2>
  * <p>{@code name} 只是「玩家想指定哪一台」。真正的校验在
- * {@link NetworkResourceRequesterMenu#applyTargetFromUi(String)}：空名 / 超长 / 非法字符 /
+ * {@code RequesterSenderBackend#applyTarget}：空名 / 超长 / 非法字符 /
  * <b>找不到这个名字的接收器</b> / 这个名字被多台接收器占用，全部在那里被拒。客户端本地的提示只用于体验，
  * 不参与任何写入决策（客户端菜单里连方块实体都没有）。</p>
  */
@@ -36,13 +37,17 @@ public record SetRequesterTargetPacket(int containerId, String name) implements 
 
     public static void handle(final SetRequesterTargetPacket packet, final ServerPlayer player) {
         if (player.containerMenu == null || player.containerMenu.containerId != packet.containerId()
-            || !(player.containerMenu instanceof NetworkResourceRequesterMenu menu)) {
+            || !(player.containerMenu instanceof SenderBackend.Holder holder)) {
             return;
         }
-        if (!menu.stillValid(player)) {
+        final SenderBackend backend = holder.senderBackend();
+        if (backend == null || !backend.stillValid(player)) {
             return;
         }
-        menu.applyTargetFromUi(packet.name());
+        // 判据全在 applyTarget（空名 / 超长 / 非法字符 / 找不到 / 重名），界面只提交名字。
+        // 快照由 applyTarget 自己在「校验通过 → 写 → 回快照」的末尾发（成功与拒绝都发），
+        // 这里**不再**重复发一份 —— 同一份内容发两遍只会让界面闪一下。
+        RequesterSenderBackend.applyTarget(player, backend, packet.name());
     }
 
     @Override

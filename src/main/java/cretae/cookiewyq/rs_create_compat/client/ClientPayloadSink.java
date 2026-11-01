@@ -28,7 +28,6 @@ import cretae.cookiewyq.rs_create_compat.client.screen.ChamberUnitsSummaryScreen
 import cretae.cookiewyq.rs_create_compat.client.screen.CollectionCacheScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.CollectionMarkerConfigScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceReceiverScreen;
-import cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceRequesterScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.QuantityKeeperScreen;
 import cretae.cookiewyq.rs_create_compat.client.screen.RangeChargerScreen;
 import net.minecraft.client.Minecraft;
@@ -164,11 +163,10 @@ public final class ClientPayloadSink implements ClientPayloadHooks.Sink {
 
     @Override
     public void syncNetworkResourceRequester(final SyncRequesterConfigPacket packet) {
-        if (Minecraft.getInstance().screen
-            instanceof NetworkResourceRequesterScreen screen
-            && screen.getMenu().containerId == packet.containerId()) {
-            screen.onServerSync(packet);
-        }
+        // 第 131 轮：请求器「设置界面」已整页删除 ⇒ 这里没有收件人，函数体故意留空。
+        // 方法签名必须保留：{@code ClientPayloadHooks.Sink} 是接口，删方法会牵动整个 Sink 链。
+        // 配置快照本身不走这里：网格界面在 {@code containerTick} 里从
+        // {@code SyncRequesterConfigPacket#takeFor(containerId)} 信箱取（第 96 轮就是这个口径）。
     }
 
     @Override

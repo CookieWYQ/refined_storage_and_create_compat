@@ -35,7 +35,9 @@
 §4 删除二次确认：全文件 `ACTION_DELETE` 恰好 1 处，且**它所在的那个方法体**里有 armed 判据
   （`deleteArmedRaw` / `armed`，大小写不敏感——`isArmed()` 也算）；`expireArming()` 仍把 armed 归零；
   武装入口还在；`CONFIRM_MS` = 3000；外加 §4.1/§4.2 的两个钩子（`matchRegionLabel()` /
-  `drawMatchAreaHint(...)`）与高级版覆写（`match_label` / `match_label.none` / `pick_hint`）。
+  `drawMatchAreaHint(...)`）与高级版覆写（`match_label` / `match_label.none`）。
+  **第 131 轮反转**：用户图 2 点名删掉匹配区那句空态提示 ⇒ 高级版覆写 `drawMatchAreaHint`
+  与 `pick_hint` 文案必须**不存在**（C-23 反例：拼回即判负），`matchRegionLabel()` 的覆写仍然必须有。
 §5 世界框：`FOCUS_SLOT` 是 `static final` 且值为 `AreaOutline.slot("strip/focus")`；
   全文件 `AreaOutline.slot("strip/focus")` **只出现 1 次**（不再每帧新建 String）；
   `feedWorldOutline()` 用 `FOCUS_SLOT` + `chase`；`removed()` 里出现 `showForView` + `FOCUS_SLOT` + `VIEW_TTL`
@@ -57,6 +59,11 @@
   `removed()` 只 remove 不 showForView …）后，上面的判据**必须判负**。反例只在内存里改字符串 /
   构造样本，**不写任何文件**；真源码里找不到锚点时退化成「纯字符串构造的样本」，所以反例永远可跑、
   不会因为实现未落地而静默跳过（区分力证明不会被「跳过」吃掉）。
+
+第 131 轮：匹配区空态提示（`drawMatchAreaHint` 覆写 + `pick_hint`）已按用户要求删除
+⇒ §4.1/4.2 判据反转（必须不存在，C-23 反例钉死）；`lastEditingArea`
+（契约 A 组「记住上次编辑区域」的服务端落盘字段）登记进 §7 冻结集 —— 判据仍是
+「冻结集之外的新 Area* 字段一律判负」，没有放宽。
 
 纪律：不跑 gradlew / javac（Lead 统一编译）、不 git、不改 `src/**`、不改 docs / lang。
 用法：python tools/selfcheck_round130_area_strip_rework.py
@@ -170,6 +177,11 @@ FROZEN_AREA_FIELDS = frozenset({
     "marksCache",        # Map<Area, List<MarkerEntry>> 只读缓存
     "marksCacheTick",    # 上面那份缓存的时间戳
     "areaSnapshotVersion",
+    # 第 131 轮登记录入：契约 A 组「记住上次编辑区域」要求方块实体落盘该 int
+    # （NBT 键 LastEditingArea；不落盘就会「重开界面又回到没选区域」）。
+    # 它**不是**区域几何 / 标记数据的第二落点 —— 区域几何与标记仍只在选定器物品上，
+    # 这里只是界面上下文的 last-used 整数。登记之后任何**新**的 Area* 字段仍然一律判负。
+    "lastEditingArea",
 })
 
 #: §7-7：`AreaMarks.put(` 允许出现的文件（相对 `src/main/java/cretae/cookiewyq/rs_create_compat/`）。
@@ -736,10 +748,16 @@ def section_delete_and_match(s):
                 has(base, r"protected\s+void\s+drawMatchAreaHint\s*\(\s*(?:final\s+)?GuiGraphics\s+\w+\s*\)"),
                 "没找到该钩子签名"))
 
+    # 第 131 轮反转（用户图 2「先在右边点一个区域，再来配它的过滤」那行被点名删除）：
+    # 高级版只覆写 matchRegionLabel()；drawMatchAreaHint 的覆写与 pick_hint 文案**必须不存在**。
+    # 判据没放宽：原来是「两个钩子都必须覆写」，现在是「一个必须覆写 + 两处必须不存在」，
+    # 并且 §9 的 C-23 反例把旧覆写拼回去必须判负。
     adv_ok = ("match_label" in adv and "match_label.none" in adv
-              and "pick_hint" in adv and "drawMatchAreaHint" in adv
-              and "matchRegionLabel" in adv)
-    out.append(("§4.1/4.2 高级版覆写两个钩子（match_label / match_label.none / pick_hint）",
+              and "matchRegionLabel" in adv
+              and "drawMatchAreaHint" not in adv
+              and "pick_hint" not in adv)
+    out.append(("§4.1/4.2 高级版只覆写 matchRegionLabel（match_label / match_label.none）；"
+                "第 131 轮：drawMatchAreaHint 覆写与 pick_hint 已按用户要求删除 ⇒ 必须不存在",
                 adv_ok,
                 "match_label=%s none=%s pick_hint=%s drawMatchAreaHint=%s matchRegionLabel=%s"
                 % ("match_label" in adv, "match_label.none" in adv, "pick_hint" in adv,
@@ -1273,6 +1291,16 @@ def counterexample_specs(raw):
                   lambda: drop_lang(raw, "lang_zh",
                                     "gui.rs_create_compat.area_strip.title.filtered"),
                   None))
+
+    # ---- §4.1/4.2 第 131 轮反转：用户点名删掉的东西拼回去必须判负 ----
+    def cex_match_hint_back():
+        return append(raw, "adv",
+                      "\n    @Override\n    protected void drawMatchAreaHint(final GuiGraphics guiGraphics)\n"
+                      "    {\n        hint(LANG + \"pick_hint\");\n    }\n")
+
+    specs.append(("C-23 把匹配区空态提示覆写（drawMatchAreaHint + pick_hint）拼回高级界面"
+                  "（第 131 轮用户点名删除的落点复活）",
+                  ("§4.1/4.2",), cex_match_hint_back, None))
     return specs
 
 

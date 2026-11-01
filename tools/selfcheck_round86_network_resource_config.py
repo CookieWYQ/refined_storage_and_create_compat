@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""第 86 轮：网络资源接收器 / 请求器的**配置 UI + 数据包**防回归自检。
+"""
+第 131 轮：请求器设置界面 / 6 个插件槽 / 「左键切下一台」目标轮换 / 升级驱动的节拍 已删除 ⇒ 判据反转
+（服务端唯一入口收敛到 RequesterSenderBackend，投递引擎收敛到 SenderDelivery；只收紧与反转，未放宽）。
+第 86 轮：网络资源接收器 / 请求器的**配置 UI + 数据包**防回归自检。
 
 本轮新增的东西（全部是「服务端权威」而非「客户端自己改」）：
   * 接收器：改名输入框 + 确定（C2S `SetReceiverNamePacket` / S2C `SyncReceiverConfigPacket`）；
@@ -68,12 +71,13 @@ MAIN = "RS_Create_Compat.java"
 HOOKS = "network/ClientPayloadHooks.java"
 SINK = "client/ClientPayloadSink.java"
 
+# 第 131 轮 C 组：请求器设置界面整页删除 ⇒ 它的「打开网格」包（唯一发送方随界面消失）
+# 是死通道，已连同类一起删除。C2S 因此是 4 个。
 C2S_PACKETS = [
     "SetReceiverNamePacket.java",
     "SetRequesterTargetPacket.java",
     "RequesterOrderPacket.java",
     "TriggerRequesterPacket.java",
-    "OpenRequesterPickerPacket.java",
 ]
 S2C_PACKETS = [
     "SyncReceiverConfigPacket.java",
@@ -176,8 +180,10 @@ def judge_c2s_packet(text):
         errors.append("没有校验 containerId 归属")
     if "stillValidFor(player" not in body and "stillValid(player)" not in body:
         errors.append("没有校验玩家 / 方块仍然有效")
-    if "NetworkResourceRequesterMenu." not in body and "menu." not in body:
-        errors.append("没有调用菜单的服务端校验入口")
+    # 第 131 轮：服务端唯一校验入口从「菜单静态方法」收敛到 RequesterSenderBackend
+    if "NetworkResourceRequesterMenu." not in body and "menu." not in body \
+            and "RequesterSenderBackend." not in body:
+        errors.append("没有调用服务端校验入口（菜单 / RequesterSenderBackend 都没有）")
     return errors
 
 
@@ -211,22 +217,28 @@ def judge_name_flow(menu_text):
 
 
 def judge_target_flow(menu_text):
-    """请求器目标：形状 → 存在性（0 / >1）→ setTargetName，且目标不存在必须拒绝。"""
-    body = method_body(menu_text, "public TargetApplyResult applyTargetFromUi")
+    """请求器目标：形状 → 存在性（0 / >1）→ setTargetName，且目标不存在必须拒绝。
+
+    第 131 轮：这段逻辑从「请求器菜单静态方法 applyTargetFromUi」搬到
+    `RequesterSenderBackend.applyTarget`（方块与终端共用同一条），判据原样重锚。
+    """
+    body = method_body(menu_text, "public static TargetApplyResult applyTarget(")
     if body is None:
-        return ["缺少 applyTargetFromUi"]
+        return ["缺少 applyTarget（唯一的目标写入入口）"]
     errors = []
     if "checkNameShape(name)" not in body:
         errors.append("没有形状校验")
-    if "resolveReceiversByName(name)" not in body:
+    if "resolveReceiversByName(" not in body:
         errors.append("没有做目标存在性校验")
-    if not re.search(r"hits\.isEmpty\(\)\)\s*\{\s*sendConfigSync\(MSG_TARGET_NOT_FOUND\);"
-                     r"\s*return TargetApplyResult\.NOT_FOUND;", body):
+    if not re.search(r"hits\.isEmpty\(\)\)\s*\{[\s\S]{0,240}?"
+                     r"messageKeyFor\(TargetApplyResult\.NOT_FOUND\)[\s\S]{0,80}?"
+                     r"return TargetApplyResult\.NOT_FOUND;", body):
         errors.append("找不到目标时没有拒绝 + 提示")
-    if not re.search(r"hits\.size\(\) > 1\)\s*\{\s*sendConfigSync\(MSG_TARGET_AMBIGUOUS\);"
-                     r"\s*return TargetApplyResult\.AMBIGUOUS;", body):
+    if not re.search(r"hits\.size\(\) > 1\)\s*\{[\s\S]{0,240}?"
+                     r"messageKeyFor\(TargetApplyResult\.AMBIGUOUS\)[\s\S]{0,80}?"
+                     r"return TargetApplyResult\.AMBIGUOUS;", body):
         errors.append("同名多台时没有拒绝 + 提示")
-    if not order_ok(body, ["checkNameShape(name)", "resolveReceiversByName(name)",
+    if not order_ok(body, ["checkNameShape(name)", "resolveReceiversByName(",
                            "setTargetName("]):
         errors.append("校验顺序不对：存在性判定必须在写入之前")
     return errors
@@ -238,9 +250,9 @@ def judge_order_flow(menu_text):
     **没有条数上限**（用户原话：「不存在『限制 16 件』的设定」「订单上限没有设限」）：
     判据里一旦出现 MAX_ORDERS / MAX_ORDER_ENTRIES / TOO_MANY，本节直接判负。
 
-    写入判据只有三处静态实现（请求器界面与网格界面共用）：
-    ``appendOrderEntryChecked`` / ``removeEntryChecked`` / ``setAmountChecked``；
-    对外的 ``addEntryFor`` / ``removeEntryFor`` / ``setAmountFor`` 必须复用它们。
+    第 131 轮：实现从「请求器菜单的 appendOrderEntryChecked / *For 包装」收敛成
+    `RequesterSenderBackend` 的三个唯一入口 ``addEntry`` / ``removeEntry`` / ``setAmount``
+    （网格界面与终端发送界面共用）。“唯一实现”这条判据因此变成“只有一个类里只有一套”。
     """
     errors = []
     if "MAX_ORDERS" in menu_text or "MAX_ORDER_ENTRIES" in menu_text:
@@ -248,9 +260,9 @@ def judge_order_flow(menu_text):
     if re.search(r"(?:current|next|orders)(?:\.size\(\))?\s*>=?\s*(?:16|MAX_[A-Z_]+)",
                  menu_text):
         errors.append("存在按条数封顶的判断（用户明确要求「订单上限没有设限」）")
-    add = method_body(menu_text, "static OrderResult appendOrderEntryChecked(")
+    add = method_body(menu_text, "public static OrderResult addEntry(")
     if add is None:
-        errors.append("缺少唯一实现 appendOrderEntryChecked（追加订单的判据必须只有一处）")
+        errors.append("缺少唯一实现 addEntry（追加订单的判据必须只有一处）")
     else:
         if not re.search(r"if \(amount <= 0\)\s*\{\s*return OrderResult\.INVALID_AMOUNT;", add):
             errors.append("ADD 没有拒绝非法数量")
@@ -258,23 +270,16 @@ def judge_order_flow(menu_text):
             errors.append("ADD 没有拒绝空资源键（解析失败必须拒绝，绝不猜一个资源）")
         if "MAX_ORDER_ENTRIES" in add or "MAX_ORDERS" in add or "TOO_MANY" in add:
             errors.append("ADD 里仍有条数上限（用户明确要求「订单上限没有设限」）")
-        if not order_ok(add, ["amount <= 0", "key == null", "requester.setOrders("]):
+        if not order_ok(add, ["amount <= 0", "key == null", "backend.setOrders("]):
             errors.append("ADD 的校验顺序不对（必须校验全部字段后才写）")
-    for signature, marker in (
-            ("public static OrderResult addEntryFor(",
-             "appendOrderEntryChecked(requester, key, amount)"),
-            ("public static OrderResult removeEntryFor(",
-             "removeEntryChecked(requester, index, key)"),
-            ("public static OrderResult setAmountFor(",
-             "setAmountChecked(requester, index, amount, key)")):
-        entry = method_body(menu_text, signature)
-        if entry is None:
-            errors.append("缺少入口 %s" % signature)
-        elif marker not in entry:
-            errors.append("%s 没有复用唯一的判据实现" % signature)
-    remove = method_body(menu_text, "static OrderResult removeEntryChecked(")
+    # 第 131 轮：不再有 *For 包装层（网格 / 终端两套界面都直接调这三个唯一入口）
+    for stale in ("appendOrderEntryChecked(", "removeEntryChecked(", "setAmountChecked(",
+                  "addEntryFor(", "removeEntryFor(", "setAmountFor("):
+        if stale in menu_text:
+            errors.append("旧的包装层还在：%s（第 131 轮已收敛成唯一入口）" % stale)
+    remove = method_body(menu_text, "public static OrderResult removeEntry(")
     if remove is None:
-        errors.append("缺少 removeOrderEntry")
+        errors.append("缺少 removeEntry")
     else:
         if not re.search(r"index < 0 \|\| index >= current\.size\(\)", remove):
             errors.append("REMOVE 没有校验下标")
@@ -282,11 +287,11 @@ def judge_order_flow(menu_text):
             errors.append("REMOVE 没有二次确认「这一条还是客户端看到的那一条」（完整资源键）")
         if not order_ok(remove, ["index < 0 || index >= current.size()",
                                  "entryMatches(current.get(index), key)",
-                                 "requester.setOrders("]):
+                                 "backend.setOrders("]):
             errors.append("REMOVE 先写后校验")
-    update = method_body(menu_text, "static OrderResult setAmountChecked(")
+    update = method_body(menu_text, "public static OrderResult setAmount(")
     if update is None:
-        errors.append("缺少 setOrderAmount")
+        errors.append("缺少 setAmount")
     else:
         if "amount <= 0" not in update:
             errors.append("SET_AMOUNT 没有校验数量")
@@ -296,7 +301,7 @@ def judge_order_flow(menu_text):
             errors.append("SET_AMOUNT 没有二次确认「这一条还是客户端看到的那一条」（完整资源键）")
         if not order_ok(update, ["amount <= 0", "index < 0 || index >= current.size()",
                                  "entryMatches(current.get(index), key)",
-                                 "requester.setOrders("]):
+                                 "backend.setOrders("]):
             errors.append("SET_AMOUNT 先写后校验")
     return errors
 
@@ -347,9 +352,11 @@ def section_source_validation():
     for name in ALL_PACKETS:
         packets[name] = strip_comments(read("network/" + name))
     receiver_menu = strip_comments(read(RECEIVER_MENU))
-    requester_menu = strip_comments(read(REQUESTER_MENU))
+    # 第 131 轮：请求器的校验 / 写入唯一实现在 RequesterSenderBackend（菜单只剩容器壳）。
+    # 判据文本一字不改，只是喂进来的源码 = 后端 + 菜单（后者仍要扫 providerFor 标题）。
+    requester_menu = strip_comments(read(REQ_BACKEND)) + "\n" + strip_comments(read(REQUESTER_MENU))
 
-    check("①-0 5 个 C2S + 2 个 S2C 包文件都存在（第 92 轮删掉两条死通道后）",
+    check("①-0 4 个 C2S + 2 个 S2C 包文件都存在（第 92 / 131 轮删掉三条死通道后）",
           all(packets[name] for name in ALL_PACKETS),
           str([name for name in ALL_PACKETS if not packets[name]]))
 
@@ -367,7 +374,8 @@ def section_source_validation():
           not judge_target_flow(requester_menu), "；".join(judge_target_flow(requester_menu)))
     check("①-5 订单：数量 / 资源 / 上限 / 下标全部在 setOrders 之前",
           not judge_order_flow(requester_menu), "；".join(judge_order_flow(requester_menu)))
-    check("①-6 接收器目标名长度常量 = 32，形状判据被两个菜单共用",
+    # 第 131 轮：形状判据仍只有一处（接收器菜单），请求器侧经 RequesterSenderBackend 调用它
+    check("①-6 接收器目标名长度常量 = 32，形状判据被接收器与请求器（后端）共用",
           "public static final int MAX_NAME_LENGTH = 32;" in receiver_menu
           and "NetworkResourceReceiverMenu.checkNameShape(name)" in requester_menu)
     # 菜单标题是语言键（客户端翻译，服务端从不拼自然语言）：这是菜单里**唯一**允许出现
@@ -378,13 +386,17 @@ def section_source_validation():
     # 「providerFor() 内恰好 1 处 + 其余 0 处 + 菜单里不得出现 Component.literal」。
     title_body = method_body(
         requester_menu, "public static net.minecraft.world.MenuProvider providerFor(") or ""
-    menu_without_title = requester_menu.replace(title_body, "")
-    check("①-7 菜单只发 key、不拼自然语言（提示可翻译）",
+    # 第 131 轮：右键直接开网格 ⇒ openPickerFor 也要给新菜单一个标题（同样是语言键，
+    # 不是服务端拼的自然语言）。允许的 translatable 因此恰好两处：providerFor + openPickerFor。
+    open_body = method_body(requester_menu, "public static boolean openPickerFor(") or ""
+    menu_without_title = requester_menu.replace(title_body, "").replace(open_body, "")
+    check("①-7 菜单只发 key、不拼自然语言（提示可翻译；仅两处菜单标题）",
           "Component.translatable" not in receiver_menu
           and "Component.translatable" not in menu_without_title
           and title_body.count("Component.translatable") == 1
+          and open_body.count("Component.translatable") == 1
           and "Component.literal(" not in requester_menu,
-          "除 providerFor() 的菜单标题外仍出现 Component.translatable")
+          "除 providerFor() / openPickerFor() 的菜单标题外仍出现 Component.translatable")
 
 
 # ======================================================================================
@@ -573,6 +585,11 @@ def section_registration_and_dist():
         stem = name[:-5]
         check("③-1 %s 已在 RS_Create_Compat.registerPayloads 注册" % stem,
               ("network.%s.TYPE" % stem) in main and ("network.%s.STREAM_CODEC" % stem) in main)
+    # 第 131 轮反转：设置界面删除后 OpenRequesterPickerPacket 是死通道，注册与包类都必须没了
+    check("③-1b 死通道 OpenRequesterPickerPacket 已彻底删除（包类 + 注册 + 发送点）",
+          "OpenRequesterPickerPacket" not in strip_comments(main)
+          and not os.path.isfile(os.path.join(PKG, "network/OpenRequesterPickerPacket.java"))
+          and not os.path.isfile(os.path.join(PKG, "client/screen/NetworkResourceRequesterScreen.java")))
     check("③-2 5 个 C2S 全部用 ctx.enqueueWork（服务端主线程写方块实体）",
           main.count("ctx.enqueueWork(() ->") >= 5)
     for name in ALL_PACKETS:
@@ -608,6 +625,7 @@ def section_limits_and_inputs():
     requester_screen = strip_comments(read(REQUESTER_SCREEN))
     receiver_screen = strip_comments(read(RECEIVER_SCREEN))
     picker_screen = strip_comments(read(PICKER_SCREEN))
+    target_screen = strip_comments(read(TARGET_SCREEN))
 
     check("④-1 方块实体**没有**条数上限常量（MAX_ORDERS 已删除）",
           "MAX_ORDERS" not in requester_be)
@@ -623,19 +641,26 @@ def section_limits_and_inputs():
     check("④-6 接收器改名用 EditBox + 服务端权威包（不是本地写 NBT）",
           "new EditBox(" in receiver_screen and "SetReceiverNamePacket" in receiver_screen
           and "setReceiverName(" not in receiver_screen)
-    check("④-7 请求器目标同理（客户端不写 setTargetName）",
-          "SetRequesterTargetPacket" in requester_screen
-          and "setTargetName(" not in requester_screen)
+    # 第 131 轮：目标提交挪进子界面 SenderTargetSelectScreen（设置界面已删）
+    check("④-7 请求器目标同理（子界面只发 SetRequesterTargetPacket，客户端不写 setTargetName）",
+          "SetRequesterTargetPacket" in target_screen
+          and "setTargetName(" not in target_screen)
 
     check("④-8 接收器白名单仍是两类（speed_upgrade + stack_upgrade）",
           'List.of("speed_upgrade", "stack_upgrade")' in receiver_menu)
-    check("④-9 请求器复用接收器的同一份白名单常量",
-          "NetworkResourceReceiverMenu.ALLOWED_UPGRADES" in requester_menu)
-    for label, menu in (("接收器", receiver_menu), ("请求器", requester_menu)):
-        check("④-10 %s 仍是 6 个升级槽" % label,
-              "for (int i = 0; i < UPGRADE_COUNT; i++)" in menu
-              and "RsccSpeedStackUpgradeContainer.SLOTS" in menu
-              and "new UpgradeSlot(" in menu)
+    # 第 131 轮反转：请求器 6 个插件槽删除 ⇒ 不再有「对称」这回事，白名单只剩接收器一份
+    check("④-9 第 131 轮反转：请求器没有插件白名单（不再复用接收器那份 ALLOWED_UPGRADES）",
+          "ALLOWED_UPGRADES" not in requester_menu
+          and "ALLOWED_UPGRADES" not in requester_be)
+    check("④-10 接收器仍是 6 个升级槽",
+          "for (int i = 0; i < UPGRADE_COUNT; i++)" in receiver_menu
+          and "RsccSpeedStackUpgradeContainer.SLOTS" in receiver_menu
+          and "new UpgradeSlot(" in receiver_menu)
+    check("④-10b 请求器**不再有**升级槽（容器 / UPGRADE_COUNT / UpgradeSlot 全无）",
+          "UPGRADE_COUNT" not in requester_menu
+          and "new UpgradeSlot(" not in requester_menu
+          and "RsccSpeedStackUpgradeContainer" not in requester_menu
+          and "RsccSpeedStackUpgradeContainer" not in requester_be)
 
     # 同步时机：渲染循环里不得发包 / 扫网络
     render_labels = method_body(requester_screen, "protected void renderLabels(") or ""
@@ -675,7 +700,10 @@ def section_limits_and_inputs():
         zh = json.load(handle)
     with io.open(os.path.join(LANG_DIR, "en_us.json"), encoding="utf-8") as handle:
         en = json.load(handle)
-    message_keys = sorted(set(re.findall(r'MSG_[A-Z_]+\s*=\s*"([^"]+)"', requester_menu))
+    # 第 131 轮：请求器的提示常量搬到 RequesterSenderBackend（菜单只剩转发两个别名）
+    requester_backend = strip_comments(read(REQ_BACKEND))
+    message_keys = sorted(set(re.findall(r'MSG_[A-Z_]+\s*=\s*"([^"]+)"', requester_backend))
+                          | set(re.findall(r'MSG_[A-Z_]+\s*=\s*"([^"]+)"', requester_menu))
                           | set(re.findall(r'MSG_[A-Z_]+\s*=\s*"([^"]+)"', receiver_menu)))
     check("④-15 菜单里至少有 16 条提示语言键（每条失败都有话可说）",
           len(message_keys) >= 16, "实际 %d 条" % len(message_keys))
@@ -695,20 +723,27 @@ def section_limits_and_inputs():
                   ("EMPTY", "TOO_LONG", "INVALID_CHARS", "TAKEN"))
           and all(("MSG_NAME_" + key) in mapper_body for key in
                   ("EMPTY", "TOO_LONG", "INVALID", "TAKEN")))
-    order_mapper = method_body(strip_comments(read(REQUESTER_MENU)),
+    # 第 131 轮：目标 / 订单的唯一实现搬到 RequesterSenderBackend；提示映射仍是 messageKeyFor + syncTo
+    backend = strip_comments(read(REQ_BACKEND))
+    order_mapper = method_body(backend,
                                "public static String messageKeyFor(final OrderResult result)") or ""
-    for label, body_signature, failures in (
-            ("请求器目标", "public TargetApplyResult applyTargetFromUi",
-             ["MSG_TARGET_NOT_FOUND", "MSG_TARGET_AMBIGUOUS"]),
-            ("已选资源", "public static OrderResult addEntryFor(",
-             ["MSG_ORDER_INVALID_AMOUNT", "MSG_ORDER_INVALID_RESOURCE"])):
-        body = method_body(strip_comments(read(REQUESTER_MENU)), body_signature) or ""
+    target_mapper = method_body(
+        backend, "public static String messageKeyFor(final TargetApplyResult result)") or ""
+    order_packet_text = strip_comments(read(ORDER_PACKET))
+    for label, body_signature, failures, mapper in (
+            ("请求器目标", "public static TargetApplyResult applyTarget(",
+             ["MSG_TARGET_NOT_FOUND", "MSG_TARGET_AMBIGUOUS"], target_mapper),
+            ("已选资源", "public static OrderResult addEntry(",
+             ["MSG_ORDER_INVALID_AMOUNT", "MSG_ORDER_INVALID_RESOURCE"], order_mapper)):
+        body = method_body(backend, body_signature) or ""
         if label == "请求器目标":
-            ok = all(("sendConfigSync(%s)" % key) in body for key in failures)
+            # 拒绝分支 = syncTo(..., messageKeyFor(TargetApplyResult.X), -1)：绝不静默
+            ok = ("syncTo(" in body and "messageKeyFor(" in body
+                  and all(key in mapper for key in failures))
         else:
-            # 网格界面与请求器界面共用 sendConfigSyncTo + messageKeyFor：失败结果必须映射到具体语言键
-            ok = ("sendConfigSyncTo(" in body and "messageKeyFor(result)" in body
-                  and all(key in order_mapper for key in failures))
+            # 订单失败由包处理回发：messageKeyFor(result) 必须被调用，且结果映射到具体语言键
+            ok = ("RequesterSenderBackend.messageKeyFor(result)" in order_packet_text
+                  and all(key in mapper for key in failures))
         check("④-17b %s 的每个失败分支都回发提示" % label, ok,
               "失败分支缺提示：%s" % failures)
 
@@ -720,7 +755,9 @@ def section_limits_and_inputs():
 def section_counterexamples():
     section("⑤ 反例自证（同一批判据必须判负）")
     real_receiver_menu = strip_comments(read(RECEIVER_MENU))
-    real_requester_menu = strip_comments(read(REQUESTER_MENU))
+    # 第 131 轮：请求器判据的宿主是 RequesterSenderBackend（菜单只剩容器壳）
+    real_requester_menu = strip_comments(read(REQ_BACKEND)) + "\n" + strip_comments(
+        read(REQUESTER_MENU))
 
     # 反例 A：客户端直接改 NBT（没有 C2S 校验链）
     client_nbt = """
@@ -754,18 +791,18 @@ def section_counterexamples():
     check("⑤-3 反例·重名仍写入 ⇒ 判负（拒绝分支被改坏）", bool(errors), "；".join(errors))
 
     # 反例 D：目标存在性校验被删掉
+    # 第 131 轮：目标判据实现在 RequesterSenderBackend；反例直接打穿它的「找不到就拒绝」分支
     broken_target = re.sub(
-        r"final List<NetworkResourceReceiverBlockEntity> hits = requester\.resolveReceiversByName\(name\);"
-        r"[\s\S]*?if \(hits\.size\(\) > 1\) \{[\s\S]*?\}",
+        r"if \(hits\.isEmpty\(\)\) \{[\s\S]*?return TargetApplyResult\.NOT_FOUND;\s*\}",
         "", real_requester_menu, count=1)
     errors = judge_target_flow(broken_target)
     check("⑤-4 反例·删掉「找不到目标」的拒绝 ⇒ 判负", bool(errors), "；".join(errors))
 
     # 反例 E：把「最多 16 条」的封顶加回去（用户明确说「订单上限没有设限」）
     broken_cap = real_requester_menu.replace(
-        "next.add(new com.refinedmods.refinedstorage.api.resource.ResourceAmount(key, amount));",
+        "next.add(new ResourceAmount(key, amount));",
         "if (next.size() >= 16) {\n            return OrderResult.INVALID_RESOURCE;\n        }\n"
-        "        next.add(new com.refinedmods.refinedstorage.api.resource.ResourceAmount(key, amount));",
+        "        next.add(new ResourceAmount(key, amount));",
         1)
     errors = judge_order_flow(broken_cap)
     check("⑤-5 反例·把「最多 16 条」的封顶加回去 ⇒ 判负", bool(errors), "；".join(errors))
@@ -807,15 +844,19 @@ CONFIG_PACKET = "network/SyncRequesterConfigPacket.java"
 
 
 def judge_identity_by_resource_key(requester_be):
-    """请求器投递主路径必须以 ResourceKey 为唯一标识（不能按注册名映射两态）。"""
+    """请求器投递主路径必须以 ResourceKey 为唯一标识（不能按注册名映射两态）。
+
+    第 131 轮：投递主路径从 BE 的 ``deliverBatch`` 搬到 ``SenderDelivery.deliver``
+    （方块 / 终端共用同一份实现），判据原样重锚。
+    """
     errors = []
-    body = method_body(requester_be, "private long deliverBatch(")
+    body = method_body(requester_be, "public static Result deliver(")
     if body is None:
-        return ["缺少 deliverBatch"]
+        return ["缺少 SenderDelivery.deliver（唯一投递实现）"]
     if "final ResourceKey resource = order.resource();" not in body:
         errors.append("没有从 ResourceAmount 取 ResourceKey")
-    if "applyToReceiverCache(receiver, resource" not in body:
-        errors.append("写入没有走统一的资源键入口")
+    if "sink.apply(resource" not in body:
+        errors.append("写入没有走统一的资源键入口（ReceiverSink#apply）")
     for bad in ("BuiltInRegistries", "getKey(", "ItemStack", "FluidStack"):
         if bad in body:
             errors.append("主路径仍出现按注册名 / 物品栈映射的痕迹：%s" % bad)
@@ -828,13 +869,13 @@ def judge_no_hardcoded_two_state(requester_be):
     code = strip_comments(requester_be)
     if "isCacheSupported" in code:
         errors.append("仍然存在 isCacheSupported 硬编码白名单")
-    body = method_body(code, "private long deliverBatch(") or ""
+    body = method_body(code, "public static Result deliver(") or ""
     if re.search(r"if \(!\(resource instanceof ItemResource\s*\|\|\s*resource instanceof FluidResource\)\)",
                  body):
         errors.append("投递路径直接硬编码「只支持物品 / 流体」")
-    if 'hint("unsupported"' not in body:
+    if 'feedback.hint("unsupported"' not in body:
         errors.append("未识别类型没有提示（不允许静默跳过）")
-    if "receiver.canHandle(resource)" not in body:
+    if "sink.canHandle(resource)" not in body:
         errors.append("没有把「能不能处理这种资源」交给接收器的通用判据")
     return errors
 
@@ -929,10 +970,12 @@ def section_generic_resource_types():
     target_helper = read(TARGET_HELPER)
     key_helper = read(KEY_HELPER)
 
-    identity = judge_identity_by_resource_key(strip_comments(requester_be))
+    # 第 131 轮：投递主路径在 SenderDelivery（请求器 / 终端共用），判据重锚到这里
+    delivery_text = strip_comments(read(SENDER_DELIVERY))
+    identity = judge_identity_by_resource_key(delivery_text)
     check("⑥-1 请求器主路径以 ResourceKey 为唯一标识（不按注册名映射两态）",
           not identity, "；".join(identity))
-    two_state = judge_no_hardcoded_two_state(requester_be)
+    two_state = judge_no_hardcoded_two_state(delivery_text)
     check("⑥-2 没有「只支持物品 / 流体」的硬编码拒绝 + 未识别类型有提示",
           not two_state, "；".join(two_state))
     transport = judge_generic_transport(strip_comments(receiver_be),
@@ -1065,8 +1108,8 @@ def section_generic_resource_types():
                                               requester_menu)[:4]))
 
     # 反向自证：同一批判据对真实源码 0 失败（判据不是恒真）
-    real_ok = (not judge_identity_by_resource_key(strip_comments(requester_be))
-               and not judge_no_hardcoded_two_state(requester_be)
+    real_ok = (not judge_identity_by_resource_key(strip_comments(read(SENDER_DELIVERY)))
+               and not judge_no_hardcoded_two_state(strip_comments(read(SENDER_DELIVERY)))
                and not judge_generic_transport(strip_comments(receiver_be),
                                                strip_comments(target_helper))
                and not judge_key_carrying_packets(
@@ -1090,7 +1133,10 @@ def section_generic_resource_types():
 
 PICKER_MENU = "client/grid/ResourcePickerMenu.java"
 PICKER_SCREEN = "client/grid/ResourcePickerScreen.java"
-PICKER_PACKET = "network/OpenRequesterPickerPacket.java"
+# 第 131 轮 C 组：OpenRequesterPickerPacket 删除；目标选择改由子界面承担
+TARGET_SCREEN = "client/screen/SenderTargetSelectScreen.java"
+REQ_BACKEND = "support/RequesterSenderBackend.java"
+SENDER_DELIVERY = "support/SenderDelivery.java"
 CLIENT_INIT = "client/ClientInit.java"
 
 # 「自有 MenuType」的判据：必须是我们注册的类型，且不得复用 RS 的菜单类 / 类型
@@ -1125,13 +1171,15 @@ def judge_picker_menu(text):
     elif "return EMPTY_OPERATIONS;" not in ops:
         errors.append("createOperations 没有恒回 EMPTY_OPERATIONS（仍可能真的搬物品）")
 
-    # ② 未接入可用网络 ⇒ 入口直接拒绝
+    # ② 未接入可用网络 ⇒ 入口直接拒绝。第 131 轮：判据统一问「发送源」接口
+    #   （方块 / 终端两套实现共用一条），不再是 RequestPickerMenu 自己扫网络图。
     open_body = method_body(text, "public static boolean openFor(")
     if open_body is None:
         errors.append("缺少 openFor（网格唯一的服务端入口）")
-    elif "isConnectedToNetwork(requester)" not in open_body:
-        errors.append("openFor 没有校验「请求器真的接在网络里」")
-    check_body = method_body(text, "public static boolean isConnectedToNetwork(")
+    elif "backend.isConnected()" not in open_body:
+        errors.append("openFor 没有校验「发送源真的接在可用网络里」")
+    check_text = strip_comments(read(REQ_BACKEND))
+    check_body = method_body(check_text, "public static boolean isConnectedToNetwork(")
     if check_body is None:
         errors.append("缺少 isConnectedToNetwork（连通性判据必须只有一处）")
     else:
@@ -1142,8 +1190,8 @@ def judge_picker_menu(text):
 
     # ③ 打开后网络断开 ⇒ 服务端每 tick 的 stillValid 直接关掉它
     valid = method_body(text, "public boolean stillValid(") or ""
-    if "isConnectedToNetwork(requester)" not in valid:
-        errors.append("stillValid 没有跟随连通性（网络断开后界面还留着）")
+    if "backend.stillValid(serverPlayer)" not in valid or "backend.isConnected()" not in valid:
+        errors.append("stillValid 没有跟随「发送源还在 + 网络可用」（网络断开后界面还留着）")
     return errors
 
 
@@ -1296,26 +1344,21 @@ def judge_picker_wiring(main_text, client_init, requester_screen, requester_menu
         errors.append("ClientInit 没有注册网格屏幕（客户端找不到 Screen 工厂）")
     if "ResourcePickerScreen::new" not in client_init:
         errors.append("ClientInit 没有把我们的 Screen 工厂挂上去")
-    if "OpenRequesterPickerPacket.TYPE" not in main_text \
-        or "OpenRequesterPickerPacket.STREAM_CODEC" not in main_text:
-        errors.append("OpenRequesterPickerPacket 没在 registerPayloads 注册（运行期会被踢出连接）")
-    if "OpenRequesterPickerPacket" not in requester_screen:
-        errors.append("请求器界面没有「网格」入口（发不出打开请求）")
-    # 第 96 轮：小面板上的「网格（已选 N）」按钮升级成「打开网格编辑订单」大按钮，
-    # 文案仍是语言键（order.open_grid / order.open_grid.empty / order.open_grid.n），
-    # 且必须走同一个 openGridLabel()（不许在按钮 builder 里内联字面量）。
-    if "openGridLabel()" not in requester_screen:
-        errors.append("订单主入口按钮没有统一文案方法 openGridLabel()")
-    elif 'LANG + "order.open_grid' not in requester_screen:
-        errors.append("订单主入口按钮没有用语言键文案")
-    if "public void openResourcePicker(" not in requester_menu:
-        errors.append("菜单缺少 openResourcePicker 服务端入口")
+    # 第 131 轮反转：设置界面（连同「打开网格」包 / 大按钮 / openResourcePicker）整页删除，
+    # 右键方块 = 直接开网格 ⇒ 这里断言「旧通道必须没了 + 唯一入口必须是 openPickerFor」。
+    if "OpenRequesterPickerPacket" in strip_comments(main_text):
+        errors.append("死通道 OpenRequesterPickerPacket 仍在 registerPayloads 里")
+    if os.path.isfile(os.path.join(PKG, "client/screen/NetworkResourceRequesterScreen.java")):
+        errors.append("请求器设置界面又回来了")
+    if "public static boolean openPickerFor(" not in requester_menu:
+        errors.append("菜单缺少 openPickerFor（右键 = 唯一入口）")
     else:
-        body = method_body(requester_menu, "public void openResourcePicker(")
-        if body is None or ".openFor(player, requester)" not in body:
-            errors.append("openResourcePicker 没有调用网格菜单的 openFor(player, requester)")
-        if body is not None and "sendConfigSync(" not in body:
-            errors.append("打不开时没有回提示（玩家会面对一个空白网格）")
+        body = method_body(requester_menu, "public static boolean openPickerFor(")
+        if body is None or ".openFor(player" not in body:
+            errors.append("openPickerFor 没有调用网格菜单的 openFor(player, backend, title)")
+        if body is not None and "MSG_PICKER_NO_NETWORK" not in (
+                strip_comments(read("block/NetworkResourceRequesterBlock.java"))):
+            errors.append("打不开时没有回提示（玩家会面对一个点了没反应的方块）")
     return errors
 
 
@@ -1340,10 +1383,10 @@ def judge_picker_selection_path(screen_text, menu_text, packet_text):
     elif "appendOrderEntry" in filter_update or "setOrders(" in filter_update:
         errors.append("过滤槽通道仍在写条目（写入必须带动作 + 数量）")
 
-    # 服务端 C2S：三个动作都路由到同一段判据
-    for token in ("NetworkResourceRequesterMenu.addEntryFor(",
-                  "NetworkResourceRequesterMenu.removeEntryFor(",
-                  "NetworkResourceRequesterMenu.setAmountFor("):
+    # 服务端 C2S：三个动作都路由到同一段判据（第 131 轮：唯一入口 = RequesterSenderBackend）
+    for token in ("RequesterSenderBackend.addEntry(",
+                  "RequesterSenderBackend.removeEntry(",
+                  "RequesterSenderBackend.setAmount("):
         if token not in packet_text:
             errors.append("C2S 处理体没有路由到 %s" % token)
     return errors
@@ -1356,13 +1399,15 @@ def section_resource_picker():
     packet_text = strip_comments(read(ORDER_PACKET))
     main_text = strip_comments(read(MAIN))
     client_init = strip_comments(read(CLIENT_INIT))
-    requester_screen = strip_comments(read(REQUESTER_SCREEN))
+    requester_screen = strip_comments(read(REQUESTER_MENU))
     requester_menu = strip_comments(read(REQUESTER_MENU))
+    target_screen = strip_comments(read(TARGET_SCREEN))
 
-    check("⑦-0 三个新文件都存在（菜单 / 屏幕 / 打开请求包）",
-          bool(menu_text) and bool(screen_text) and bool(strip_comments(read(PICKER_PACKET))),
+    check("⑦-0 网格三件套存在（菜单 / 屏幕 / 目标选择子界面），旧「打开网格」包必须不存在",
+          bool(menu_text) and bool(screen_text) and bool(target_screen)
+          and not os.path.isfile(os.path.join(PKG, "network/OpenRequesterPickerPacket.java")),
           str([name for name, text in ((PICKER_MENU, menu_text), (PICKER_SCREEN, screen_text),
-                                       (PICKER_PACKET, strip_comments(read(PICKER_PACKET))))
+                                       (TARGET_SCREEN, target_screen))
                if not text]))
 
     errors = judge_picker_menu(menu_text)
@@ -1381,7 +1426,7 @@ def section_resource_picker():
           not errors, "；".join(errors))
 
     errors = judge_picker_wiring(main_text, client_init, requester_screen, requester_menu,
-                                 strip_comments(read(PICKER_PACKET)))
+                                 strip_comments(read(TARGET_SCREEN)))
     check("⑦-5 注册 / 入口 / payload 全部接上", not errors, "；".join(errors))
 
     check("⑦-6 资源键取自 GridResource#getResourceForRecipeMods()（物品 + 流体同一入口）",
@@ -1442,7 +1487,7 @@ def section_resource_picker():
 
     # 反例：未连网络也允许打开（用户报告的严重问题）
     opens_anyway = menu_text.replace(
-        "if (player == null || !isConnectedToNetwork(requester)) {",
+        "if (player == null || backend == null || !backend.isConnected()) {",
         "if (player == null) {", 1)
     errors = judge_picker_menu(opens_anyway)
     check("⑦-9c 反例·去掉「未连网络不许打开」⇒ 判负", bool(errors), "；".join(errors[:3]))
@@ -1466,7 +1511,7 @@ def section_resource_picker():
                and not judge_panel_geometry(screen_text)
                and not judge_picker_selection_path(screen_text, menu_text, packet_text)
                and not judge_picker_wiring(main_text, client_init, requester_screen,
-                                           requester_menu, strip_comments(read(PICKER_PACKET))))
+                                           requester_menu, strip_comments(read(TARGET_SCREEN))))
     check("⑦-13 反向自证·同一批判据对真实源码 0 失败（判据有区分力）", real_ok)
 
 
@@ -1516,42 +1561,56 @@ def judge_no_forbidden_wording(zh, en):
 
 
 def judge_requester_screen(screen_text, menu_text, picker_screen, picker_menu):
-    """请求器界面：没有清单栏目 / 没有增删按钮 / 有网格入口 + 未连网络按钮变灰。"""
+    """请求器界面（第 131 轮反转）：设置界面删了 ⇒ 只剩网格；插件槽删了 ⇒ 不再对称。
+
+    判据强度不降：
+      * 旧设置界面的「清单栏目 / 增删按钮 / 节流正文 / 灰按钮」必须全无（文件本身也不存在）；
+      * 网格里该有的（发送按钮 / 目标按钮 / 清空 / 订单编辑）必须都在；
+      * 请求器侧插件槽与「对称」整条反转成零残留；
+      * 未连网络必须有 actionbar 说明（不是变灰、也不是静默）。
+    """
     errors = []
-    # ②「订单清单」不该是一套独立 UI：请求器界面不再画列表 / 不再有增删按钮
-    for bad in ("order.add", "order.remove", "order.apply", "order.amount",
-                "order.header", "order.empty", "order.resource.button"):
-        if bad in screen_text:
-            errors.append("请求器界面仍有列表 / 增删控件：%s" % bad)
-    # ⑤ 不再暴露「节流」技术文案（只在 Shift 展开的 tooltip 最深层保留）
-    if "throttleLine" in screen_text or 'LANG + "throttle"' in screen_text:
-        errors.append("请求器界面仍在正文显示节流数值")
-    if "upgrade.pacing" not in screen_text:
-        errors.append("技术数值没有下沉到升级槽 tooltip 最深层（round71 的 tooltip 契约）")
-    # ③ 网格入口在请求器界面上；**第 96 轮口径变更**：未连网络不再「变灰了事」
-    #    （灰按钮本身就是「点了没反应」），改成「点了必须给一句原因」。
-    if "OpenRequesterPickerPacket" not in screen_text:
-        errors.append("请求器界面没有网格入口")
-    if "MSG_PICKER_NO_NETWORK" not in screen_text:
-        errors.append("未连网络时「打开网格」没有给提示（点了没反应）")
-    if "active = networkConnected" in screen_text:
-        errors.append("又在把网格按钮变灰（第 96 轮要求给提示，不是变灰）")
-    if "status.no_network" not in screen_text:
+    if os.path.isfile(os.path.join(PKG, "client/screen/NetworkResourceRequesterScreen.java")):
+        errors.append("请求器设置界面又回来了（第 131 轮已整页删除）")
+    # ② 订单清单只能在网格里；旧设置界面的控件痕迹不许在网格里复活
+    for bad in ("summaryLine(", "openGridButton", "OpenRequesterPickerPacket"):
+        if bad in picker_screen:
+            errors.append("设置界面残留物又出现在网格里：%s" % bad)
+    # ③ 网格内的发送 / 目标 / 清空 / 订单编辑必须都在（用户要求「发送也在网格里完成」）
+    for need, name in (("new TriggerRequesterPacket(getMenu().containerId)", "发送按钮"),
+                       ("new SenderTargetSelectScreen(", "目标选择入口"),
+                       ("RequesterOrderPacket.ACTION_CLEAR", "清空按钮"),
+                       ("RequesterOrderPacket.ACTION_SET_AMOUNT", "改数量"),
+                       ("RequesterOrderPacket.ACTION_REMOVE", "删除")):
+        if need not in picker_screen:
+            errors.append("网格里缺少 %s" % name)
+    # ④ 未连网络：方块层必须给 actionbar 原因（不是变灰、也不是静默）
+    block = strip_comments(read("block/NetworkResourceRequesterBlock.java"))
+    if "MSG_PICKER_NO_NETWORK" not in block and "MSG_PICKER_NO_NETWORK" not in (
+            strip_comments(read(REQUESTER_MENU))):
         errors.append("未连网络时没有明确原因")
-    # ⑤ 两台机器插件槽对称：都 6 槽、都只收速度 + 叠加
-    for label, menu in (("请求器", menu_text), ("接收器", strip_comments(read(RECEIVER_MENU)))):
-        if "for (int i = 0; i < UPGRADE_COUNT; i++)" not in menu                 or "new UpgradeSlot(" not in menu                 or "RsccSpeedStackUpgradeContainer.SLOTS" not in menu:
-            errors.append("%s菜单的 6 个插件槽不见了" % label)
-    if "NetworkResourceReceiverMenu.ALLOWED_UPGRADES" not in menu_text:
-        errors.append("请求器没有复用接收器的同一份插件白名单（不对称）")
+    if "displayClientMessage" not in block:
+        errors.append("未连网络时没有任何 actionbar 提示（点了没反应）")
+    if "active = networkConnected" in picker_screen:
+        errors.append("又把入口按钮变灰（要求给提示，不是变灰）")
+    # ⑤ 反转：请求器侧插件槽 / 白名单 / 升级容器全无；接收器仍 6 槽
+    if "UPGRADE_COUNT" in menu_text or "new UpgradeSlot(" in menu_text:
+        errors.append("请求器菜单又出现插件槽（第 131 轮已删）")
+    if "ALLOWED_UPGRADES" in menu_text:
+        errors.append("请求器又复用接收器的插件白名单（槽已删，不该再有白名单）")
+    receiver_menu = strip_comments(read(RECEIVER_MENU))
+    if "for (int i = 0; i < UPGRADE_COUNT; i++)" not in receiver_menu:
+        errors.append("接收器菜单的 6 个插件槽不见了")
     return errors
 
 
 def section_user_requirements():
     section("⑨ 用户 6 条反馈：无上限 / 无「订单清单」/ 网格内发送 / 插件对称 / 未连网络拒开")
     zh, en = load_lang()
+    # 第 131 轮：设置界面已删（read 返回空串），判据改看「网格 + 后端 + 方块层」
     requester_screen = strip_comments(read(REQUESTER_SCREEN))
-    requester_menu = strip_comments(read(REQUESTER_MENU))
+    requester_menu = strip_comments(read(REQ_BACKEND)) + "\n" + strip_comments(
+        read(REQUESTER_MENU))
     picker_screen = strip_comments(read(PICKER_SCREEN))
     picker_menu = strip_comments(read(PICKER_MENU))
 
@@ -1564,7 +1623,7 @@ def section_user_requirements():
                and "16" in str(value)])
 
     errors = judge_requester_screen(requester_screen, requester_menu, picker_screen, picker_menu)
-    check("⑨-3 请求器界面：无清单栏目 / 无增删按钮 / 网格按钮随连通性禁用 / 插件与接收器对称",
+    check("⑨-3 第 131 轮：设置界面零残留 / 网格内该有的都在 / 请求器插件槽与对称关系全无",
           not errors, "；".join(errors[:6]))
 
     check("⑨-4 无条数上限（方块实体 + 菜单两处都没有封顶常量 / 封顶判断）",
@@ -1572,17 +1631,18 @@ def section_user_requirements():
           and "MAX_ORDER_ENTRIES" not in requester_menu
           and "MAX_ORDERS" not in requester_menu)
 
+    # 第 131 轮：服务端入口 triggerFor 在 RequesterSenderBackend，最终调 backend.trigger(...)
     check("⑨-5 网格内可发送：屏幕发 TriggerRequesterPacket，服务端 triggerFor 走同一段判据",
           "TriggerRequesterPacket" in picker_screen
           and "public static void triggerFor(" in requester_menu
-          and "requester.triggerRequest();" in requester_menu)
+          and "backend.trigger(player);" in requester_menu)
 
-    check("⑨-6 未连网络 ⇒ 入口被拒（openFor 的连通性判据 + 菜单提前拦截 + 界面**给提示**）",
-          "isConnectedToNetwork(requester)" in picker_menu
-          and "if (!cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerMenu" in
-          requester_menu.replace("\\n", " ")
-          and "MSG_PICKER_NO_NETWORK" in requester_screen
-          and "active = networkConnected" not in requester_screen)
+    check("⑨-6 未连网络 ⇒ 入口被拒（openFor 的连通性判据 + 方块层 actionbar 说明）",
+          "backend.isConnected()" in picker_menu
+          and "public static boolean openPickerFor(" in requester_menu
+          and "MSG_PICKER_NO_NETWORK" in strip_comments(
+              read("block/NetworkResourceRequesterBlock.java"))
+          and "active = networkConnected" not in picker_screen)
 
     # ---- 反例自证 ----
     bad_zh = dict(zh)
@@ -1595,17 +1655,21 @@ def section_user_requirements():
     check("⑨-7b 反例·语言里写回「节流」⇒ 判负",
           bool(judge_no_forbidden_wording(bad_zh2, en)))
 
-    with_buttons = requester_screen.replace(
-        "openGridButton = Button.builder(openGridLabel(),",
+    # 第 131 轮：设置界面删了 ⇒ 反例改成「在网格里把设置界面的按钮/摘要加回来」
+    with_buttons = picker_screen.replace(
+        "sendButton = Button.builder(",
         'addRenderableWidget(Button.builder(Component.translatable(LANG + "order.add"),'
         ' b -> { }).bounds(0, 0, 24, 16).build());\n        '
-        "openGridButton = Button.builder(openGridLabel(),")
-    errors = judge_requester_screen(with_buttons, requester_menu, picker_screen, picker_menu)
-    check("⑨-8 反例·把「添加 / 删除」按钮加回去 ⇒ 判负", bool(errors), "；".join(errors[:3]))
+        "openGridButton = Button.builder(Component.literal(\"x\"), b -> { }).bounds(0, 0, 1, 1).build();\n        "
+        "sendButton = Button.builder(")
+    errors = judge_requester_screen(requester_screen, requester_menu, with_buttons, picker_menu)
+    check("⑨-8 反例·把「设置界面 / 增删按钮」加回网格 ⇒ 判负", bool(errors), "；".join(errors[:3]))
 
-    no_hint = requester_screen.replace(
-        "messageKey = NetworkResourceRequesterMenu.MSG_PICKER_NO_NETWORK;", "")
-    errors = judge_requester_screen(no_hint, requester_menu, picker_screen, picker_menu)
+    # 第 131 轮：设置界面删了 ⇒ 反例改成「网格入口按连通性变灰」（静默失败的一种）
+    no_hint = picker_screen.replace(
+        "sendButton = Button.builder(",
+        "if (false) { targetButton.active = networkConnected; } sendButton = Button.builder(", 1)
+    errors = judge_requester_screen(requester_screen, requester_menu, no_hint, picker_menu)
     check("⑨-8b 反例·未连网络时不提示（静默失败）⇒ 判负", bool(errors), "；".join(errors[:3]))
 
     # 行为模型：未连网络 / 有上限 / 有按钮 三种修前写法喂给同一批判据
@@ -1653,25 +1717,33 @@ def load_lang():
 
 
 def judge_receiver_picker(menu_text, screen_text, packet_text, receiver_be):
-    """候选列表来源 / 提交语义 / 无手打输入 / 空列表提示 / 渲染循环开销。"""
+    """候选列表来源 / 提交语义 / 无手打输入 / 空列表提示 / 渲染循环开销。
+
+    第 131 轮：目标选择从「请求器设置面板」搬到子界面 `SenderTargetSelectScreen`，
+    候选枚举从「请求器菜单自己遍历」收敛到 `SenderDelivery.receiverViews`（方块 / 终端共用）。
+    判据原样重锚：唯一枚举、只提交名字、服务端现解析、空列表有话说、渲染不扫网络。
+    """
     errors = []
-    # ① 唯一一处网络枚举（复用它，而不是新写一套）
-    if len(NETWORK_LOOP.findall(menu_text)) != 1:
-        errors.append("菜单里的 NetworkNodeContainer 遍历不是唯一一处（候选必须复用既有枚举）")
-    if menu_text.count("GraphNetworkComponent.class") != 1:
-        errors.append("菜单里出现了第二处 GraphNetworkComponent 枚举")
-    if menu_text.count("getContainers()") != 1:
-        errors.append("菜单里出现了第二处 getContainers() 枚举（等于新写了一套）")
-    if "NetworkResourceReceiverNetworkNode" not in menu_text:
+    # 第 131 轮：候选枚举的唯一实现在 SenderDelivery ⇒ 判据只看传进来的这段文本（反例才可见）
+    delivery = menu_text
+    # ① 唯一一处网络枚举：只允许一个 graphContainers() 助手，两个消费者都走它
+    if delivery.count("private static List<NetworkNodeContainer> graphContainers(") != 1:
+        errors.append("网络枚举助手不是唯一一处（graphContainers 必须只有一个）")
+    if delivery.count("GraphNetworkComponent.class") != 1:
+        errors.append("出现了第二处 GraphNetworkComponent 枚举")
+    if delivery.count("getContainers()") != 1:
+        errors.append("出现了第二处 getContainers() 枚举（等于新写了一套）")
+    if delivery.count("graphContainers(network)") != 2:
+        errors.append("候选 / 解析没有共用同一个 graphContainers()（各自遍历 = 两套口径）")
+    if "NetworkResourceReceiverNetworkNode" not in delivery:
         errors.append("候选不是按接收器节点筛的（与 receiversInNetwork() 不同源）")
-    if "isProperlyConfigured()" not in menu_text:
+    if "isProperlyConfigured()" not in delivery:
         errors.append("候选没有按 isProperlyConfigured() 过滤（未命名接收器会进列表）")
-    if "receiverViews()" not in menu_text:
+    if "receiverViews(" not in delivery:
         errors.append("缺少只读视图方法 receiverViews()")
-    sync_body = method_body(menu_text, "public void sendConfigSync(") or ""
-    sync_to = method_body(menu_text, "public static void sendConfigSyncTo(") or ""
-    if "sendConfigSyncTo(" not in sync_body or "receiverViews(requester)" not in sync_to:
-        errors.append("配置快照没有携带 receiverViews(requester)（界面拿不到候选）")
+    sync_to = method_body(strip_comments(read(REQ_BACKEND)), "public static void syncTo(") or ""
+    if "receiverViews(" not in sync_to:
+        errors.append("配置快照没有携带 receiverViews(...)（界面拿不到候选）")
     # 既有枚举仍然在（本轮不许为了「新视图」把它删掉 / 改名）
     if "receiversInNetwork()" not in receiver_be:
         errors.append("接收器方块实体既有的 receiversInNetwork() 不见了")
@@ -1679,14 +1751,15 @@ def judge_receiver_picker(menu_text, screen_text, packet_text, receiver_be):
         errors.append("接收器方块实体既有的 occupiedReceiverNamesInNetwork() 不见了")
 
     # ② 提交仍然只有名字 + 服务端仍然校验存在性
-    submit = method_body(screen_text, "private void submitTarget(") or ""
+    submit = method_body(screen_text, "private void confirmAndReturn(") or ""
     if "SetRequesterTargetPacket(" not in submit:
         errors.append("选定没有走既有 C2S SetRequesterTargetPacket")
     if ".name()" not in submit:
         errors.append("提交的不是名字（存储层只认名字）")
     if "setTargetName(" in screen_text:
         errors.append("客户端在写 setTargetName（必须由服务端写）")
-    apply_target = method_body(menu_text, "public TargetApplyResult applyTargetFromUi(") or ""
+    apply_target = method_body(strip_comments(read(REQ_BACKEND)),
+                               "public static TargetApplyResult applyTarget(") or ""
     if "resolveReceiversByName(" not in apply_target:
         errors.append("服务端不再校验目标存在性")
     if "setTargetName(" not in apply_target:
@@ -1699,26 +1772,27 @@ def judge_receiver_picker(menu_text, screen_text, packet_text, receiver_be):
     if "ByteBufCodecs.VAR_INT.encode(buf, view.x())" not in packet_text:
         errors.append("坐标没有随包下发（界面无法显示「哪一台」）")
 
-    # ③ 客户端不再手打名字
+    # ③ 客户端不再手打名字（子界面只有搜索框，没有名字输入框；数量框在网格里）
     if "targetBox" in screen_text:
         errors.append("界面里还有目标名输入框（玩家仍被要求手打名字）")
-    if screen_text.count("new EditBox(") != 0:
-        errors.append("请求器界面里还有输入框（数量输入已移到网格；目标只能从列表里挑）")
+    if screen_text.count("new EditBox(") != 1:
+        errors.append("目标子界面应当只有 1 个输入框（搜索框）；实际 %d 个"
+                      % screen_text.count("new EditBox("))
 
-    # ④ 空列表有提示
-    if "target.known.none" not in screen_text:
-        errors.append("候选为空时没有提示（玩家会以为界面坏了）")
-    if "target.entry.none" not in screen_text:
-        errors.append("候选为空时选择器没有降级文案")
-    if "receivers.isEmpty()" not in screen_text:
+    # ④ 空列表有提示（网格目标按钮 + 子界面空态）
+    if "target.known.none" not in strip_comments(read(PICKER_SCREEN)):
+        errors.append("候选为空时网格目标按钮没有提示")
+    if 'LANG + "empty"' not in screen_text:
+        errors.append("候选为空时子界面没有说明（玩家会以为界面坏了）")
+    if "candidates.isEmpty()" not in screen_text:
         errors.append("界面没有处理空列表")
 
-    # ⑤ 渲染循环不扫网络 / 不发包
-    labels = method_body(screen_text, "protected void renderLabels(") or ""
-    for bad in ("receiverViews(", "GraphNetworkComponent", "sendToServer", "getNetworkOrNull(",
-                "PacketDistributor"):
-        if bad in labels:
-            errors.append("renderLabels 里出现 %s（每帧扫网络 / 发包）" % bad)
+    # ⑤ 渲染循环不扫网络 / 不发包（只判传进来的这段屏幕文本：反例变异才可见）
+    render_body = method_body(screen_text, "public void render(") or ""
+    for bad in ("receiverViews(", "GraphNetworkComponent", "getNetworkOrNull(",
+                "sendToServer"):
+        if bad in render_body:
+            errors.append("目标子界面 render 里出现 %s（每帧扫网络 / 发包）" % bad)
     return errors
 
 
@@ -1751,8 +1825,9 @@ def judge_lang_wording(zh, en):
 
 def section_receiver_picker():
     section("⑧ 目标接收器：从列表里挑（复用既有枚举 / 仍提交名字 / 无「同名」）")
-    menu_text = strip_comments(read(REQUESTER_MENU))
-    screen_text = strip_comments(read(REQUESTER_SCREEN))
+    # 第 131 轮：候选枚举的唯一实现在 SenderDelivery（target 写入在 RequesterSenderBackend）
+    menu_text = strip_comments(read(SENDER_DELIVERY))
+    screen_text = strip_comments(read(TARGET_SCREEN))
     packet_text = strip_comments(read(CONFIG_PACKET))
     receiver_be = strip_comments(read(RECEIVER_BE))
     zh, en = load_lang()
@@ -1768,10 +1843,12 @@ def section_receiver_picker():
           and "public Set<String> occupiedReceiverNamesInNetwork()" in receiver_be)
 
     # 只有一处遍历、一次 getContainers()：把「新写一套」挡在门外
-    check("⑧-3 菜单里只有一处网络图遍历（getContainers() == 1）",
+    # 第 131 轮：枚举收在 SenderDelivery.graphContainers() 一个助手，两个消费者共用它
+    check("⑧-3 只有一处网络图遍历（graphContainers() 助手 + getContainers() == 1）",
           menu_text.count("getContainers()") == 1
-          and len(NETWORK_LOOP.findall(menu_text)) == 1
-          and menu_text.count("GraphNetworkComponent.class") == 1)
+          and menu_text.count("GraphNetworkComponent.class") == 1
+          and menu_text.count("private static List<NetworkNodeContainer> graphContainers(") == 1
+          and menu_text.count("graphContainers(network)") == 2)
 
     # 视图字段：名字 + 坐标（不含方块实体 / 网络对象）
     check("⑧-4 S2C 视图 = 名字 + 三个坐标（无方块实体引用）",
@@ -1779,22 +1856,24 @@ def section_receiver_picker():
           and "BlockEntity" not in (method_body(packet_text, "public record ReceiverView") or ""))
 
     # 提交语义：只发名字；服务端仍现解析
-    submit = method_body(screen_text, "private void submitTarget(") or ""
+    submit = method_body(screen_text, "private void confirmAndReturn(") or ""
     check("⑧-5 「选定」只把名字交给既有 C2S 包（存储层不变）",
           ".name()" in submit and "SetRequesterTargetPacket(" in submit
           and "setTargetName(" not in screen_text)
     check("⑧-6 服务端仍校验「目标必须存在」（resolveReceiversByName 在写入之前）",
-          order_ok(method_body(menu_text, "public TargetApplyResult applyTargetFromUi(") or "",
+          order_ok(method_body(strip_comments(read(REQ_BACKEND)),
+                               "public static TargetApplyResult applyTarget(") or "",
                    ["resolveReceiversByName(", "setTargetName("]))
 
-    # 客户端不再手打名字
-    check("⑧-7 界面里已没有目标名输入框，也没有数量框（两者都不该在请求器界面里）",
-          "targetBox" not in screen_text and screen_text.count("new EditBox(") == 0)
+    # 客户端不再手打名字（搜索框不是名字输入框）
+    check("⑧-7 目标子界面没有名字输入框（只有 1 个搜索框）；数量框在网格里",
+          "targetBox" not in screen_text and screen_text.count("new EditBox(") == 1)
 
-    # 空列表提示（面板位 + 按钮位 + 代码分支）
-    check("⑧-8 空列表有提示（提示行 + 选择器降级文案 + isEmpty 分支）",
-          "target.known.none" in screen_text and "target.entry.none" in screen_text
-          and "receivers.isEmpty()" in screen_text)
+    # 空列表提示（网格目标按钮 + 子界面空态 + isEmpty 分支）
+    check("⑧-8 空列表有提示（网格目标按钮文案 + 子界面空态 + isEmpty 分支）",
+          "target.known.none" in strip_comments(read(PICKER_SCREEN))
+          and 'LANG + "empty"' in screen_text
+          and "candidates.isEmpty()" in screen_text)
 
     # 语言键：没有「同名」
     errors = judge_lang_wording(zh, en)
@@ -1806,9 +1885,9 @@ def section_receiver_picker():
 
     # ---- 反例自证：同一批判据必须判负 ----
     manual_typing = screen_text.replace(
-        "new SetRequesterTargetPacket(menu.containerId, view.name())",
-        "new SetRequesterTargetPacket(menu.containerId, targetBox.getValue())").replace(
-        "private EditBox amountBox;", "private EditBox amountBox;\n    private EditBox targetBox;")
+        "new SetRequesterTargetPacket(containerId, selected.name())",
+        "new SetRequesterTargetPacket(containerId, targetBox.getValue())").replace(
+        "private EditBox searchBox;", "private EditBox searchBox;\n    private EditBox targetBox;")
     errors = judge_receiver_picker(menu_text, manual_typing, packet_text, receiver_be)
     check("⑧-11 反例·仍然手打名字（targetBox + getValue()）⇒ 判负", bool(errors),
           "；".join(errors[:3]))
@@ -1818,18 +1897,17 @@ def section_receiver_picker():
     errors = judge_lang_wording(bad_lang_zh, en)
     check("⑧-12 反例·语言里出现「同名」⇒ 判负", bool(errors), "；".join(errors[:3]))
 
-    labels = method_body(screen_text, "protected void renderLabels(") or ""
+    labels = method_body(screen_text, "public void render(") or ""
     per_frame = screen_text.replace(
-        labels, labels.replace("{", "{\n        menu.receiverViews();", 1), 1)
+        labels, labels.replace("{", "{\n        SenderDelivery.receiverViews(null);", 1), 1)
     errors = judge_receiver_picker(menu_text, per_frame, packet_text, receiver_be)
     check("⑧-13 反例·每帧扫网络（renderLabels 里调 receiverViews()）⇒ 判负", bool(errors),
           "；".join(errors[:3]))
 
     second_enum = menu_text.replace(
-        "for (final com.refinedmods.refinedstorage.api.network.node.container.NetworkNodeContainer",
-        "for (final com.refinedmods.refinedstorage.api.network.node.GraphNetworkComponent.class"
-        ".cast(null).getContainers(); false;) { }\n        for (final "
-        "com.refinedmods.refinedstorage.api.network.node.container.NetworkNodeContainer", 1)
+        "return graph == null ? List.of() : List.copyOf(graph.getContainers());",
+        "return graph == null ? List.of() : List.copyOf(graph.getContainers())"
+        "; network.getComponent(GraphNetworkComponent.class).getContainers(); // 第二套枚举", 1)
     errors = judge_receiver_picker(second_enum, screen_text, packet_text, receiver_be)
     check("⑧-14 反例·新写第二套网络枚举 ⇒ 判负", bool(errors), "；".join(errors[:3]))
 

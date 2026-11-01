@@ -215,7 +215,11 @@ EXPECTED_SITE_FILES = [
     # 0 次 tooltip 调用的容器界面 ⇒ 槽位悬停无提示，用户实机反馈「容器代理器其实没有绘制的」）。
     "client/screen/InventoryProxyScreen.java",
     "client/screen/NetworkResourceReceiverScreen.java",
-    "client/screen/NetworkResourceRequesterScreen.java",
+    # 第 131 轮：请求器「设置界面」整页删除（用户：这界面没有任何作用），登记表跟着删；
+    # 新增的两个子界面（目标选择 / 自动合成询问）继承 ChildConfigScreen，原版不会替子类调
+    # renderTooltip，因此必须自己覆写 render() 手绘 —— 显式登记，否则「未登记站点」会漏掉它们。
+    "client/screen/SenderCraftPromptScreen.java",
+    "client/screen/SenderTargetSelectScreen.java",
     "client/screen/QuantityKeeperScreen.java",
     "client/screen/RangeChargerScreen.java",
     "client/screen/SchematicLoaderScreen.java",

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""第 92 轮：「网络资源接收器 + 网络资源请求器」投递链路的端到端自检。
+"""
+第 131 轮：请求器设置界面 / 6 个插件槽 / 「左键切下一台」目标轮换 / 升级驱动的节拍 已删除 ⇒ 判据反转
+（服务端唯一入口收敛到 RequesterSenderBackend，投递引擎收敛到 SenderDelivery；只收紧与反转，未放宽）。
+第 92 轮：「网络资源接收器 + 网络资源请求器」投递链路的端到端自检。
 
 <h2>这份脚本补的是哪一类洞</h2>
 <p>round71 只钉了「单机节流 / 单次投递守恒」；本轮把**整条链路**（请求器按名字找接收器 →
@@ -65,6 +68,12 @@ REQUESTER_SCREEN = "client/screen/NetworkResourceRequesterScreen.java"
 CONTAINER = "support/RsccSpeedStackUpgradeContainer.java"
 VIEW_ONLY = "support/ViewOnlyHandlers.java"
 PAYLOAD_REGISTRY = "RS_Create_Compat.java"
+# 第 131 轮：投递引擎 / 发送源后端 / 目标选择子界面（设置界面已删）
+SENDER_DELIVERY = "support/SenderDelivery.java"
+REQ_BACKEND = "support/RequesterSenderBackend.java"
+TARGET_SCREEN = "client/screen/SenderTargetSelectScreen.java"
+PICKER_SCREEN = "client/grid/ResourcePickerScreen.java"
+PICKER_MENU = "client/grid/ResourcePickerMenu.java"
 
 # C2S（客户端 → 服务端，必须校验 containerId + 距离 / 方块存在性）
 C2S_PACKETS = [
@@ -72,7 +81,7 @@ C2S_PACKETS = [
     "network/SetRequesterTargetPacket.java",
     "network/RequesterOrderPacket.java",
     "network/TriggerRequesterPacket.java",
-    "network/OpenRequesterPickerPacket.java",
+    # 第 131 轮：OpenRequesterPickerPacket 的唯一发送方随设置界面删除 ⇒ 死通道包一并删除
 ]
 # S2C（服务端 → 客户端，只带显示数据，不得改世界）
 S2C_PACKETS = [
@@ -232,10 +241,16 @@ recv_code = code(RECEIVER_BE)
 req_code = code(REQUESTER_BE)
 
 recv_network_scan = method_body(recv_code, r"private\s+java\.util\.List<NetworkResourceReceiverBlockEntity>\s+receiversInNetwork\(")
-req_resolve = method_body(req_code, r"public\s+List<NetworkResourceReceiverBlockEntity>\s+resolveReceiversByName\(")
-trigger_body = method_body(req_code, r"public\s+void\s+triggerRequest\(")
+# 第 131 轮：目标解析搬到 SenderDelivery（方块 / 终端共用同一份实现）
+delivery_code = code(SENDER_DELIVERY)
+req_resolve = method_body(delivery_code,
+                          r"public\s+static\s+List<NetworkResourceReceiverBlockEntity>\s+resolveReceiversByName\(")
+# triggerRequest() 只剩转发壳，真正的实现在 3 参重载里
+trigger_body = method_body(req_code,
+                           r"public\s+void\s+triggerRequest\(@Nullable\s+final\s+ServerPlayer\s+asker,")
 req_code_s = code_s(REQUESTER_BE)
-trigger_body_s = method_body(req_code_s, r"public\s+void\s+triggerRequest\(")
+trigger_body_s = method_body(req_code_s,
+                             r"public\s+void\s+triggerRequest\(@Nullable\s+final\s+ServerPlayer\s+asker,")
 
 check("①-0 接收器的「本网络内枚举」走 RS 网络图（GraphNetworkComponent#getContainers），"
       "不是自己扫世界",
@@ -243,17 +258,18 @@ check("①-0 接收器的「本网络内枚举」走 RS 网络图（GraphNetwork
       and "getComponent(GraphNetworkComponent.class)" in recv_network_scan
       and "getContainers()" in recv_network_scan
       and "getNode().getNetworkOrNull()" in recv_network_scan)
-check("①-1 请求器解析接收器时用自己的网络（getNode().getNetworkOrNull()），"
+check("①-1 请求器解析接收器时用自己的网络（调用方传进来的 Network），"
       "名字逐字相等 + 必须已配置",
       req_resolve is not None
-      and "getNode().getNetworkOrNull()" in req_resolve
+      and "graphContainers(network)" in req_resolve
       and "name.equals(receiver.getReceiverName())" in req_resolve
       and "receiver.isProperlyConfigured()" in req_resolve)
 check("①-2 请求器解析只遍历网络容器集合（同网络作用域），空名直接返回空列表",
       req_resolve is not None
-      and "getComponent(GraphNetworkComponent.class)" in req_resolve
-      and "getContainers()" in req_resolve
-      and "if (name == null || name.isEmpty())" in req_resolve)
+      and "graphContainers(network)" in req_resolve
+      and "if (network == null || name == null || name.isEmpty())" in req_resolve
+      and "getComponent(GraphNetworkComponent.class)" in delivery_code
+      and "getContainers()" in delivery_code)
 
 check("①-3 triggerRequest 里 ≥2 台先拒绝（hint ambiguous）再取 hits.get(0)，绝不随机挑",
       trigger_body_s is not None
@@ -275,7 +291,9 @@ check("①-5 解析失败路径绝不改配置（triggerRequest 里没有 setTar
 recv_menu_code = code(RECEIVER_MENU)
 req_menu_code = code(REQUESTER_MENU)
 apply_name = method_body(recv_menu_code, r"public\s+NameApplyResult\s+applyNameFromUi\(")
-apply_target = method_body(req_menu_code, r"public\s+TargetApplyResult\s+applyTargetFromUi\(")
+# 第 131 轮：目标写入唯一入口在 RequesterSenderBackend（设置界面已删）
+apply_target = method_body(code(REQ_BACKEND),
+                           r"public\s+static\s+TargetApplyResult\s+applyTarget\(")
 
 check("①-6 接收器改名：服务端守卫 → 形状 → 「名字没变直接成功」→ 重名 → 最后才写",
       apply_name is not None
@@ -288,7 +306,7 @@ check("①-7 请求器选目标：NOT_SERVER → 形状 → 0 个 = NOT_FOUND / 
       and "NOT_SERVER" in apply_target
       and "hits.isEmpty()" in apply_target
       and "hits.size() > 1" in apply_target
-      and position(apply_target, "hits.size() > 1") < position(apply_target, "requester.setTargetName(name)"))
+      and position(apply_target, "hits.size() > 1") < position(apply_target, "backend.setTargetName(player, name)"))
 
 
 def judge_resolution(result):
@@ -328,20 +346,21 @@ check("①-10 反例自证：空列表被当成「随便挑一台」必须判负
 
 section("② 投递守恒（SIMULATE→EXECUTE 取 min→回滚→暂存）")
 
-deliver_body = method_body(req_code, r"private\s+long\s+deliverBatch\(")
+# 第 131 轮：唯一投递实现在 SenderDelivery.deliver（请求器 / 终端共用）
+deliver_body = method_body(delivery_code, r"public\s+static\s+Result\s+deliver\(")
 
-check("②-0 deliverBatch 存在，且先 SIMULATE 再 EXECUTE（顺序不可换）",
+check("②-0 SenderDelivery.deliver 存在，且先 SIMULATE 再 EXECUTE（顺序不可换）",
       deliver_body is not None
       and 0 <= position(deliver_body, "Action.SIMULATE") < position(deliver_body, "Action.EXECUTE")
       and "Math.min(available, acceptable)" in deliver_body)
 check("②-1 守恒自证在投递路径上：代码显式校验 got == inserted + rolledBack + kept",
       deliver_body is not None and "got != inserted + rolledBack + kept" in deliver_body)
-check("②-2 写不进去的余量先 insert 回网络，网络也不收的才进 returnBuffer（bufferReturn）",
+check("②-2 写不进去的余量先 insert 回网络，网络也不收的才进发送源缓冲（feedback.buffer）",
       deliver_body is not None
       and "storage.insert(resource, remainder, Action.EXECUTE" in deliver_body
-      and "bufferReturn(resource, kept)" in deliver_body
+      and "feedback.buffer(resource, kept)" in deliver_body
       and position(deliver_body, "storage.insert(resource, remainder, Action.EXECUTE")
-      < position(deliver_body, "bufferReturn(resource, kept)"))
+      < position(deliver_body, "feedback.buffer(resource, kept)"))
 check("②-3 计划量只按「真的写进接收器的量」递减（remaining -= inserted），绝不用 got 递减",
       deliver_body is not None
       and "remaining -= inserted" in deliver_body
@@ -419,8 +438,8 @@ check("②-9 请求器对接收器的 SIMULATE / EXECUTE 都包了异常护栏�
       "模拟阶段抛异常 ⇒ 一件都没取出就结束；写入阶段抛异常 ⇒ inserted=0 后走统一回滚",
       deliver_body is not None
       and deliver_body.count("catch (final RuntimeException e)") >= 2
-      and "hint(\"deliver_exception\"" in (method_body(code_s(REQUESTER_BE),
-                                                         r"private\s+long\s+deliverBatch\(") or "")
+      and "hint(\"deliver_exception\"" in (method_body(code_s(SENDER_DELIVERY),
+                                                         r"public\s+static\s+Result\s+deliver\(") or "")
       and re.search(r"catch \(final RuntimeException e\) \{\s*inserted = 0L;", deliver_body) is not None
       and position(deliver_body, "inserted = 0L;") < position(deliver_body, "final long remainder = got - inserted;"))
 _items_body = method_body(recv_code, r"private\s+long\s+outputItems\(")
@@ -446,27 +465,33 @@ check("②-12 反例自证：异常时不回滚（把 inserted 记成 got、回�
 
 section("③ 跨 tick 续投（pendingPlan / 每 tick 批数 / 空探测不计数）")
 
-check("③-0 每 tick 批数 = min(硬上限, 速度升级批数)，没有自写公式",
+# 第 131 轮：节拍固定（用户拍板「红石激活速度决定发送速度」）⇒ 判据反转成
+# 「预算 = min(硬上限, 发送源给的批数)」+「固定常量来自 SenderDelivery」。
+check("③-0 每 tick 批数 = min(硬上限, 发送源批数)，没有自写位运算公式",
       deliver_body is not None
-      and "final int perTickBatches = Math.min(MAX_BATCHES_PER_TICK, getThrottleBatchesPerTick());"
+      and "final int budget = Math.min(MAX_BATCHES_PER_TICK, Math.max(1, perTickBatches));"
       in deliver_body
-      and "<<" not in deliver_body)
-check("③-1 循环条件用 perTickBatches；只有真的取到资源才 batches++（空探测不消耗批数）",
+      and "<<" not in deliver_body
+      and "FIXED_BATCHES_PER_TICK = 8" in delivery_code
+      and "FIXED_BATCH_SIZE = 64L" in delivery_code)
+check("③-1 循环条件用 budget；只有真的取到资源才 batches++（空探测不消耗批数）",
       deliver_body is not None
-      and "while (remaining > 0L && batches < perTickBatches)" in deliver_body
+      and "while (remaining > 0L && batches < budget)" in deliver_body
       and deliver_body.count("batches++") == 1
       and position(deliver_body, "batches++") > position(deliver_body, "Action.EXECUTE"))
-check("③-2 只有「批数用完」造成的剩余进 carry 跨 tick；缺口（stalled）不无限重试",
+check("③-2 只有「批数用完」造成的剩余进 carry 跨 tick（deliver 返回 carry、方块实体接回去），"
+      "缺口（stalled）不无限重试",
       deliver_body is not None
       and "if (remaining > 0L && !stalled)" in deliver_body
       and "carry.add(" in deliver_body
-      and "pendingPlan.clear();" in deliver_body
-      and "pendingPlan.addAll(carry);" in deliver_body)
+      and "pendingPlan.clear();" in req_code
+      and "pendingPlan.addAll(result.carry());" in req_code)
 check("③-3 每 tick 批数按 gameTime 记账（同一 tick 的「触发 + 续投」合计不超预算）",
-      deliver_body is not None
-      and "if (now != deliveryBudgetTick)" in deliver_body
-      and "int batches = deliveryBudgetUsed;" in deliver_body
-      and "deliveryBudgetUsed = batches;" in deliver_body)
+      req_code is not None
+      and "if (now != deliveryBudgetTick)" in req_code
+      and "deliveryBudgetTick = now;" in req_code
+      and "deliveryBudgetUsed = 0;" in req_code
+      and "deliveryBudgetUsed = result.batchesUsed();" in req_code)
 check("③-4 pendingPlan 随 NBT 落盘 + 读回，并在读档前先清空（方块实体可能复用）",
       "ORDER_CODEC.encodeStart(ops(registries), pendingPlan)" in req_code
       and "TAG_PENDING_PLAN" in req_code
@@ -670,7 +695,7 @@ check("⑤-1 applyResource 三条分流：ItemResource → applyToItemCache、Fl
 check("⑤-2 不认识具体第三方类（没有 mekanism / gas / chemical 硬编码类型）",
       all(token not in (recv_code + req_code + recv_menu_code + req_menu_code).lower()
           for token in ("mekanism", "chemicalstack", "gasstack")))
-deliver_body_s = method_body(code_s(REQUESTER_BE), r"private\s+long\s+deliverBatch\(")
+deliver_body_s = method_body(code_s(SENDER_DELIVERY), r"public\s+static\s+Result\s+deliver\(")
 check("⑤-3 非 PlatformResourceKey 在投递路径上明确提示 unsupported（不静默跳过）",
       deliver_body_s is not None
       and "!(resource instanceof PlatformResourceKey)" in deliver_body_s
@@ -738,10 +763,11 @@ check("⑥-6 反例自证：批数里混入 stackCount ⇒ 判负（叠加升级
                         "RsccRateLimiter.level(speedCount() + stackCount() * 3)); }") is False)
 
 # 数据槽：Be.getCount() 与菜单 DATA_COUNT 必须一致，且槽 0/1 真的是批次 / 批量
+# 第 131 轮：请求器的节拍已固定（不再走升级槽 / ContainerData）⇒ 只判接收器，
+# 请求器另加一条反向判据（见下面 ⑥-7b）。
 recv_data = method_body(recv_code, r"public\s+net\.minecraft\.world\.inventory\.ContainerData\s+getContainerData\(")
 req_data = method_body(req_code, r"public\s+net\.minecraft\.world\.inventory\.ContainerData\s+getContainerData\(")
-for be_name, body, menu_rel in (("接收器", recv_data, RECEIVER_MENU),
-                                ("请求器", req_data, REQUESTER_MENU)):
+for be_name, body, menu_rel in (("接收器", recv_data, RECEIVER_MENU),):
     menu_code = code(menu_rel)
     data_count = re.search(r"public static final int DATA_COUNT = (\d+);", menu_code)
     get_count = re.search(r"public int getCount\(\)\s*\{\s*return (\d+);", body or "")
@@ -762,11 +788,19 @@ for be_name, body, menu_rel in (("接收器", recv_data, RECEIVER_MENU),
           and "return data.get(1);" in menu_code
           and "getThrottleIntervalTicks" not in menu_code)
 
-check("⑥-9 界面显示的文案参数 = 「每 tick 批数 + 每批件数」（不是旧的「每 N tick」）",
-      "menu.getThrottleBatchesPerTick(), menu.getThrottleBatch()" in code(RECEIVER_SCREEN)
-      and "menu.getThrottleBatchesPerTick(), menu.getThrottleBatch()" in code(REQUESTER_SCREEN)
-      and "menu.getThrottleIntervalTicks()" not in code(RECEIVER_SCREEN)
-      and "menu.getThrottleIntervalTicks()" not in code(REQUESTER_SCREEN))
+check("⑥-7b 请求器不再有节拍 ContainerData / 菜单 getter（节拍是固定常量）",
+      req_data is None
+      and "getThrottleBatchesPerTick" not in req_menu_code
+      and "getThrottleBatch" not in req_menu_code
+      and "SenderDelivery.FIXED_BATCHES_PER_TICK" in req_code
+      and "SenderDelivery.FIXED_BATCH_SIZE" in req_code)
+check("⑥-9 第 131 轮反转：接收器界面不再有节拍正文（用户要求删掉所有状态句）；"
+      "节拍只在发送网格的工具条上显示「每 tick 批数 + 每批件数」",
+      "menu.getThrottleBatchesPerTick()" not in code(RECEIVER_SCREEN)
+      and "menu.getThrottleBatch()" not in code(RECEIVER_SCREEN)
+      and "pacingBatchesPerTick, RsccNumberField.compact(pacingBatch)" in code(PICKER_SCREEN)
+      and "getThrottleIntervalTicks()" not in code(PICKER_SCREEN)
+      and "getThrottleIntervalTicks()" not in code(RECEIVER_SCREEN))
 
 
 # ======================================================================================
@@ -776,7 +810,8 @@ check("⑥-9 界面显示的文案参数 = 「每 tick 批数 + 每批件数」�
 section("⑦ 客户端不写世界；所有写入走 C2S 且服务端校验 containerId / 距离 / 菜单类型")
 
 recv_screen = code(RECEIVER_SCREEN)
-req_screen = code(REQUESTER_SCREEN)
+# 第 131 轮：请求器设置界面删除 ⇒ 界面侧判据改看「网格 + 目标选择子界面」
+req_screen = code(PICKER_SCREEN) + "\n" + code(TARGET_SCREEN)
 mutators = ("setReceiverName(", "setTargetName(", "setOrders(", "clearOrders(",
             "triggerRequest(", "applyNameFromUi(", "applyTargetFromUi(")
 for rel_name, screen_code in (("接收器界面", recv_screen), ("请求器界面", req_screen)):
@@ -807,12 +842,21 @@ for rel in C2S_PACKETS:
         packet_notes.append("%s 没有 containerId 比对" % rel)
 check("⑦-3 每个 C2S 包都校验 containerId + 距离 / 方块存在性（没有被改包绕过的写入口）",
       packet_ok, "; ".join(packet_notes))
+check("⑦-3c 死通道 OpenRequesterPickerPacket 已彻底删除（包类 + 注册 + 发送点）",
+      not os.path.isfile(os.path.join(JAVA, "network/OpenRequesterPickerPacket.java"))
+      and "OpenRequesterPickerPacket" not in code(PAYLOAD_REGISTRY)
+      and not os.path.isfile(os.path.join(JAVA, "client/screen/NetworkResourceRequesterScreen.java")))
 check("⑦-3b 每个 S2C 包只搬运显示数据（不含 level.setBlock / 世界写入调用）",
       all("level.setBlock" not in code(rel) and "addFreshEntity" not in code(rel)
           for rel in S2C_PACKETS))
-check("⑦-4 服务端距离判据只有一处（stillValidFor / stillValid 用同一个 64.0 平方距离 + 方块实体身份）",
-      "requester.getLevel().getBlockEntity(requester.getBlockPos()) == requester" in req_menu_code
-      and "<= 64.0" in req_menu_code
+# 第 131 轮：请求器的距离 / 存在性判据收敛到 RequesterSenderBackend.stillValidFor（方块 / 终端共用）
+req_backend_code = code(REQ_BACKEND)
+check("⑦-4 服务端距离判据各只有一处（请求器 → stillValidFor；接收器 → 菜单），"
+      "都是同一个 64.0 平方距离 + 方块实体身份",
+      "getLevel().getBlockEntity(requester.getBlockPos()) == requester" not in req_menu_code
+      and "requester.getLevel().getBlockEntity(requester.getBlockPos()) == requester"
+      in req_backend_code
+      and "<= 64.0" in req_backend_code
       and "receiver.getLevel().getBlockEntity(receiver.getBlockPos()) == receiver" in recv_menu_code
       and "<= 64.0" in recv_menu_code)
 
@@ -847,27 +891,30 @@ check("⑧-0 接收器拆方块：走 BlockContentReleaser，且升级槽 + 物�
       and "collectHandler(receiver.getUpgradeContainer(), out)" in recv_remove
       and "collectHandler(receiver.getItemCache(), out)" in recv_remove
       and "collectFluidStorage(receiver.getFluidCache(), out)" in recv_remove)
-check("⑧-1 请求器拆方块：走 BlockContentReleaser，且升级槽 + returnBuffer（物品 / 流体）都进结算",
+check("⑧-1 请求器拆方块：走 BlockContentReleaser，returnBuffer（物品 / 流体）进结算，"
+      "且第 131 轮起**没有**升级槽结算",
       req_remove is not None
       and "BlockContentReleaser.release(" in req_remove
-      and "collectHandler(requester.getUpgradeContainer(), out)" in req_remove
       and "requester.releaseReturnBufferItems()" in req_remove
-      and "requester.releaseReturnBufferFluids()" in req_remove)
+      and "requester.releaseReturnBufferFluids()" in req_remove
+      and "getUpgradeContainer" not in req_remove)
 check("⑧-2 returnBuffer 拆出时按 int 上限分块，绝不截断丢失",
       "releaseReturnBufferItems()" in req_code
       and "releaseReturnBufferFluids()" in req_code
       and req_code.count("(int) Math.min(rest, Integer.MAX_VALUE)") == 2)
 
 save_body = method_body(req_code, r"public\s+void\s+saveAdditional\(")
-REQUIRED_SAVE = ("TAG_TARGET_NAME", "TAG_LAST_SUCCESS", "TAG_POWERED", "TAG_UPGRADES",
+# 第 131 轮：TAG_UPGRADES 随 6 个插件槽一起删除（无升级就不该再有升级 NBT 键）
+REQUIRED_SAVE = ("TAG_TARGET_NAME", "TAG_LAST_SUCCESS", "TAG_POWERED",
                  "TAG_ORDERS", "TAG_RETURN_BUFFER", "TAG_PENDING_PLAN", "TAG_LAST_TARGET")
 check("⑧-3 请求器 saveAdditional 落盘全部权威状态（目标 / 成功标志 / 红石电平 / 升级 / 订单 / "
       "回滚暂存 / 待投计划 / 上次目标坐标）",
-      save_body is not None and all(tag in save_body for tag in REQUIRED_SAVE))
-LOAD_REQUIRED = ("TAG_TARGET_NAME", "TAG_LAST_SUCCESS", "TAG_POWERED", "TAG_UPGRADES",
-                 "TAG_ORDERS", "TAG_RETURN_BUFFER", "TAG_PENDING_PLAN", "TAG_LAST_TARGET")
+      save_body is not None and all(tag in save_body for tag in REQUIRED_SAVE)
+      and "TAG_UPGRADES" not in req_code)
+LOAD_REQUIRED = REQUIRED_SAVE
 check("⑧-4 请求器 loadAdditional 把上述状态全部读回（NBT 往返一致）",
-      load_body is not None and all(tag in load_body for tag in LOAD_REQUIRED))
+      load_body is not None and all(tag in load_body for tag in LOAD_REQUIRED)
+      and "TAG_UPGRADES" not in load_body)
 
 recv_save = method_body(recv_code, r"public\s+void\s+saveAdditional\(")
 recv_load = method_body(recv_code, r"public\s+void\s+loadAdditional\(")
@@ -945,8 +992,10 @@ check("⑨-1 反例自证：注册表里塞一个没人发的类型 ⇒ 判负",
       "DeadProbePacket" in dead_payloads(PROBE_REGISTRY, all_text))
 
 stale_hits = []
+# 第 131 轮：REQUESTER_SCREEN 已删除（read 返回空串，留着也不会误判）；补上新界面 / 新支撑类
 for rel in (RECEIVER_BE, REQUESTER_BE, RECEIVER_BLOCK, REQUESTER_BLOCK,
-            RECEIVER_MENU, REQUESTER_MENU, RECEIVER_SCREEN, REQUESTER_SCREEN,
+            RECEIVER_MENU, REQUESTER_MENU, RECEIVER_SCREEN,
+            TARGET_SCREEN, PICKER_SCREEN, SENDER_DELIVERY, REQ_BACKEND,
             RECEIVER_NODE, REQUESTER_NODE):
     raw = read(rel)
     for phrase in STALE_PHRASES:

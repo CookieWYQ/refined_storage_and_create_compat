@@ -3,7 +3,8 @@ package cretae.cookiewyq.rs_create_compat.network;
 import com.refinedmods.refinedstorage.common.api.support.resource.PlatformResourceKey;
 import com.refinedmods.refinedstorage.common.support.resource.ResourceCodecs;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
-import cretae.cookiewyq.rs_create_compat.menu.NetworkResourceRequesterMenu;
+import cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend;
+import cretae.cookiewyq.rs_create_compat.support.SenderBackend;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -23,8 +24,8 @@ import org.jetbrains.annotations.Nullable;
  *
  * <h2>两个界面共用</h2>
  * <p>请求器界面与网格界面都会打开同一台请求器，因此本包<b>不</b>限定菜单类型：
- * 服务端用 {@code NetworkResourceRequesterMenu#requesterOf(containerId 对应的菜单)} 解析出方块实体，
- * 归属判据只有那一处（{@code stillValidFor}）。</p>
+ * 服务端用 {@code SenderBackend.Holder#senderBackend()} 解析出「这张菜单背后的发送源」，
+ * 归属判据只有那一处（{@code SenderBackend#stillValid(ServerPlayer)}）。</p>
  *
  * <h2>没有条数上限</h2>
  * <p>玩家在网格里点多少种资源就记多少种 —— 服务端不再有「满了就拒绝」的分支
@@ -55,21 +56,6 @@ public record RequesterOrderPacket(int containerId, int action, int index, Strin
      * 保持协议形状统一 —— 服务端也<b>不</b>用这两个字段做任何判断。</p>
      */
     public static final int ACTION_CLEAR = 3;
-    /**
-     * 「从网格切回设置界面」（第 96 轮：网格工具栏的「设置」按钮）。
-     *
-     * <h2>为什么借这一个包，而不是新开一个 payload</h2>
-     * <p>本动作要的只是一个<b>服务端侧的动作</b>：换菜单只能由服务端 {@code openMenu} 发出，
-     * 而 {@code network/**} 不许引用 {@code client/**}（专用服务端安全判据 ②），
-     * 所以动作落在 {@code NetworkResourceRequesterMenu#openSettingsFor}。
-     * 既有包里已经带了 {@code containerId} 与 {@code action}，加一个动作码即可，
-     * <b>不需要在 {@code RS_Create_Compat#registerPayloads} 里新增注册</b>
-     * —— 少一个注册点就少一处「新包忘了注册 ⇒ 运行期被踢」的风险。</p>
-     *
-     * <p>它仍然是「一次只做一个动作 + 服务端逐字段校验」的同一套纪律：本动作不用
-     * {@code index} / {@code key} / {@code amount}，服务端也不读它们。</p>
-     */
-    public static final int ACTION_OPEN_SETTINGS = 4;
 
     /**
      * 兼容旧界面的构造：没有完整键。
@@ -120,28 +106,58 @@ public record RequesterOrderPacket(int containerId, int action, int index, Strin
         if (player.containerMenu == null || player.containerMenu.containerId != packet.containerId()) {
             return;
         }
-        // 归属：请求器界面**与网格界面**都认（同一个方块、同一段服务端判据）；
-        // 其它界面 ⇒ requesterOf 回 null ⇒ 一律不写。
-        final cretae.cookiewyq.rs_create_compat.block.entity.NetworkResourceRequesterBlockEntity
-            requester = NetworkResourceRequesterMenu.requesterOf(player.containerMenu);
-        if (!NetworkResourceRequesterMenu.stillValidFor(player, requester)) {
+        // 归属：只认「玩家此刻打开的这张菜单」背后的发送源（请求器方块或终端物品）。
+        // 其它界面 / 客户端镜像菜单 ⇒ senderBackend() 为 null ⇒ 一律不写。
+        if (!(player.containerMenu instanceof SenderBackend.Holder holder)) {
             return;
         }
-        final int containerId = packet.containerId();
+        final SenderBackend backend = holder.senderBackend();
+        if (backend == null || !backend.stillValid(player)) {
+            return;
+        }
         // 资源身份：新界面给完整键；旧协议只给「注册名 + 是否流体」，走同一段解析
         final PlatformResourceKey key = packet.key() != null
             ? packet.key()
-            : NetworkResourceRequesterMenu.parseResourceKey(requester, packet.resourceId(),
-            packet.fluid());
+            : RequesterSenderBackend.parseResourceKey(player.level().registryAccess(),
+            packet.resourceId(), packet.fluid());
         switch (packet.action()) {
-            case ACTION_ADD -> NetworkResourceRequesterMenu.addEntryFor(player, containerId, key,
-                packet.amount());
-            case ACTION_REMOVE -> NetworkResourceRequesterMenu.removeEntryFor(player, containerId,
-                packet.index(), key);
-            case ACTION_SET_AMOUNT -> NetworkResourceRequesterMenu.setAmountFor(player, containerId,
-                packet.index(), packet.amount(), key);
-            case ACTION_CLEAR -> NetworkResourceRequesterMenu.clearOrdersFor(player, containerId);
-            case ACTION_OPEN_SETTINGS -> NetworkResourceRequesterMenu.openSettingsFor(player);
+            case ACTION_ADD -> {
+                final RequesterSenderBackend.OrderResult result =
+                    RequesterSenderBackend.addEntry(backend, key, packet.amount());
+                RequesterSenderBackend.syncTo(player, backend,
+                    result == RequesterSenderBackend.OrderResult.OK
+                        ? RequesterSenderBackend.MSG_ORDER_ADDED
+                        : RequesterSenderBackend.messageKeyFor(result),
+                    result == RequesterSenderBackend.OrderResult.OK
+                        ? RequesterSenderBackend.indexOfOrder(backend, key) : -1);
+            }
+            case ACTION_REMOVE -> {
+                final RequesterSenderBackend.OrderResult result =
+                    RequesterSenderBackend.removeEntry(backend, packet.index(), key);
+                RequesterSenderBackend.syncTo(player, backend,
+                    result == RequesterSenderBackend.OrderResult.OK
+                        ? RequesterSenderBackend.MSG_ORDER_REMOVED
+                        : RequesterSenderBackend.messageKeyFor(result), -1);
+            }
+            case ACTION_SET_AMOUNT -> {
+                final RequesterSenderBackend.OrderResult result =
+                    RequesterSenderBackend.setAmount(backend, packet.index(), packet.amount(), key);
+                RequesterSenderBackend.syncTo(player, backend,
+                    result == RequesterSenderBackend.OrderResult.OK
+                        ? RequesterSenderBackend.MSG_ORDER_UPDATED
+                        : RequesterSenderBackend.messageKeyFor(result),
+                    result == RequesterSenderBackend.OrderResult.OK ? packet.index() : -1);
+            }
+            case ACTION_CLEAR -> {
+                final boolean wasEmpty = backend.orders().isEmpty();
+                final RequesterSenderBackend.OrderResult result =
+                    RequesterSenderBackend.clearOrders(backend);
+                RequesterSenderBackend.syncTo(player, backend,
+                    result != RequesterSenderBackend.OrderResult.OK
+                        ? RequesterSenderBackend.messageKeyFor(result)
+                        : (wasEmpty ? RequesterSenderBackend.MSG_ORDER_ALREADY_EMPTY
+                        : RequesterSenderBackend.MSG_ORDER_CLEARED), -1);
+            }
             default -> {
                 // 未知动作：服务端不写任何东西（也绝不回一个「成功」）
             }

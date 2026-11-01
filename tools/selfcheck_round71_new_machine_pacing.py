@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""第 71 轮：新方块（网络资源接收器 / 请求器）的**节拍口径**与**升级计数口径**收尾自检。
+"""
+第 131 轮：请求器设置界面 / 6 个插件槽 / 「左键切下一台」目标轮换 / 升级驱动的节拍 已删除 ⇒ 判据反转
+（服务端唯一入口收敛到 RequesterSenderBackend，投递引擎收敛到 SenderDelivery；只收紧与反转，未放宽）。
+第 71 轮：新方块（网络资源接收器 / 请求器）的**节拍口径**与**升级计数口径**收尾自检。
 
 <h2>本脚本回答的四个问题（对应本轮的三个缺陷 + 一个新方块接入）</h2>
 <ol>
@@ -402,10 +405,15 @@ check("②-11 接收器：throttleTick() 的间隔来自容器（两处调用点
 check("②-12 接收器：doWork() 里真的有节流闸门调用（不是只定义不接线）",
       "if (!throttleTick())" in recv_be
       and "super.doWork();" in recv_be)
-check("②-13 请求器：throttleTick() + 触发点接入（配置判定在节流之前，避免吞掉第一次请求）",
+# 第 131 轮：triggerRequest() 只剩转发壳 ⇒ 判据钉 3 参重载（真正的实现）
+_trigger_impl = method_body(
+    req_be, "public void triggerRequest(@Nullable final ServerPlayer asker,") or ""
+check("②-13 请求器：throttleTick() + 触发点接入（配置判定在节流之前，避免吞掉第一次请求；"
+      "第 131 轮起闸门恒放行，真正的节拍是 SenderDelivery 固定常量）",
       method_body(req_be, "public boolean throttleTick()") is not None
-      and "if (!isProperlyConfigured())" in method_body(req_be, "public void triggerRequest()")
-      and "if (!throttleTick())" in method_body(req_be, "public void triggerRequest()"))
+      and "if (!isProperlyConfigured())" in _trigger_impl
+      and "if (!throttleTick())" in _trigger_impl
+      and "SenderDelivery.FIXED_BATCHES_PER_TICK" in req_be)
 
 # ======================================================================================
 # ③ 界面与方块实体的充电速率同源（界面不再自写 <<）
@@ -474,23 +482,33 @@ check("③-10 行为：旧界面写法（`base << power`）在**未溢出**的�
       and (8192 << 18) - 2 ** 32 < 0
       and j_rate_saturating(8192, 0, 6) == INT_MAX)
 
-# 两个新方块界面同样不许自算：数值只能来自菜单的同步 getter
-for rel, menu_rel, getter in ((RECEIVER_SCREEN, RECEIVER_MENU, "getThrottleBatchesPerTick"),
-                              (REQUESTER_SCREEN, REQUESTER_MENU, "getThrottleBatchesPerTick")):
-    screen_code = strip_comments(read(rel))
-    menu_code = strip_comments(read(menu_rel))
-    check("③-11 %s：节流数值只读菜单的 %s()（界面不自算；旧的「节拍间隔」getter 已删除）"
-          % (os.path.basename(rel), getter),
-          ("menu.%s()" % getter) in screen_code
-          and ("public int %s()" % getter) in menu_code
-          and "getThrottleIntervalTicks" not in screen_code
-          and "getThrottleIntervalTicks" not in menu_code
-          and "<<" not in screen_code)
-    check("③-12 %s：菜单的节流数值来自 ContainerData（服务端权威），不是本地重算"
-          % os.path.basename(menu_rel),
-          "addDataSlots(data)" in menu_code
-          and ("receiver.getContainerData()" in menu_code
-               or "requester.getContainerData()" in menu_code))
+# 两个新方块界面同样不许自算。第 131 轮：
+#   * 接收器界面重做成终端网格、所有状态句删除 ⇒ 它不再显示节拍；
+#   * 请求器设置界面整页删除 ⇒ 它连载节拍的界面都没有了；
+#   * 节拍只在发送网格的工具条上显示，读的是 S2C 快照（服务端权威）。
+_receiver_screen = strip_comments(read(RECEIVER_SCREEN))
+_receiver_menu = strip_comments(read(RECEIVER_MENU))
+_picker_screen = strip_comments(read("client/grid/ResourcePickerScreen.java"))
+check("③-11 接收器界面不再自算 / 不再显示节拍（状态句已按用户要求删除）",
+      "menu.getThrottleBatchesPerTick()" not in _receiver_screen
+      and "getThrottleIntervalTicks" not in _receiver_screen
+      and "<<" not in _receiver_screen)
+check("③-11b 请求器设置界面已删除（节拍不再由它显示）",
+      not os.path.isfile(os.path.join(
+          os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+          "src/main/java/cretae/cookiewyq/rs_create_compat/client/screen/"
+          "NetworkResourceRequesterScreen.java")))
+check("③-11c 发送网格的工具条节拍只读 S2C 快照（客户端零重算）",
+      "pacingBatchesPerTick, RsccNumberField.compact(pacingBatch)" in _picker_screen
+      and "getThrottleBatchesPerTick" not in _picker_screen
+      and "getThrottleIntervalTicks" not in _picker_screen
+      and "<<" not in _picker_screen)
+check("③-12 接收器菜单的节流数值来自 ContainerData（服务端权威），不是本地重算",
+      "addDataSlots(data)" in _receiver_menu
+      and "receiver.getContainerData()" in _receiver_menu)
+check("③-12b 请求器不再有节流 ContainerData / 菜单 getter（第 131 轮节拍固定）",
+      "addDataSlots(data)" not in strip_comments(read(REQUESTER_MENU))
+      and "getThrottleBatchesPerTick" not in strip_comments(read(REQUESTER_MENU)))
 
 
 # ======================================================================================
@@ -696,8 +714,11 @@ section("⑥ 请求器投递：守恒 + 重名拒绝 + 节流（含反例自证�
 
 req_raw = read(REQUESTER_BE)
 req_code = strip_comments(req_raw)
-trigger_body = method_body(req_code, "public void triggerRequest()")
-deliver_body = method_body(req_code, "private long deliverBatch(")
+delivery_code = strip_comments(read("support/SenderDelivery.java"))
+# 第 131 轮：triggerRequest() 是转发壳 ⇒ 钉 3 参重载；投递实现在 SenderDelivery.deliver
+trigger_body = method_body(
+    req_code, "public void triggerRequest(@Nullable final ServerPlayer asker,")
+deliver_body = method_body(delivery_code, "public static Result deliver(")
 req_dowork_body = method_body(req_code, "public void doWork()")
 cache_body = method_body(req_code, "private long applyToReceiverCache(")
 
@@ -707,7 +728,7 @@ def position(haystack, needle):
     return haystack.find(needle) if haystack else -1
 
 
-check("⑥-0 triggerRequest / deliverBatch / doWork / applyToReceiverCache 四个方法都在",
+check("⑥-0 triggerRequest / SenderDelivery.deliver / doWork / applyToReceiverCache 四个方法都在",
       all(body is not None for body in (trigger_body, deliver_body, req_dowork_body, cache_body)))
 
 check("⑥-1 节流在投递之前：triggerRequest 里 throttleTick() 先于 resolveReceiversByName()",
@@ -734,15 +755,16 @@ check("⑥-4 取料顺序：先 SIMULATE 再 EXECUTE，且 EXECUTE 只取 min(�
       and 0 <= position(deliver_body, "Action.SIMULATE") < position(deliver_body, "Action.EXECUTE")
       and "Math.min(available, acceptable)" in deliver_body)
 
-check("⑥-5 写入失败 ⇒ 余量 insert 回网络；网络也不收的进 returnBuffer 且随 NBT 落盘",
+check("⑥-5 写入失败 ⇒ 余量 insert 回网络；网络也不收的进发送源缓冲（feedback.buffer）"
+      "且随 NBT 落盘",
       deliver_body is not None
       and "storage.insert(resource, remainder, Action.EXECUTE" in deliver_body
-      and "bufferReturn(resource, kept)" in deliver_body
+      and "feedback.buffer(resource, kept)" in deliver_body
       and "ORDER_CODEC.encodeStart(ops(registries), returnBuffer)" in req_code)
 
-check("⑥-6 有节流：单批量只读 getThrottleBatch()，投递代码里不出现自写位移公式",
+check("⑥-6 有节流：单批量由调用方传入（batchSize 参数），投递代码里不出现自写位移公式",
       deliver_body is not None
-      and "getThrottleBatch()" in deliver_body
+      and "final long batch = Math.max(1L, batchSize);" in deliver_body
       and "<<" not in deliver_body)
 
 check("⑥-7 不每 tick 全网络扫描：doWork 里没有 resolveReceiversByName / getContainers，"
@@ -756,10 +778,16 @@ check("⑥-8 守恒自证在投递路径上：代码里显式校验 got == inser
       deliver_body is not None
       and "got != inserted + rolledBack + kept" in deliver_body)
 
+# 第 131 轮：投递期提示（receiver_full / no_stock / short_stock / unsupported）走
+# SenderDelivery 的 Feedback 回调，触发期提示（unconfigured / no_network / not_found /
+# ambiguous / no_orders）留方块实体 ⇒ 两个文件合起来必须齐全。
 check("⑥-9 失败提示齐备：未配置 / 未联网 / 找不到 / 重名 / 空清单 / 缓存满 / 网络没料 都有 hint",
       all(marker in req_code for marker in (
           'hint("unconfigured"', 'hint("no_network"', 'hint("not_found"', 'hint("ambiguous"',
-          'hint("no_orders"', 'hint("receiver_full"', 'hint("no_stock"')))
+          'hint("no_orders"'))
+      and all(marker in delivery_code for marker in (
+          'feedback.hint("receiver_full"', 'feedback.hint("no_stock"',
+          'feedback.hint("short_stock"', 'feedback.hint("unsupported"')))
 
 # ---------- 行为镜像：把 deliverBatch 的算术在 Python 里逐条重放 ----------
 def model_deliver(stock, cache_free, want, batch, execute_accepts, rollback_capacity):
@@ -990,8 +1018,11 @@ check("⑥-18 反例 E（节流写成恒放行）：同一判据必须判负",
 section("⑦ 一次触发投满（订单 80 ⇒ 80）+ 不过量 + 有界 + 不重复投（含反例）")
 
 req_code2 = strip_comments(read(REQUESTER_BE))
-trigger_body2 = method_body(req_code2, "public void triggerRequest()") or ""
-deliver_body2 = method_body(req_code2, "private long deliverBatch(") or ""
+# 第 131 轮：触发实现在 3 参重载，投递实现在 SenderDelivery.deliver（方块 / 终端共用）
+trigger_body2 = method_body(
+    req_code2, "public void triggerRequest(@Nullable final ServerPlayer asker,") or ""
+deliver_body2 = method_body(
+    strip_comments(read("support/SenderDelivery.java")), "public static Result deliver(") or ""
 dowork_body2 = method_body(req_code2, "public void doWork()") or ""
 
 
@@ -1008,15 +1039,16 @@ def judge_one_trigger_fills_order(body):
         errors.append("仍是改前的 min(订单数量, 单批量)：一次触发只投一批（订单 80 只投 64）")
     if "remaining -= inserted" not in body:
         errors.append("计划量没有按「真的写进接收器的量」递减（会重复投 / 过量）")
-    if "Math.min(MAX_BATCHES_PER_TICK, getThrottleBatchesPerTick())" not in body:
-        errors.append("单 tick 预算不是 min(硬上限, 每 tick 批数)：速度升级不影响投递节拍")
-    if not re.search(r"while \(remaining > 0L && batches < perTickBatches\)", body):
-        errors.append("没有「分批循环 + 每 tick 批数」的循环条件（可能只投一批，也可能无界）")
+    # 第 131 轮：预算 = min(硬上限, 发送源给出的 perTickBatches)；发送源当前给固定常量 8
+    if "Math.min(MAX_BATCHES_PER_TICK, Math.max(1, perTickBatches))" not in body:
+        errors.append("单 tick 预算不是 min(硬上限, 发送源批数)：节拍来源不明")
+    if not re.search(r"while \(remaining > 0L && batches < budget\)", body):
+        errors.append("没有「分批循环 + 每 tick 预算」的循环条件（可能只投一批，也可能无界）")
     if "batches++" not in body:
         errors.append("没有对「真的取到资源」的批计数（预算形同虚设）")
     if "carry.add(" not in body or "!stalled" not in body:
         errors.append("没有写回「本 tick 没投完的余量」（只有批数用完才续投，缺口不该无限重试）")
-    if "MAX_BATCHES_PER_TICK" not in req_code2:
+    if "MAX_BATCHES_PER_TICK" not in req_code2 and "MAX_BATCHES_PER_TICK" not in body:
         errors.append("缺少单 tick 批量硬上限常量")
     return errors
 
@@ -1028,7 +1060,7 @@ def judge_order_is_per_trigger(trigger, deliver, code):
     区块卸载 / 重进存档后要接着投。旧的「计划不落盘」判据随设计修正作废，见 judge_pending_persisted。）
     """
     errors = []
-    if "enqueuePendingPlan()" not in trigger:
+    if "enqueuePendingPlan(" not in trigger:
         errors.append("触发路径没有把「本次请求量」放进待投计划")
     for bad in ("orders.clear()", "orders.remove(", "orders.set(", "orders ="):
         if bad in deliver:
@@ -1059,8 +1091,10 @@ def judge_continuation_no_repeat(dowork, deliver, code):
         errors.append("doWork 没有「计划空 ⇒ 什么都不做」的短路（会每 tick 扫网络）")
     if "resolveReceiversByName" in dowork or "getContainers" in dowork:
         errors.append("续投每 tick 枚举网络（应该用记下的目标坐标）")
-    if "pendingPlan" not in deliver:
-        errors.append("deliverBatch 不读待投计划 ⇒ 续投无从谈起")
+    # 第 131 轮：deliver 只投「调用方给的 plan」；续投读 pendingPlan 的是方块实体的
+    # continuePendingDelivery()（同一份实现，终端走自己的队列）⇒ 判据重锚到方法边界。
+    if "plan" not in deliver:
+        errors.append("deliver 不接「待投计划」参数 ⇒ 续投无从谈起")
     return errors
 
 
@@ -1075,16 +1109,16 @@ check("⑦-2 源码：每批请求量 = min(remaining, batch)，且 EXECUTE 只�
       "Math.min(remaining, batch)" in deliver_body2
       and "Math.min(available, acceptable)" in deliver_body2)
 check("⑦-3 源码：单 tick 预算 = min(硬上限, 每 tick 批数)，且只有「真的取到资源」才计数",
-      "final int perTickBatches = Math.min(MAX_BATCHES_PER_TICK, getThrottleBatchesPerTick());"
+      "final int budget = Math.min(MAX_BATCHES_PER_TICK, Math.max(1, perTickBatches));"
       in deliver_body2
-      and "while (remaining > 0L && batches < perTickBatches)" in deliver_body2
+      and "while (remaining > 0L && batches < budget)" in deliver_body2
       and deliver_body2.find("batches++") > deliver_body2.find("Action.EXECUTE"))
 check("⑦-4 源码：只有「本 tick 批数用完」造成的剩余才自动跨 tick 续投；"
       "缓存满 / 网络不够属于缺口 ⇒ 明确提示后结束本次请求（不留在计划里每 tick 空转重试）",
       "stalled" in deliver_body2 and "carry.add(" in deliver_body2
       and "remaining > 0L && !stalled" in deliver_body2)
 check("⑦-5 源码：订单 80 而网络不够时明确提示数量（short_stock 报「要多少 / 一共投出多少」）",
-      'hint("short_stock", describeResource(resource), order.amount(),'
+      'feedback.hint("short_stock", describeResource(resource), order.amount(),'
       in deliver_body2
       and "order.amount() - remaining" in deliver_body2)
 check("⑦-6 源码：续投用记下的目标坐标取接收器（不重新枚举网络）",
@@ -1096,7 +1130,8 @@ check("⑦-6 源码：续投用记下的目标坐标取接收器（不重新枚�
 check("⑦-7 源码：「成功」= 投出过（或已排进待投计划）且没有缺口（订单 80 只投 50 不得报成功）",
       "setRequestSucceeded((moved > 0L || !pendingPlan.isEmpty()) && !shortfallThisDelivery)"
       in trigger_body2
-      and "shortfallThisDelivery = true;" in deliver_body2)
+      and "shortfallThisDelivery = result.shortfall();" in req_code2
+      and "shortfall = true;" in deliver_body2)
 
 # ---------- 反例自证：三种坏写法喂给同一批判据必须判负 ----------
 OLD_TRUNCATING = """
@@ -1218,10 +1253,14 @@ check("⑦-18a 行为·速度升级真的改变投递耗时：0 速（1 批/tick
 check("⑦-18b 行为·跨 tick 续投在低节拍下不重复投：3 tick 的 1 批/tick 投 150 件 = 64+64+22",
       model_ticks(150, 10 ** 6, 10 ** 6, 64, budget=j_batches_per_tick(0))[0] == 150
       and model_ticks(150, 10 ** 6, 10 ** 6, 64, budget=j_batches_per_tick(0))[1] == 3)
+# 第 131 轮：预算记账在「调用方」（方块实体按 gameTime 记 deliveryBudgetUsed），
+# 投递引擎只接收 / 返回本 tick 已花批数 ⇒ 判据重锚到 req_code2。
 check("⑦-18 源码·预算**按游戏 tick** 记账：同一 tick 内「触发 + 续投」合计也不超过本 tick 批数预算",
-      "if (now != deliveryBudgetTick)" in deliver_body2
-      and "int batches = deliveryBudgetUsed;" in deliver_body2
-      and "deliveryBudgetUsed = batches;" in deliver_body2)
+      "if (now != deliveryBudgetTick)" in req_code2
+      and "deliveryBudgetUsed," in req_code2
+      and "deliveryBudgetUsed = result.batchesUsed();" in req_code2
+      and "final int batchesUsed," in deliver_body2
+      and "return new Result(moved, shortfall, List.copyOf(carry), batches);" in deliver_body2)
 
 
 # ======================================================================================

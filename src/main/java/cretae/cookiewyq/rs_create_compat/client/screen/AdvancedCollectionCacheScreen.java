@@ -4,7 +4,6 @@ import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.client.AreaOutline;
 import cretae.cookiewyq.rs_create_compat.client.AreaStripBounds;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
-import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.menu.AdvancedCollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.menu.CollectionCacheMenu;
 import cretae.cookiewyq.rs_create_compat.network.AdvancedAreaSnapshotPacket;
@@ -39,13 +38,33 @@ import java.util.List;
  * {@code CollectionCacheJeiPlugin} 通过 {@code IGuiContainerHandler#getGuiExtraAreas} 报给 JEI，
  * 由 JEI 自己把物品列表挪开（契约 §3.3）。</p>
  *
- * <h2>第 106 轮按用户原话做的三件事（保留）</h2>
+ * <h2>第 131 轮（用户 1-4 张截图）：把三处「话」删干净</h2>
+ * <p>用户原话：「中的前三张图中框起的部分全部删除……这个物品图标不需要显示，因为已经可以直接打开编辑了。
+ * ……第四张图就是指的那一行提示文本非常丑，而且也是非常废话。」落地成四条：</p>
+ * <ol>
+ *     <li><b>状态带 hover tooltip 整条删除</b>：图 1 那团花字是「过滤图标 tooltip」+「状态带 tooltip」
+ *     两次 {@code renderTooltip} 叠在同一点造成的。本类不再覆写「状态带悬停 tooltip」、
+ *     也不再自己画「图标 tooltip」—— 基类那条 tooltip 只在<b>真问题</b>时给同一句话，
+ *     基础版画面因此逐字不变（契约 §3.A.6）；</li>
+ *     <li><b>匹配区空态提示删除</b>（图 2「先在右边点一个区域，再来配它的过滤」）：
+ *     不再覆写基类那个「匹配区空态提示」钩子，基类那份空实现就是本屏的最终行为；</li>
+ *     <li><b>区域条行内过滤图标删除</b>（图 3）：见 {@link AreaStripPanel}；</li>
+ *     <li><b>橙色摘要行删除</b>（图 4「区域 5/5 · 只吸 1 种」）：状态带只在「真问题」时出字
+ *     （没接网络 / 未激活 / 缓存满 / 没装选定器 / 区域为空 / 维度不符），正常时一个字都不画；
+ *     右端那组 8px 过滤图标一并删除。判据仍在基类 {@code isStatusVisible}，本类不再有第二处例外。</li>
+ * </ol>
+ * <p>「正在编辑哪个区域」改由匹配区标题带（{@code matchRegionLabel()}）与区域条当前行共同表达 ——
+ * 上下文就贴在它的编辑对象头上，比 y210 那条离了整块缓存区的摘要行直觉得多。</p>
+ *
+ * <h2>第 106 轮按用户原话做的三件事（第 131 轮删掉其中第 2 条）</h2>
  * <ol>
  *     <li><b>清掉无用红字</b>（用户第 3 条）：「没匹配到 / 匹配到了但数量没达到」那一族状态句
  *     不再上屏（判据集中在基类 {@code CollectionCacheScreen#isStatusVisible}），
  *     只保留「网络未连接 / 未激活 / 区域不可用 / 缓存满」这类<b>真会让机器停摆</b>的原因；</li>
- *     <li><b>过滤器图标直显</b>（用户第 1 / 2 条）：状态带右端直接画「当前编辑区域吸什么」的物品图标
- *     （数据来自匹配窗口那份 S2C 快照，与 ghost 窗口同源），不再只有一句「只吸 4 种」；</li>
+ *     <li><b>过滤器图标直显</b>（第 106 轮的用户第 1 / 2 条）：<b>第 131 轮已整条删除</b> ——
+ *     用户新原话是「这个物品图标不需要显示，因为已经可以直接打开编辑了」，8px 图标本身比它省下的
+ *     那句话更难认，且右端图标正是状态带 tooltip 叠字的一半成因。图标绘制实现
+ *     {@link #drawFilterIcons} 保留给还在用它的旧「区域列表」界面，本屏不再调用；</li>
  *     <li><b>去掉叠在升级槽上的两颗按钮</b>：第 101 轮加的「◀ ▶」按钮在 {@code (78,219)} / {@code (92,219)}，
  *     而升级槽从 {@code x=76} 起 6 格 —— 那两颗按钮其实<b>压在升级槽 0 / 1 上</b>（玩家的升级物品显示不全）。
  *     区域切换改走侧栏（点行 = 选中 + 编辑该区域过滤），那两颗按钮删除。</li>
@@ -66,16 +85,11 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
     private static final int AREA_BTN_W = 22;
     private static final int AREA_BTN_H = 16;
 
-    // ---------- 状态带右端的过滤图标 ----------
-    /** 一屏最多画几个过滤图标（再多就画「+N」）。 */
-    private static final int FILTER_ICON_MAX = 5;
-    /** 图标绘制尺寸（像素）与格子间距：8px 图标 + 9px 间距 = 5 个共 45px。 */
+    // ---------- 过滤图标绘制（第 131 轮起本屏不再用，实现留给旧「区域列表」界面） ----------
+    /** 图标绘制尺寸（像素）与格子间距：8px 图标 + 9px 间距。 */
     private static final int FILTER_ICON_SIZE = 8;
     private static final int FILTER_ICON_PITCH = 9;
-    /** 图标区与状态文字之间的空隙。 */
-    private static final int FILTER_ICON_GAP = 4;
 
-    private static final int COLOR_SCOPE = 0xFFFF9F1C;
     private static final int COLOR_TEXT = 0xFF333333;
 
     @Nullable
@@ -83,12 +97,6 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
     /** 区域条（侧栏）。{@code init()} 重建；{@code render / mouse* / keyPressed / removed} 六处转发。 */
     @Nullable
     private AreaStripPanel strip;
-
-    /** 本帧图标区实际画了几个、从哪个 x 开始（命中测试与绘制同源）。 */
-    private int iconsDrawn;
-    private int iconsStartX;
-    /** 本帧要画的过滤图标（每帧重算；tooltip 与命中测试共用）。 */
-    private final List<MarkerEntry> frameIcons = new ArrayList<>();
 
     public AdvancedCollectionCacheScreen(final CollectionCacheMenu menu,
                                          final Inventory inventory,
@@ -273,58 +281,26 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
         guiGraphics.fill(frameX + 18, frameY - 1, frameX + 19, frameY + 19, AreaOutline.COLOR);
     }
 
-    /**
-     * 状态带（与基础版同一条 Menu y210 留白）。
-     * <p><b>优先级</b>：区域不可用（没装选定器 / 区域为空 / 维度不符）⇒ 先说「为什么一点都不吸」
-     * （这句由服务端状态码决定，与区域槽 tooltip 同源）；否则这条带就是「当前编辑区域的过滤摘要」，
-     * 右端直接画过滤图标 —— 用户第 1 条要的「直观方式直接显示」。</p>
-     * <p>第 104 轮口径照旧：<b>绝不做像素截断</b>，放不下就缩字号（≥0.6），完整原文在 hover tooltip。</p>
+    /*
+     * 【第 131 轮：状态带（Menu y210）本屏不再覆写 —— 这里是说明，不是方法】
+     *
+     * 用户原话（图 4）：「那一行提示文本非常丑，而且也是非常废话」。此前这里会把
+     * 「区域 5/5 · 只吸 1 种」这类<b>正常态摘要</b>画在状态带上，现在是：
+     *
+     *   ① 正常运转时一个字都不画（不占位、不留空底）；
+     *   ② 只有基类 isStatusVisible 认的「真问题」才出字（没接网络 / 未激活 / 缓存满 /
+     *      没装选定器 / 区域为空 / 维度不符）—— 这些才是「为什么不吸」的答案。
+     *
+     * 「在编辑哪个区域」没有丢：它挪到了匹配区标题带（matchRegionLabel()，就在那 48 格头顶）
+     * 与区域条的当前行（橙竖条 + ▶），比这条离了整块缓存区的摘要行更贴近编辑对象。
+     * 因此本类没有 drawStatusLine 覆写 —— 也不允许再有第二处状态带绘制出口。
      */
-    @Override
-    protected void drawStatusLine(final GuiGraphics guiGraphics) {
-        final Component stall = absorbStatusText();
-        if (stall != null) {
-            super.drawStatusLine(guiGraphics); // 停摆原因独占整条带（不画图标，信息优先）
-            iconsDrawn = 0;
-            frameIcons.clear();
-            return;
-        }
-        frameIcons.clear();
-        collectFrameIcons();
-        final int iconsWidth = frameIcons.isEmpty()
-            ? 0 : frameIcons.size() * FILTER_ICON_PITCH + FILTER_ICON_GAP;
-        final int textWidth = STATUS_LINE_W - iconsWidth;
-        final Component info = editAreaSummary();
-        drawStatusBand(guiGraphics, info, COLOR_SCOPE, textWidth);
-        if (!frameIcons.isEmpty()) {
-            iconsStartX = STATUS_LINE_X + STATUS_LINE_W - frameIcons.size() * FILTER_ICON_PITCH;
-            iconsDrawn = drawFilterIcons(guiGraphics, iconsStartX, STATUS_LINE_Y, frameIcons, FILTER_ICON_MAX);
-        } else {
-            iconsStartX = 0;
-            iconsDrawn = 0;
-        }
-    }
-
-    /** 本帧要画的过滤图标（= 当前编辑区域的第一页过滤条目；与 ghost 窗口同源）。 */
-    private void collectFrameIcons() {
-        final int editing = advancedMenu().getEditingAreaIndex();
-        if (editing < 0) {
-            return;
-        }
-        for (int i = 0; i < visibleMarkerCount() && frameIcons.size() < FILTER_ICON_MAX; i++) {
-            final MarkerEntry entry = visibleMarkerEntry(i);
-            if (entry == null || entry.isEmpty() || entry.fluid()) {
-                continue;
-            }
-            frameIcons.add(entry);
-        }
-    }
 
     /**
-     * 画一组过滤图标（第 106 轮，用户第 1 / 2 条；第 107 条口径：<b>图标 + 名字</b>，
-     * 完整注册 id 只进 tooltip）。
-     * <p>单实现两处用：高级主界面的状态带（8px）与区域条每行右侧 / 标记网格（8px）。
-     * 不复制一份到另一个类，避免两边图标大小 / 缩放口径漂移。</p>
+     * 画一组过滤图标（第 106 轮实现，<b>第 131 轮起本屏不再调用</b>）。
+     * <p>保留的唯一理由：旧「区域列表」界面（{@code AreaSelectorScreen}）与
+     * {@code AreaMarkScreen} 的 tooltip 仍在用它，删掉会连带改到别的界面（不在本轮写作用域内）。
+     * 本屏（状态带 / 区域条行内）一个图标都不画。</p>
      *
      * @return 实际画出的图标数
      */
@@ -360,29 +336,11 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
         guiGraphics.pose().popPose();
     }
 
-    /** 过滤图标的 tooltip：<b>本地化物品名 + 完整注册 id</b>（第 107 条：id 只进 tooltip）。 */
-    private void renderFilterIconTooltip(final GuiGraphics guiGraphics, final int mouseX,
-                                         final int mouseY) {
-        if (iconsDrawn <= 0 || frameIcons.isEmpty()) {
-            return;
-        }
-        final int baseY = topPos + STATUS_LINE_Y - 2;
-        final int baseX = leftPos + iconsStartX;
-        for (int i = 0; i < iconsDrawn && i < frameIcons.size(); i++) {
-            final int x = baseX + i * FILTER_ICON_PITCH;
-            if (mouseX < x || mouseX >= x + FILTER_ICON_PITCH
-                || mouseY < baseY || mouseY > baseY + FILTER_ICON_SIZE + 6) {
-                continue;
-            }
-            final List<Component> lines = filterIconTooltipLines(frameIcons.get(i));
-            guiGraphics.renderTooltip(font, lines, java.util.Optional.empty(), mouseX, mouseY);
-            return;
-        }
-    }
-
     /**
-     * 一条过滤图标的 tooltip 正文（<b>与区域条共用</b>，保证两处说同一件事）：
+     * 一条过滤图标的 tooltip 正文（<b>与旧「区域列表」界面共用</b>，保证两处说同一件事）：
      * 第一行本地化物品名，第二行完整注册 id（用户第 107 条），第三行需求数量。
+     * <p>第 131 轮：本屏不再有图标，因此也不再由本屏调用；保留是因为
+     * {@code AreaSelectorScreen} / {@code AreaMarkScreen} 还在用（不在本轮写作用域内）。</p>
      */
     public static List<Component> filterIconTooltipLines(final MarkerEntry entry) {
         final List<Component> lines = new ArrayList<>(3);
@@ -400,54 +358,26 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
         return lines;
     }
 
-    /**
-     * 状态带的悬停 tooltip：完整（1.0 倍）的句子 + 「当前编辑区域吸什么」的文字版（物品名列表）。
-     * <p>图标只有 8px，认不出的物品靠这里看名字；注册 id 也在每条的名字下一行（第 107 条口径）。</p>
+    /*
+     * 【第 131 轮：状态带 hover tooltip 整条删除】
+     *
+     * 图 1 那团叠在一起的花字有两个来源：本类此前的覆写（把「过滤图标 tooltip」+「状态带 tooltip」
+     * 两次 renderTooltip 打在同一个鼠标点上）。第 131 轮两者都删：
+     *   · 本屏不再有「图标 tooltip」（图标本身也删了，见 AreaStripPanel 行内与状态带右端）；
+     *   · 本屏不再覆写「状态带悬停 tooltip」—— 基类那份只在「真问题」时把同一句话再给一遍
+     *     （正常时状态带根本不画字，也就不会弹 tooltip），基础版画面因此逐字不变（契约 §3.A.6）。
      */
-    @Override
-    protected void renderStatusBandTooltip(final GuiGraphics guiGraphics, final int mouseX,
-                                           final int mouseY) {
-        renderFilterIconTooltip(guiGraphics, mouseX, mouseY);
-        if (!isOverStatusBand(mouseX, mouseY)) {
-            return;
-        }
-        final List<Component> lines = new ArrayList<>(4);
-        final Component areaStatus = absorbStatusText();
-        if (areaStatus != null) {
-            lines.add(areaStatus);
-        }
-        lines.add(statusLine(advancedMenu().getAreaStatus()));
-        lines.add(editAreaSummary());
-        if (advancedMenu().getEditingAreaIndex() < 0) {
-            lines.add(Component.translatable(LANG + "filter.howto"));
-        } else if (frameIcons.isEmpty()) {
-            lines.add(Component.translatable(LANG + "filter.empty.tip"));
-        } else {
-            for (final MarkerEntry entry : frameIcons) {
-                lines.addAll(filterIconTooltipLines(entry));
-            }
-        }
-        guiGraphics.renderTooltip(font, lines, java.util.Optional.empty(), mouseX, mouseY);
-    }
 
     /**
-     * 点击状态带右端的过滤图标 = 展开区域条（在那里可以「配标记」）。
-     * 单独给这条命中，是因为图标区只有 45px，落在 {@link #isOverStatusBand} 里但语义不同。
+     * 鼠标点击：<b>侧栏优先</b>（它在 GUI 右边，与 GUI 的槽位 / 按钮零重叠，顺序只决定「谁在上层」），
+     * 其余整条交给基类。
+     * <p>第 131 轮：状态带右端那组过滤图标的命中区随图标一起删除 —— 本屏点状态带不再有任何动作。</p>
      */
     @Override
     public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
         // ① 侧栏先吃（它在 GUI 右边，与 GUI 的槽位 / 按钮零重叠，顺序只是「谁在谁上面」）
         if (strip != null && strip.mouseClicked(mouseX, mouseY, button)) {
             return true;
-        }
-        if (button == 0 && iconsDrawn > 0) {
-            final int baseY = topPos + STATUS_LINE_Y - 2;
-            if (mouseY >= baseY && mouseY <= baseY + FILTER_ICON_SIZE + 6
-                && mouseX >= leftPos + iconsStartX
-                && mouseX < leftPos + iconsStartX + iconsDrawn * FILTER_ICON_PITCH) {
-                toggleStrip();
-                return true;
-            }
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
@@ -550,52 +480,16 @@ public class AdvancedCollectionCacheScreen extends CollectionCacheScreen {
             editingIndex + 1).getString();
     }
 
-    /**
-     * 没选区域时匹配区里的那句提示（否则那 48 格显示的是<b>全局匹配区</b>，
-     * 玩家会以为自己在配「这个区域」的过滤）。
-     * <p>几何用字面量 7/32..251/105：那两对常量在基类是 {@code private}
-     * （{@code MATCH_PANEL_X1/Y1/X2/Y2}），这里是同一块面板的镜像；自检脚本钉住两边相等。</p>
+    /*
+     * 【第 131 轮：匹配区空态提示删除（图 2「先在右边点一个区域，再来配它的过滤」）】
+     *
+     * 用户原话：「前三张图中框起的部分全部删除」。这里原本覆写基类那个「匹配区空态提示」钩子，
+     * 在没选区域时往 48 格面板上叠一行黄字。现在本类不再覆写它 —— 基类那份空实现就是最终行为，
+     * 基础版（CollectionCacheScreen）画面因此逐字不变（契约 §3.A.6）。
+     *
+     * 为什么敢删：没选区域时匹配区确实是空的（高级版不用全局匹配区，见菜单 markerWindowEntries），
+     * 而「在编辑哪个区域」由匹配区标题带的 match_label.none 明确写着 —— 那行黄字是重复信息。
      */
-    @Override
-    protected void drawMatchAreaHint(final GuiGraphics guiGraphics) {
-        if (advancedMenu().getEditingAreaIndex() >= 0) {
-            return;
-        }
-        final int panelX = leftPos + 7;
-        final int panelY = topPos + 32;
-        final int panelW = 244;
-        final int panelH = 73;
-        // 半透明底：文字压在第 1 行 ghost 格子（16×16 图标）上仍然读得清
-        guiGraphics.fill(panelX, panelY + panelH / 2 - 10, panelX + panelW, panelY + panelH / 2 + 10,
-            0xB0000000);
-        final Component hint = Component.translatable(
-            "gui.rs_create_compat.collection_cache.match_area.pick_hint");
-        final int textW = Math.min(panelW - 8, font.width(hint));
-        RsccTextFit.drawFitLine(guiGraphics, font, hint,
-            panelX + (panelW - textW) / 2, panelY + panelH / 2 - 4, textW, 0xFFFFE08A);
-    }
-
-    /**
-     * 「正在编辑哪个区域的过滤器」摘要（第 101 轮加，第 106 轮保留语义、换了入口）：
-     * <ul>
-     *     <li>未选区域 ⇒ 灰字提示（用「区域」→ 侧栏里点一行）；</li>
-     *     <li>已选区域且<b>没有过滤条目</b> ⇒ 橙字「区域 N：不吸任何东西」——
-     *     让玩家一眼知道这个区域现在是<b>故意什么都不吸</b>（安全默认，解决「两台机器互相吸放」）；</li>
-     *     <li>已选区域有过滤 ⇒ 橙字「区域 N/M · 只吸 K 种」（右侧图标就是这 K 种）。</li>
-     * </ul>
-     */
-    private Component editAreaSummary() {
-        final AdvancedCollectionCacheMenu advanced = advancedMenu();
-        final int count = advanced.getAreaCount();
-        final int current = advanced.getEditingAreaIndex();
-        if (current < 0) {
-            return Component.translatable(LANG + "filter.none", count);
-        }
-        final int filters = advanced.getAreaFilterCount(current);
-        return filters <= 0
-            ? Component.translatable(LANG + "filter.row.empty", current + 1, count)
-            : Component.translatable(LANG + "filter.row", current + 1, count, filters);
-    }
 
     /**
      * 区域槽的 tooltip：空槽给出「放什么、为什么」，有物品时把选定器的<b>状态</b>追加在物品 tooltip 之后。

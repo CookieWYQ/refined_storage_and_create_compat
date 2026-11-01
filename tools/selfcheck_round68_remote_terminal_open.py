@@ -111,12 +111,15 @@ check("RsccTerminalLocator.locate(player)" in handle and "item.useFromShortcut(p
 item = code_only(read("item"))
 item_open_body = java_body(item, "public void openModeScreen(")
 modes = re.findall(r"case MODE_([A-Z_]+)\s*->", item_open_body)
-# 第 101 轮新增 MODE_ENERGY（能耗监视），具名分支 5 → 6、MODE_COUNT 6 → 7。
+# 第 101 轮新增 MODE_ENERGY、第 131 轮新增 MODE_SEND（发送）：具名分支数随 MODE_COUNT 增长。
 # 判据本身没变：**除 MODE_GRID 外的每一档都必须有一条具名分支**，其余由 default 承接 MODE_GRID，
-# 合起来覆盖 MODE_COUNT 档。
-check(len(modes) == 6 and "default ->" in item_open_body
-      and 'MODE_COUNT = 7' in item,
-      "A4 物品：6 个具名模式各有一条分支 + default（承接 MODE_GRID）覆盖全部 7 个模式",
+# 合起来覆盖 MODE_COUNT 档。因此这里不再写死 6 / 7，而是从 MODE_COUNT 字面量派生 ——
+# 写死会把「本轮合法地新增一档」误报成回归；分支数 ≠ MODE_COUNT - 1 时仍判负。
+_mode_count_match = re.search(r"MODE_COUNT\s*=\s*(\d+)\s*;", item)
+_mode_count = int(_mode_count_match.group(1)) if _mode_count_match else -1
+check(_mode_count > 0 and len(modes) == _mode_count - 1 and "default ->" in item_open_body,
+      "A4 物品：%d 个具名模式各有一条分支 + default（承接 MODE_GRID）覆盖全部 %d 个模式"
+      % (len(modes), _mode_count),
       "%s + default(MODE_GRID)" % ",".join(modes))
 shortcut_body = java_body(item, "public void useFromShortcut(")
 check("openModeScreen(" in shortcut_body and "type" not in shortcut_body

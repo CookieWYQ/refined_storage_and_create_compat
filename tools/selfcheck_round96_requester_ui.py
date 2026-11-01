@@ -56,9 +56,20 @@ FILES = {
     "menu_q": PKG + "/menu/NetworkResourceRequesterMenu.java",
     "pkt_order": PKG + "/network/RequesterOrderPacket.java",
     "pkt_sync": PKG + "/network/SyncRequesterConfigPacket.java",
-    "scr_q": PKG + "/client/screen/NetworkResourceRequesterScreen.java",
+    # 第 131 轮 C 组：请求器设置界面整页删除 ⇒ 变成**反向门禁**（见 GONE_FILES）
     "scr_grid": PKG + "/client/grid/ResourcePickerScreen.java",
     "menu_grid": PKG + "/client/grid/ResourcePickerMenu.java",
+    # 第 131 轮新增：目标选择子界面 / 缺口询问子界面 / 发送源三层抽象
+    "scr_target": PKG + "/client/screen/SenderTargetSelectScreen.java",
+    "scr_prompt": PKG + "/client/screen/SenderCraftPromptScreen.java",
+    "sender_backend": PKG + "/support/SenderBackend.java",
+    "req_backend": PKG + "/support/RequesterSenderBackend.java",
+}
+
+# 第 131 轮 C 组：必须**不存在**的文件（设置界面整页删除 + 它的唯一发包通道）
+GONE_FILES = {
+    "请求器设置界面": PKG + "/client/screen/NetworkResourceRequesterScreen.java",
+    "「打开网格」死通道包": PKG + "/network/OpenRequesterPickerPacket.java",
 }
 LANG_FILES = {
     "zh": "src/main/resources/assets/rs_create_compat/lang/zh_cn.json",
@@ -71,20 +82,46 @@ RP = "gui.rs_create_compat.resource_picker."
 # ---------------------------------------------------------------------------
 # 本轮新增语言键（由 Lead 统一写入 lang/*.json；中英原文见回报）
 # ---------------------------------------------------------------------------
+# 第 131 轮 C 组：设置面板的 7 条键（order.summary / open_grid.*）随界面删除；
+# 「工具栏设置」两条（toolbar.settings / .hint）也删；新增目标子界面 + 缺口询问两个界面的键。
 NEW_LANG_KEYS = [
     # 网格界面：工具条
     RP + "msg.open_failed",
     RP + "toolbar.rate", RP + "toolbar.target.hint", RP + "toolbar.send.hint",
-    RP + "toolbar.settings", RP + "toolbar.settings.hint",
     # 网格界面：订单清单
     RP + "order.search", RP + "order.search.hint", RP + "order.empty",
     RP + "order.no_match", RP + "order.filtered", RP + "order.delete.hint",
     RP + "order.amount.hint", RP + "order.amount.step.item", RP + "order.amount.step.fluid",
     RP + "msg.select_first", RP + "msg.bad_amount",
-    # 设置小面板：订单摘要 + 大按钮
-    QP + "order.summary", QP + "order.summary.hint",
-    QP + "order.open_grid", QP + "order.open_grid.empty", QP + "order.open_grid.n",
-    QP + "order.open_grid.hint", QP + "order.open_grid.no_network",
+    # 目标选择子界面（第 131 轮新增）
+    "gui.rs_create_compat.sender_target_select.title",
+    "gui.rs_create_compat.sender_target_select.current",
+    "gui.rs_create_compat.sender_target_select.current.none",
+    "gui.rs_create_compat.sender_target_select.empty",
+    "gui.rs_create_compat.sender_target_select.hint",
+    "gui.rs_create_compat.sender_target_select.search_hint",
+    "gui.rs_create_compat.sender_target_select.search.tip",
+    "gui.rs_create_compat.sender_target_select.confirm",
+    "gui.rs_create_compat.sender_target_select.confirm.tip",
+    "gui.rs_create_compat.sender_target_select.cancel",
+    "gui.rs_create_compat.sender_target_select.cancel.tip",
+    # 缺口询问子界面（第 131 轮 F 组新增）
+    "gui.rs_create_compat.sender_craft_prompt.title",
+    "gui.rs_create_compat.sender_craft_prompt.line",
+    "gui.rs_create_compat.sender_craft_prompt.craft",
+    "gui.rs_create_compat.sender_craft_prompt.craft.tip",
+    "gui.rs_create_compat.sender_craft_prompt.send_only",
+    "gui.rs_create_compat.sender_craft_prompt.send_only.tip",
+]
+
+# 第 131 轮 C 组：这些键**必须不存在**（设置界面删了，键也删了；留着就是没人用的死文案）
+# 只列**已由 Lead 删除**的键（第 131 轮 lang 收尾时删的就是这两条）。
+# 注意：`network_resource_requester.order.summary*` / `order.open_grid*` 这 7 条设置面板键
+# **目前仍留在 lang 里**（Lead 的写域，本轮只删了 resource_picker 的两条）⇒ 已作为死文案回报，
+# 不在本脚本里判负（判了会变成「脚本要求 Lead 改文件」）。
+GONE_LANG_KEYS = [
+    RP + "toolbar.settings",
+    RP + "toolbar.settings.hint",
 ]
 
 # round86 已禁的玩家可见措辞（新键的值不得再带回来）
@@ -178,7 +215,7 @@ def check_a1(src, zh, en):
     return True, "只调菜单的 openPickerFor"
 
 
-@check("A2", "打不开网格时：actionbar 一句原因 + 退回设置界面（不是点了没反应）")
+@check("A2", "打不开网格时：两种原因各有 actionbar（没接网络 / 这次没开成），不是点了没反应")
 def check_a2(src, zh, en):
     b = body(src["block_q"], r"protected InteractionResult useWithoutItem\(")
     if b is None:
@@ -187,58 +224,68 @@ def check_a2(src, zh, en):
         "没接网络的原因": r"NetworkResourceRequesterMenu\.MSG_PICKER_NO_NETWORK",
         "openMenu 被拒的原因": r"NetworkResourceRequesterMenu\.MSG_PICKER_OPEN_FAILED",
         "actionbar": r"displayClientMessage\(",
-        "退回设置界面": r"openMenu\(state\.getMenuProvider\(level, pos\), pos\)",
-        "设置界面也可能开不成": r"\.isEmpty\(\)\) \{\s+serverPlayer\.displayClientMessage",
     }.items() if not has(b, pattern)]
     if missing:
         return False, "useWithoutItem 缺少：" + "、".join(missing)
     if not has(b, r"isPickerConnected\(requester\)"):
         return False, "「为什么没打开」没有走统一的连通性判据（isPickerConnected）"
-    return True, "两种失败原因各有 actionbar + 退回设置界面 + 二次 openMenu 也判空"
+    # 第 131 轮反转：设置界面已整页删除 ⇒ 不再断言「退回设置界面 + 它的 openMenu 判空」。
+    # 现在唯一的配置入口是网格；打不开时只有 actionbar（不能静默）。
+    if has(b, r"openSettingsFor\("):
+        return False, "打不开时还在往已删除的设置界面跳（openSettingsFor 已不存在）"
+    return True, "两种失败原因各有 actionbar；配置入口只剩网格"
 
 
-@check("A3", "两条打开入口（右键 / 设置面板按钮）都只认 ResourcePickerMenu#openFor 一处判据")
+@check("A3", "唯一打开入口：菜单 openPickerFor → ResourcePickerMenu#openFor；设置面板那条入口已删")
 def check_a3(src, zh, en):
     menu = src["menu_q"]
-    open_for = r"ResourcePickerMenu\s*\.openFor\(player, requester\)"
-    picker = body(menu, r"public void openResourcePicker\(final int amount\)")
-    if picker is None:
-        return False, "找不到 openResourcePicker"
-    if not has(picker, open_for):
-        return False, "openResourcePicker 没有调 ResourcePickerMenu#openFor（%s）" % at("menu_q", r"openResourcePicker", src)
     wrapper = body(menu, r"public static boolean openPickerFor\(")
-    if wrapper is None or not has(wrapper, open_for):
-        return False, "openPickerFor 没有委托给 ResourcePickerMenu#openFor"
-    if not has(picker, r"MSG_PICKER_NO_NETWORK"):
-        return False, "旧入口打不开时没有回提示"
-    return True, "两个入口都只调 openFor，且都会在失败时给提示"
+    if wrapper is None:
+        return False, "找不到 openPickerFor"
+    if not has(wrapper, r"ResourcePickerMenu\s*\n?\s*\.openFor\("):
+        return False, "openPickerFor 没有委托给 ResourcePickerMenu#openFor（判据会分叉）"
+    if not has(menu, r"MSG_PICKER_NO_NETWORK"):
+        return False, "打不开时没有回提示"
+    # 第 131 轮反转：只有「右键 → 网格」一条入口；旧「设置面板里的打开网格按钮」整条删除
+    banned = [name for name, pattern in {
+        "旧打开网格入口": r"public void openResourcePicker\(",
+        "设置界面入口": r"openSettingsFor\(",
+        "旧包通道": r"OpenRequesterPickerPacket",
+        "设置动作码": r"ACTION_OPEN_SETTINGS",
+    }.items() if has(menu, pattern) or has(src["pkt_order"], pattern)]
+    if banned:
+        return False, "旧的第二条入口还在：" + "、".join(banned)
+    return True, "只有 openPickerFor → openFor 一条路径"
 
 
-@check("A4", "「设置」按钮的服务端入口：解析当前菜单所属请求器 + 两道校验后才 openMenu")
+@check("A4", "设置界面的服务端入口已删除（openSettingsFor / 「设置」按钮 / 切界面动作码全无）")
 def check_a4(src, zh, en):
-    b = body(src["menu_q"], r"public static void openSettingsFor\(")
-    if b is None:
-        return False, "找不到 NetworkResourceRequesterMenu#openSettingsFor"
-    missing = [name for name, pattern in {
-        "解析当前菜单": r"requesterOf\(player\.containerMenu\)",
-        "服务端权威": r"isServerAuthoritative\(requester\)",
-        "距离/存在性": r"stillValidFor\(player, requester\)",
-        "打开设置菜单": r"player\.openMenu\(",
-    }.items() if not has(b, pattern)]
-    if missing:
-        return False, "openSettingsFor 缺少：" + "、".join(missing)
-    return True, "归属 + stillValidFor + openMenu"
+    problems = []
+    if has(src["menu_q"], r"public static void openSettingsFor\("):
+        problems.append("menu_q 还留着 openSettingsFor")
+    if has(src["pkt_order"], r"ACTION_OPEN_SETTINGS"):
+        problems.append("RequesterOrderPacket 还留着 ACTION_OPEN_SETTINGS")
+    if has(src["scr_grid"], r"settingsButton"):
+        problems.append("网格工具条还留着「设置」按钮")
+    if problems:
+        return False, "；".join(problems)
+    # 正向项：设置界面删了，但右键必须仍然进网格（否则玩家彻底失去配置入口）
+    b = body(src["block_q"], r"protected InteractionResult useWithoutItem\(") or ""
+    if "openPickerFor" not in b:
+        return False, "设置界面删了，右键也没进网格（玩家没了配置入口）"
+    return True, "三条痕迹全无；右键 → 网格唯一入口仍在"
 
 
-@check("A5", "切换界面借既有 C2S 包的动作码，不新增 payload 注册")
+@check("A5", "动作码只剩 4 个（增 / 删 / 改 / 清空）：设置界面删除后不再有「切界面」动作")
 def check_a5(src, zh, en):
     pkt = src["pkt_order"]
-    if not has(pkt, r"ACTION_OPEN_SETTINGS\s*=\s*4\s*;"):
-        return False, "RequesterOrderPacket 没有 ACTION_OPEN_SETTINGS = 4"
-    if not has(pkt, r"case ACTION_OPEN_SETTINGS -> NetworkResourceRequesterMenu\.openSettingsFor\(player\);"
-                    ):
-        return False, "包处理没有分发到 openSettingsFor（点了没反应）"
-    return True, "ACTION_OPEN_SETTINGS = 4 → openSettingsFor(player)"
+    for token, value in (("ACTION_ADD", 0), ("ACTION_REMOVE", 1),
+                         ("ACTION_SET_AMOUNT", 2), ("ACTION_CLEAR", 3)):
+        if not has(pkt, r"%s\s*=\s*%d\s*;" % (token, value)):
+            return False, "动作码 %s 不在（协议形状变了）" % token
+    if has(pkt, r"ACTION_OPEN_SETTINGS|ACTION_[A-Z_]+\s*=\s*4\s*;"):
+        return False, "又出现第 5 个动作码（设置界面已删，切界面通道不该存在）"
+    return True, "动作码 0..3，无「切界面」动作"
 
 
 @check("A6", "三种边界（未连网络 / 目标未设 / 方块被拆）都提示清楚且不会把机器锁死")
@@ -246,27 +293,33 @@ def check_a6(src, zh, en):
     problems = []
     # ① 未连网络：网格打不开 **不等于** 机器不可配置 —— 必须退回设置面板 + 一句原因，
     #    否则一台刚放下、还没接网络的请求器永远没法命名目标（死锁）。
+    # ① 第 131 轮反转：设置界面已删除 ⇒ 不再要求「退回设置界面」；但「打不开必须有提示」仍在。
     block = body(src["block_q"], r"protected InteractionResult useWithoutItem\(") or ""
-    if "openMenu(state.getMenuProvider(level, pos), pos)" not in block:
-        problems.append("没接网络时没有退回设置界面（新机器无法设目标 ⇒ 死锁）")
+    if "displayClientMessage" not in block:
+        problems.append("没接网络时界面打不开又没有提示（点了没反应）")
+    if "openSettingsFor" in block or "openSettingsFor" in src["menu_q"]:
+        problems.append("还在往已删除的设置界面跳（openSettingsFor）")
     # ② 目标未设定：网格仍要能开（不能把 isProperlyConfigured 当打开门槛，否则玩家没法先加订单）；
     #    「立即发送」由服务端回 MSG_TRIGGER_UNCONFIGURED，客户端不许自己静默 return。
     open_for = body(src["menu_grid"], r"public static boolean openFor\(") or ""
     if "isProperlyConfigured" in open_for:
         problems.append("网格打开被「目标未设定」挡掉（玩家无法先加订单）")
-    if "MSG_TRIGGER_UNCONFIGURED" not in src["menu_q"]:
+    # 第 131 轮：提示常量搬到发送源层（RequesterSenderBackend），不再是菜单静态字段
+    if "MSG_TRIGGER_UNCONFIGURED" not in src["req_backend"]:
         problems.append("目标未设定时发送没有明确提示")
     send_now = body(src["scr_grid"], r"private void sendNow\(\)") or ""
     if not send_now or "return" in send_now:
         problems.append("「立即发送」在客户端自己提前 return（服务端提示永远看不到）")
     # ③ 方块被拆 / 被换掉：界面必须自己关掉（按方块实体身份判断），不能对着一台不存在的机器操作。
+    # 第 131 轮：有效性判据统一收到「发送源」接口（方块 / 终端两套实现共用一条）：
+    # backend.stillValid(player) = 方块还在且够近（终端 = 物品还在），backend.isConnected() = 网络可用。
     still = body(src["menu_grid"], r"public boolean stillValid\(final Player player\)") or ""
-    if "stillValidFor(player, requester)" not in still \
-            or "isConnectedToNetwork(requester)" not in still:
-        problems.append("网格菜单 stillValid 没有复核「方块还在 + 网络可用」")
+    if "backend.stillValid(serverPlayer)" not in still \
+            or "backend.isConnected()" not in still:
+        problems.append("网格菜单 stillValid 没有复核「发送源还在 + 网络可用」")
     stay = body(src["menu_grid"], r"public boolean canMenuStayOpen\(final Player player\)") or ""
-    if "getBlockEntity(requester.getBlockPos()) != requester" not in stay:
-        problems.append("网格没有按方块实体身份判断归属（拆掉 / 换掉后界面还开着）")
+    if "backend.stillValid(serverPlayer)" not in stay:
+        problems.append("网格没有按发送源身份判断归属（拆掉 / 换掉后界面还开着）")
     if problems:
         return False, "；".join(problems)
     return True, "未连网络退回设置 / 目标未设由服务端提示 / 拆方块自动关界面"
@@ -274,8 +327,8 @@ def check_a6(src, zh, en):
 
 @check("A7", "本轮没有新增任何刷屏诊断（这几个文件里 0 条日志调用）")
 def check_a7(src, zh, en):
-    logged = [rel for rel in ("scr_grid", "scr_q", "menu_grid", "pkt_order", "pkt_sync",
-                              "block_q") if "LOGGER" in src[rel]]
+    logged = [rel for rel in ("scr_grid", "scr_target", "scr_prompt", "menu_grid",
+                              "pkt_order", "pkt_sync", "block_q") if "LOGGER" in src[rel]]
     if logged:
         # 用户第 5 条口径：新诊断必须「状态变化才记」，不允许每帧 / 每 tick 刷；
         # 本轮干脆一条新日志都没有（失败原因全部走 S2C 提示行），因此这里直接禁止。
@@ -286,7 +339,7 @@ def check_a7(src, zh, en):
 # ======================================================================================
 # ③ 网格顶部工具条（目标 / 发送 / 清空 / 速率 / 设置）
 # ======================================================================================
-@check("B1", "网格界面真的有顶部工具条（在 GUI 上方，不挤右列），五个控件都在")
+@check("B1", "网格界面真的有顶部工具条（在 GUI 上方，不挤右列），四个控件都在，且没有「设置」按钮")
 def check_b1(src, zh, en):
     scr = src["scr_grid"]
     needed = {
@@ -295,29 +348,38 @@ def check_b1(src, zh, en):
         "目标按钮": r"targetButton = Button\.builder\(",
         "发送按钮": r"sendButton = Button\.builder\(",
         "清空按钮": r"clearButton = Button\.builder\(",
-        "设置按钮": r"settingsButton = Button\.builder\(",
         "速率文字": r"renderToolbarText\(",
     }
     missing = [name for name, pattern in needed.items() if not has(scr, pattern)]
     if missing:
         return False, "工具条缺少：" + "、".join(missing)
-    return True, "GUI 上方的工具条 + 5 个控件"
+    # 第 131 轮反转：设置界面删了 ⇒ 「设置」按钮不许回来（否则又会出现一个点了没作用的按钮）
+    if has(scr, r"settingsButton"):
+        return False, "工具条又把「设置」按钮加回来了（目标界面已删除）"
+    return True, "GUI 上方的工具条 + 4 个控件（无设置按钮）"
 
 
-@check("B2", "工具条五个动作都接到既有 C2S 包（目标 / 发送 / 清空 / 设置）")
+@check("B2", "工具条四个动作都接到既有 C2S 包（目标子界面 / 发送 / 清空）；速率读服务端字段")
 def check_b2(src, zh, en):
     scr = src["scr_grid"]
+    target = src["scr_target"]
     needed = {
-        "切目标": r"new SetRequesterTargetPacket\(getMenu\(\)\.containerId, next\.name\(\)\)",
+        "目标按钮开子界面": r"new SenderTargetSelectScreen\(this, getMenu\(\)\.containerId",
         "立即发送": r"new TriggerRequesterPacket\(getMenu\(\)\.containerId\)",
         "清空订单": r"RequesterOrderPacket\.ACTION_CLEAR",
-        "设置": r"RequesterOrderPacket\.ACTION_OPEN_SETTINGS",
         "速率文字读服务端字段": r"pacingBatchesPerTick, RsccNumberField\.compact\(pacingBatch\)",
     }
     missing = [name for name, pattern in needed.items() if not has(scr, pattern)]
     if missing:
         return False, "工具条动作缺少：" + "、".join(missing)
-    return True, "四个动作 + 速率文字全部就位"
+    # 第 131 轮：目标提交挪进子界面（只带名字），旧「左键切下一台」直发 next.name() 必须没了
+    if not has(target, r"new SetRequesterTargetPacket\(containerId, selected\.name\(\)\)"):
+        return False, "目标子界面没有把选中名字发给服务端"
+    if has(scr, r"new SetRequesterTargetPacket\(getMenu\(\)\.containerId, next\.name\(\)\)"):
+        return False, "旧的「左键切下一台」直发目标还在（应改走子界面）"
+    if has(scr, r"ACTION_OPEN_SETTINGS"):
+        return False, "格子里还在发「切设置界面」动作码（设置界面已删）"
+    return True, "目标走子界面 + 发送 / 清空 + 速率文字全部就位"
 
 
 # ======================================================================================
@@ -326,7 +388,7 @@ def check_b2(src, zh, en):
 @check("C1", "订单清单没有人为格子上限（不再有 4×2 / ORDER_VISIBLE / MAX_ORDERS 这类常量）")
 def check_c1(src, zh, en):
     forbidden = []
-    for rel in ("scr_grid", "menu_q", "scr_q"):
+    for rel in ("scr_grid", "menu_q"):
         code = strip_comments(src[rel])
         for token in ("ORDER_COLS", "ORDER_ROWS", "ORDER_VISIBLE", "MAX_ORDER", "MAX_ORDERS"):
             if token in code:
@@ -459,7 +521,7 @@ def check_d1(src, zh, en):
 @check("E1", "两个界面都只有 sendToServer：不写世界、不查能力、不读方块实体、不直接改配置")
 def check_e1(src, zh, en):
     problems = []
-    for rel in ("scr_grid", "scr_q"):
+    for rel in ("scr_grid", "scr_target", "scr_prompt"):
         text = src[rel]
         if "PacketDistributor.sendToServer" not in text:
             problems.append("%s 没有 C2S 发包" % rel)
@@ -477,16 +539,19 @@ def check_e1(src, zh, en):
 def check_e2(src, zh, en):
     grid = src["scr_grid"]
     problems = []
-    if not has(grid, r"messageKey = QLANG \+ \"target\.known\.none\";"):
-        problems.append("切目标但本网络没有接收器时没提示")
+    # 第 131 轮：目标入口从「左键切下一台」改成子界面 ⇒ 提示改成两条（网格侧 + 子界面侧）
+    if not has(grid, r"Component\.translatable\(QLANG \+ \"target\.known\.none\"\)"):
+        problems.append("本网络没有接收器时网格目标按钮没有说明")
+    if not has(src["scr_target"], r'Component\.translatable\(LANG \+ "empty"\)'):
+        problems.append("目标子界面候选为空时没有说明（一个灰掉的滚轮像坏了）")
     if not has(grid, r"messageKey = LANG \+ \"msg\.select_first\";"):
         problems.append("没选中条目就改数量时没提示")
     if not has(grid, r"messageKey = LANG \+ \"msg\.bad_amount\";"):
         problems.append("数量非法时没提示")
     if not has(grid, r"messageKey = QLANG \+ \"msg\.order_bad_index\";"):
         problems.append("右键移除一个不存在的条目时没提示")
-    if not has(src["scr_q"], r"messageKey = NetworkResourceRequesterMenu\.MSG_PICKER_NO_NETWORK;"):
-        problems.append("设置面板里「打开网格」在未连网络时没提示")
+    if not has(src["block_q"], r"MSG_PICKER_NO_NETWORK"):
+        problems.append("右键打不开网格时没提示（设置界面已删，这条 actionbar 是唯一说明）")
     if problems:
         return False, "；".join(problems)
     return True, "五条静默路径都有消息"
@@ -495,38 +560,51 @@ def check_e2(src, zh, en):
 # ======================================================================================
 # ⑦ 设置小面板：4×2 订单格删掉 → 摘要 + 大按钮
 # ======================================================================================
-@check("F1", "设置小面板不再画 4×2 订单格（人为上限删除），改成摘要行 + 大按钮")
+@check("F1", "设置面板整页删除：摘要 / 大按钮 / 4×2 订单格 / 「打开网格」包全部零残留（不许改名复活）")
 def check_f1(src, zh, en):
-    scr = src["scr_q"]
-    gone = [token for token in ("renderOrderCells", "orderCellAt", "ORDER_VISIBLE",
-                                "ORDER_COLS", "ORDER_ROWS")
-            if token in scr]
+    grid = src["scr_grid"]
+    menu = src["menu_q"]
+    gone = [name for name, pattern in {
+        "摘要行": r"private Component summaryLine\(",
+        "摘要文案键": r'LANG \+ "order\.summary"',
+        "大按钮": r"openGridButton",
+        "4×2 订单格": r"renderOrderCells|orderCellAt|ORDER_VISIBLE|ORDER_COLS|ORDER_ROWS",
+        "打开网格包": r"OpenRequesterPickerPacket",
+    }.items() if has(grid, pattern) or has(menu, pattern)]
     if gone:
-        return False, "设置面板仍残留：" + "、".join(gone)
+        return False, "设置面板已删，却还有它的残留：" + "、".join(gone)
+    # 正向项：订单内容没有跟着设置界面一起消失 —— 该在网格里的都还在（C 组 §4.5 第 5 条）
     needed = {
-        "摘要行": r"private Component summaryLine\(\)",
-        "摘要文案": r"LANG \+ \"order\.summary\"",
-        "大按钮": r"openGridButton = Button\.builder\(openGridLabel\(\)",
-        "按钮文案": r"private Component openGridLabel\(\)",
-        "打开网格包": r"new OpenRequesterPickerPacket\(menu\.containerId, 1\)",
+        "订单清单": r"List<Row> rows",
+        "增单动作": r"RequesterOrderPacket\.ACTION_ADD",
+        "删除动作": r"RequesterOrderPacket\.ACTION_REMOVE",
+        "改数量动作": r"RequesterOrderPacket\.ACTION_SET_AMOUNT",
     }
-    missing = [name for name, pattern in needed.items() if not has(scr, pattern)]
+    missing = [name for name, pattern in needed.items() if not has(grid, pattern)]
     if missing:
-        return False, "设置面板缺少：" + "、".join(missing)
-    return True, "摘要 + 大按钮，格子已删"
+        return False, "设置面板删掉后网格里缺少：" + "、".join(missing)
+    return True, "设置面板五件寿衣全无；订单增删改仍在网格里"
 
 
-@check("F2", "设置面板的按钮不再「变灰了事」（灰按钮 = 点了没反应）")
+@check("F2", "「变灰了事」不会回来：工具条按钮恒可点，只有 −/+ 在无选中时禁用且必有提示")
 def check_f2(src, zh, en):
-    scr = src["scr_q"]
-    updater = body(scr, r"private void updateButtons\(\)")
+    grid = src["scr_grid"]
+    updater = body(grid, r"private void updateButtons\(\)")
     if updater is None:
         return False, "找不到 updateButtons"
-    if has(updater, r"active = "):
-        return False, "updateButtons 仍在按状态禁用按钮（应改为给一句提示）"
-    if not has(scr, r"private void renderOpenGridTooltip\("):
-        return False, "大按钮没有 tooltip（未连网络时原因说不清）"
-    return True, "按钮恒可点 + tooltip 说明"
+    # 第 131 轮反转：设置面板已删（那段「灰按钮」代码随之消失）。等价纪律搬到网格：
+    # 只有 −/+ 步进允许在「没选中条目」时禁用，其余按钮恒可点；且禁用路径必须有文字说明。
+    disables = re.findall(r"(\w+)\.active = ", updater)
+    unexpected = [name for name in disables
+                  if name not in ("minusButton", "plusButton", "sendButton")]
+    if unexpected:
+        return False, "工具条按钮又按状态变灰了：" + "、".join(unexpected)
+    if not has(updater, r"minusButton\.active = hasSelection") \
+            or not has(updater, r"plusButton\.active = hasSelection"):
+        return False, "−/+ 的禁用条件不是「确实选中了一条」"
+    if not has(grid, r"private boolean renderAmountTooltip\("):
+        return False, "改数量的禁用原因没有 tooltip（灰按钮 = 点了没反应）"
+    return True, "只有 −/+ 按选中态禁用，且原因写进 tooltip"
 
 
 # ======================================================================================
@@ -542,7 +620,8 @@ def check_g1(src, zh, en):
         "解码批数": r"final int pacingBatchesPerTick = ByteBufCodecs\.VAR_INT\.decode\(buf\);",
         "解码批量": r"final long pacingBatch = ByteBufCodecs\.VAR_LONG\.decode\(buf\);",
         "构造带上": r"pacingBatchesPerTick, pacingBatch,", 
-        "of() 取 BE 值": r"requester\.getThrottleBatchesPerTick\(\), requester\.getThrottleBatch\(\),",
+        # 第 131 轮：节拍不再来自升级槽，改由发送源接口给出固定常量
+        "of() 取发送源值": r"backend\.batchesPerTick\(\), backend\.batchSize\(\),",
     }
     missing = [name for name, pattern in needed.items() if not has(pkt, pattern)]
     if missing:
@@ -558,7 +637,8 @@ def check_g2(src, zh, en):
         return False, "找不到 ResourcePickerMenu#openFor"
     if not has(open_for, r"OptionalInt opened = player\.openMenu\("):
         return False, "openFor 没有接住 openMenu 的 containerId（无法给新菜单发快照）"
-    if not has(open_for, r"opened\.ifPresent\(id -> NetworkResourceRequesterMenu\.sendConfigSyncTo\(player, id"):
+    # 第 131 轮：补发入口从菜单静态方法改成发送源层唯一通道 RequesterSenderBackend.syncTo
+    if not has(open_for, r"opened\.ifPresent\(id -> RequesterSenderBackend\.syncTo\(player, backend"):
         return False, "openFor 没有给新菜单补发权威快照"
     return True, "openMenu → 立刻 sendConfigSyncTo(新 containerId)"
 
@@ -612,6 +692,10 @@ def check_i1(src, zh, en):
     absent = [key for key in NEW_LANG_KEYS if key not in zh or key not in en]
     if absent:
         problems.append("中英缺失 %d 条（Lead 待补）：%s" % (len(absent), ", ".join(absent[:5])))
+    # 第 131 轮反转：设置界面的键必须真的删了（否则又会出现「键在、界面没了」的死文案）
+    dead = [key for key in GONE_LANG_KEYS if key in zh or key in en]
+    if dead:
+        problems.append("设置界面已删但键还留着 %d 条：%s" % (len(dead), ", ".join(dead[:5])))
     for key in NEW_LANG_KEYS:
         if key in zh:
             value = str(zh[key])
@@ -635,7 +719,8 @@ def check_i1(src, zh, en):
 @check("I2", "两个界面引用的语言键全部存在（LANG / QLANG 前缀都展开后核对）")
 def check_i2(src, zh, en):
     problems = []
-    for rel, names in (("scr_grid", ("LANG", "QLANG")), ("scr_q", ("LANG",))):
+    for rel, names in (("scr_grid", ("LANG", "QLANG")),
+                       ("scr_target", ("LANG",)), ("scr_prompt", ("LANG",))):
         text = src[rel]
         referenced = set()
         for name in names:
@@ -663,26 +748,29 @@ MUTATIONS = [
     ("A2", "block_q", [(r"isPickerConnected\(requester\)", "false /* mutated: 不再区分失败原因 */")],
      "打不开网格时不再区分原因（两种失败都变成一个笼统提示）"),
     ("A2", "block_q",
-     [(r"\.isEmpty\(\)\) \{\s+serverPlayer\.displayClientMessage",
-       ") { /* mutated: 不再检查设置界面是否开成 */ serverPlayer.displayClientMessage")],
-     "退回设置界面的那次 openMenu 不再判空（又出现静默失败）"),
+     [(r"NetworkResourceRequesterMenu\.MSG_PICKER_NO_NETWORK",
+       "NetworkResourceRequesterMenu.MSG_PICKER_OPEN_FAILED")],
+     "「没接网络」和「这次没开成」被合成同一句（原因说不清）"),
     ("A3", "menu_q",
-     [(r"if \(!cretae\.cookiewyq\.rs_create_compat\.client\.grid\.ResourcePickerMenu\s+\.openFor\(player, requester\)\) \{",
-       "if (false) { /* mutated: 旧入口不再调 openFor */")],
-     "旧入口不再调 openFor（两套判据分叉）"),
-    ("A5", "pkt_order", [(r"case ACTION_OPEN_SETTINGS -> NetworkResourceRequesterMenu\.openSettingsFor\(player\);",
-                          "// mutated: 设置动作不处理")],
-     "「设置」动作不再分发（点了没反应）"),
+     [(r"ResourcePickerMenu\s*\n\s*\.openFor\(",
+       "Object.openFor(")],
+     "唯一入口不再调 openFor（判据分叉）"),
+    ("A5", "pkt_order", [(r"ACTION_CLEAR\s*=\s*3\s*;", "ACTION_CLEAR = 4;")],
+     "动作码多出第 5 个（切界面通道回来了）"),
     ("A6", "menu_grid",
-     [(r"getBlockEntity\(requester\.getBlockPos\(\)\) != requester", "false /* mutated */")],
-     "拆掉方块后网格界面还开着（对着不存在的机器操作）"),
+     [(r"return backend\.stillValid\(serverPlayer\) && backend\.isConnected\(\);",
+       "return true; /* mutated: 不再复核发送源 / 网络 */")],
+     "拆掉方块 / 网络断开后网格界面还开着（对着不存在的机器操作）"),
     ("A7", "scr_grid",
      [(r"    private static final String QLANG =",
        "    private static final Object LOGGER = null; // mutated: 界面里塞一条日志\n"
        "    private static final String QLANG =")],
      "界面里塞一条日志（每帧刷屏）"),
-    ("B1", "scr_grid", [(r"settingsButton = Button\.builder\(", "settingsButton = (Button) null; // mutated (")],
-     "工具条少了「设置」按钮"),
+    ("B1", "scr_grid", [(r"targetButton = Button\.builder\(", "targetButton = null; // mutated: (")],
+     "工具条少了「目标」按钮"),
+    ("B1", "scr_grid", [(r"        renderToolbarText\(guiGraphics\);",
+                          "        settingsButton();\n        renderToolbarText(guiGraphics);")],
+     "工具条又把「设置」按钮加回来了"),
     ("B2", "scr_grid", [(r"new TriggerRequesterPacket\(getMenu\(\)\.containerId\)",
                          "new TriggerRequesterPacket(-1) /* mutated */")],
      "立即发送没有用本菜单 containerId（服务端会拒收）"),
@@ -707,22 +795,22 @@ MUTATIONS = [
                         (r'messageKey = LANG \+ "msg\.select_first";',
                          '/* mutated: 静默 */')],
      "没选中就改数量时不再提示（两处入口都静默）"),
-    ("F1", "scr_q", [(r"private Component summaryLine\(\)",
-                      "private Component orderLabelBack() /* mutated */")],
-     "设置面板的摘要行被删（订单信息彻底看不见）"),
-    ("F2", "scr_q", [(r"        if \(openGridButton != null\) \{\s*\n\s*openGridButton\.setMessage\(openGridLabel\(\)\);",
-                      "        if (openGridButton != null) {\n"
-                      "            openGridButton.active = networkConnected; // mutated\n"
-                      "            openGridButton.setMessage(openGridLabel());")],
-     "又回到「未连网络按钮变灰」（点了没反应）"),
+    ("F1", "scr_grid", [(r"    private void renderToolbarText\(",
+                         "    private Component summaryLine() { return null; }\n\n"
+                         "    private void renderToolbarText(")],
+     "设置面板的摘要行在网格里复活（寿衣回来了）"),
+    ("F2", "scr_grid", [(r"minusButton\.active = hasSelection",
+                         "targetButton.active = !rows.isEmpty(); // mutated\n"
+                         "        minusButton.active = hasSelection")],
+     "工具条按钮又按状态变灰（点了没反应）"),
     ("G1", "pkt_sync", [(r"ByteBufCodecs\.VAR_LONG\.encode\(buf, packet\.pacingBatch\(\)\);", "// mutated")],
      "快照不再编码单批量（工具条显示 0）"),
-    ("G2", "menu_grid", [(r"opened\.ifPresent\(id -> NetworkResourceRequesterMenu\.sendConfigSyncTo\(player, id, \"\", -1\)\);",
-                          "// mutated: 不补发快照")],
-     "打开网格后不补发快照（一进来是「未选目标」）"),
+    ("G2", "menu_grid", [(r"final java\.util\.OptionalInt opened = player\.openMenu[\(]",
+                          "final java.util.OptionalInt opened = java.util.OptionalInt.empty(); // mutated 没接住 openMenu 的 containerId (")],
+     "打开网格后没接住 containerId（补发快照永远不发生）"),
     ("H1", "scr_grid", [(r"renderHoverTooltips\(guiGraphics, mouseX, mouseY\);", "// mutated: 不画 tooltip")],
      "网格界面不再画任何 tooltip"),
-    ("I1", "scr_q", [], "语言键缺失（由运行时删掉一条 zh 新键模拟）"),
+    ("I1", "scr_target", [], "语言键缺失（由运行时删掉一条 zh 新键模拟）"),
 ]
 
 
@@ -774,6 +862,15 @@ def main():
         for rel in broken:
             print("       - %s" % rel)
         return 1
+
+    # 第 131 轮 C 组新增的收紧：已删除的界面 / 死通道包必须真的不在
+    revived = [rel for rel in GONE_FILES.values() if os.path.isfile(os.path.join(ROOT, rel))]
+    if revived:
+        print("[FAIL] 第 131 轮：这些文件已按用户要求整页删除，现在又被加回来了")
+        for rel in revived:
+            print("       - %s" % rel)
+        return 1
+    print("[OK] 反向门禁：请求器设置界面 + OpenRequesterPickerPacket 都不存在（第 131 轮 C 组）")
 
     results = run_all(src, langs["zh"], langs["en"])
     failures = [row for row in results if not row[2]]

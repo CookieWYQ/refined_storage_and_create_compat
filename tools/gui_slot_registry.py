@@ -279,18 +279,25 @@ PAINTED = [
     ),
     dict(
         # 第 128 轮：原先代码自绘面板（McGui.panel + 逐槽 slotFrame），现在工具生成。
+        # 第 131 轮：接收器界面改成「终端网格」⇒ 背景里多烘焙 9×7 = 63 个 18px 格子。
+        #   **这些格子不是 Menu 槽位**（资源没有真实 Slot：点击是矩形命中 + C2S 包），
+        #   所以这一组写 `slots=0`：它只参与「PNG 烘焙格数」的账（painted_count = 105），
+        #   不参与「Menu 槽位数」的账（group_slot_sum 仍 = 42 = menu_slots）。
         png="network_resource_receiver.png",
         kind="plain",
         screen="client/screen/NetworkResourceReceiverScreen.java",
         menus=["menu/NetworkResourceReceiverMenu.java"],
-        menu_slots=42,  # 6 升级 + 36 玩家背包/快捷栏
+        menu_slots=42,  # 6 升级 + 36 玩家背包/快捷栏（网格 63 格不是 Menu 槽位）
         groups=[
             dict(name="插件槽", x=214, y=7, cols=1, rows=6,
-                 src="menu/NetworkResourceReceiverMenu.java:152-153 (UPGRADE_X/UPGRADE_Y0)"),
+                 src="menu/NetworkResourceReceiverMenu.java (UPGRADE_X/UPGRADE_Y0)"),
             dict(name="玩家背包", x=9, y=176, cols=9, rows=3,
-                 src="menu/NetworkResourceReceiverMenu.java:143-144 (INV_X0/INV_Y0)"),
+                 src="menu/NetworkResourceReceiverMenu.java (INV_X0/INV_Y0)"),
             dict(name="快捷栏", x=9, y=230, cols=9, rows=1,
-                 src="menu/NetworkResourceReceiverMenu.java:145 (HOTBAR_Y)"),
+                 src="menu/NetworkResourceReceiverMenu.java (HOTBAR_Y)"),
+            dict(name="资源网格（第 131 轮终端网格，非 Menu 槽位）", x=9, y=38, cols=9, rows=7,
+                 slots=0,
+                 src="menu/NetworkResourceReceiverMenu.java (GRID_X0/GRID_Y0 + GRID_COLS×GRID_ROWS)"),
         ],
         anchors=[
             ("menu/NetworkResourceReceiverMenu.java", r"UPGRADE_X = 214"),
@@ -298,31 +305,17 @@ PAINTED = [
             ("menu/NetworkResourceReceiverMenu.java", r"UPGRADE_X, UPGRADE_Y0 \+ i \* 18"),
             ("menu/NetworkResourceReceiverMenu.java", r"INV_X0 \+ col \* 18, INV_Y0 \+ row \* 18"),
             ("menu/NetworkResourceReceiverMenu.java", r"INV_X0 \+ col \* 18, HOTBAR_Y"),
+            # 第 131 轮新增：网格坐标锚点（改网格几何就必须同步本登记表）
+            ("menu/NetworkResourceReceiverMenu.java", r"GRID_X0 = 9"),
+            ("menu/NetworkResourceReceiverMenu.java", r"GRID_Y0 = 38"),
+            ("menu/NetworkResourceReceiverMenu.java", r"GRID_COLS = 9"),
+            ("menu/NetworkResourceReceiverMenu.java", r"GRID_ROWS = 7"),
+            ("menu/NetworkResourceReceiverMenu.java", r"CELL = 18"),
         ],
     ),
-    dict(
-        # 第 128 轮：原先代码自绘面板，现在工具生成。
-        png="network_resource_requester.png",
-        kind="plain",
-        screen="client/screen/NetworkResourceRequesterScreen.java",
-        menus=["menu/NetworkResourceRequesterMenu.java"],
-        menu_slots=42,  # 6 升级 + 36 玩家背包/快捷栏
-        groups=[
-            dict(name="插件槽", x=188, y=16, cols=1, rows=6,
-                 src="menu/NetworkResourceRequesterMenu.java:99-100 (UPGRADE_X/UPGRADE_Y0)"),
-            dict(name="玩家背包", x=9, y=164, cols=9, rows=3,
-                 src="menu/NetworkResourceRequesterMenu.java:103-104 (INV_X0/INV_Y0)"),
-            dict(name="快捷栏", x=9, y=218, cols=9, rows=1,
-                 src="menu/NetworkResourceRequesterMenu.java:105 (HOTBAR_Y)"),
-        ],
-        anchors=[
-            ("menu/NetworkResourceRequesterMenu.java", r"UPGRADE_X = 188"),
-            ("menu/NetworkResourceRequesterMenu.java", r"UPGRADE_Y0 = 16"),
-            ("menu/NetworkResourceRequesterMenu.java", r"UPGRADE_X, UPGRADE_Y0 \+ i \* 18"),
-            ("menu/NetworkResourceRequesterMenu.java", r"INV_X0 \+ col \* 18, INV_Y0 \+ row \* 18"),
-            ("menu/NetworkResourceRequesterMenu.java", r"INV_X0 \+ col \* 18, HOTBAR_Y"),
-        ],
-    ),
+    # 第 131 轮：请求器「设置界面」（NetworkResourceRequesterScreen）按用户要求整页删除，
+    # 6 个升级槽也一并删除（用户：红石激活速度决定发送速度，跟插件槽没关系）。
+    # 因此这里不再登记 network_resource_requester.png 的槽位账（那张底图已无界面引用）。
     dict(
         # 第 128 轮：原来直接用原版 generic_54.png（176×222），现在工具生成同尺寸底图。
         png="sequence_assembly_executor.png",
@@ -497,6 +490,10 @@ MENUS = [
          screen="client/screen/FEEnergyCubeScreen.java",
          bg="none", png=None, slots=0,
          note="故意不 addSlot：立方没有库存/升级槽、也不显示玩家背包（Menu 源码里有这行注释）"),
+    dict(file="menu/NetworkResourceRequesterMenu.java",
+         screen=None,
+         bg="none", png=None, slots=None,
+         note="第 131 轮：设置界面整页删除、6 个升级槽删除后，这个类只剩「菜单壳」（玩家背包槽 + stillValid），没有任何界面会打开它；登记 none 只为覆盖 Menu 清单"),
     dict(file="menu/IntermediateCacheMenu.java",
          screen="client/screen/IntermediateCacheScreen.java",
          bg="png", png="intermediate_cache.png", slots=63,
@@ -509,10 +506,7 @@ MENUS = [
          bg="png", png="network_resource_receiver.png", slots=42,
          note="第 128 轮工具化：6 升级槽 + 36 玩家背包/快捷栏烘焙进底图；\n"
               "资源行刻意不画 18×18 槽框（会压到 12px 行高，改用悬停高亮）"),
-    dict(file="menu/NetworkResourceRequesterMenu.java",
-         screen="client/screen/NetworkResourceRequesterScreen.java",
-         bg="png", png="network_resource_requester.png", slots=42,
-         note="第 128 轮工具化：6 升级槽 + 36 玩家背包/快捷栏烘焙进底图"),
+    # 第 131 轮：请求器设置界面已删除，瘦菜单没有任何界面，因此没有槽位账。
     dict(file="menu/QuantityKeeperMenu.java",
          screen="client/screen/QuantityKeeperScreen.java",
          bg="png", png="quantity_keeper.png", slots=43),
@@ -596,6 +590,11 @@ CODE_FRAMES = [
 # ======================================================================================
 
 ORPHAN = [
+    # 第 131 轮：请求器「设置界面」按用户要求整页删除（NetworkResourceRequesterScreen 已删），
+    # 这张 210×238 的底图因此零引用；图本身保留（历史美术资产），但登记成 ORPHAN =
+    # 「源码里不许再引用它」—— 将来谁把它接回新界面，这条就会判负，逼他改成正式登记。
+    dict(png="network_resource_requester.png",
+         why="第 131 轮：请求器设置界面整页删除（用户：这界面没有任何作用）⇒ 零引用"),
 ]
 
 

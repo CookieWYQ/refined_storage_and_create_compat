@@ -97,7 +97,10 @@ public final class TerminalModeTabOverlay {
         "gui.rs_create_compat.advanced_remote_terminal.mode.monitor",
         "gui.rs_create_compat.advanced_remote_terminal.mode.sequence",
         "gui.rs_create_compat.advanced_remote_terminal.mode.unit_manager",
-        "gui.rs_create_compat.advanced_remote_terminal.mode.energy"
+        "gui.rs_create_compat.advanced_remote_terminal.mode.energy",
+        // 第 131 轮第 8 档：发送（与请求器方块同一个网格界面）。数组下标必须 = 模式号，
+        // 长度必须 = MODE_COUNT —— 少了这一颗，Tab 会拿不到语言键（Tooltip 变成裸键名）。
+        "gui.rs_create_compat.advanced_remote_terminal.mode.send"
     };
 
     /**
@@ -168,11 +171,22 @@ public final class TerminalModeTabOverlay {
         // 位置：GUI 面板右下角外侧（贴 RS 自己的「侧按钮列」口径 leftPos + imageWidth + 2，不遮挡界面内容），
         // 然后整体夹进屏幕矩形 —— 面板比屏幕高时（序列样板终端固定 324px）旧写法会把最下面两颗 Tab
         // 画到屏幕外：看得到一半、点不到，用户体感就是「按钮跑到别的地方去了」。
+        //
+        // 【第 131 轮：第 8 档「发送」的界面右侧没有空位】发送模式打开的是 ResourcePickerScreen，
+        // 它是「193 宽的网格 + 右侧 118 宽的订单清单」（清单左沿 = leftPos + 197，右沿 = leftPos + 315）。
+        // 若仍按「面板右沿 + 2」放，8 颗 Tab 会整排压在订单清单上 —— 那等于把清单点不动。
+        // 因此这一档改放 GUI <b>左侧</b>（发送界面左半边是空的），其它模式的分支一个字节都不变。
+        final boolean sendMode =
+            containerScreen instanceof cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerScreen;
         final int screenW = Minecraft.getInstance().getWindow().getGuiScaledWidth();
         final int screenH = Minecraft.getInstance().getWindow().getGuiScaledHeight();
         final int columnH = TAB_H * count;
-        final int x = clamp(containerScreen.getGuiLeft() + guiW + SCREEN_MARGIN,
-            SCREEN_MARGIN, screenW - TAB_W - SCREEN_MARGIN);
+        // 两条分支都各自夹进屏幕矩形（x 的两个来源分别夹，绝不出现「顺手少夹一次」的写法）：
+        final int x = sendMode
+            ? clamp(containerScreen.getGuiLeft() - TAB_W - SCREEN_MARGIN,
+                SCREEN_MARGIN, screenW - TAB_W - SCREEN_MARGIN)
+            : clamp(containerScreen.getGuiLeft() + guiW + SCREEN_MARGIN,
+                SCREEN_MARGIN, screenW - TAB_W - SCREEN_MARGIN);
         final int columnTop = clamp(containerScreen.getGuiTop() + guiH - columnH,
             SCREEN_MARGIN, screenH - columnH - SCREEN_MARGIN);
         for (int i = 0; i < count; i++) {
@@ -393,11 +407,16 @@ public final class TerminalModeTabOverlay {
                 case 3 -> new ItemStack(Blocks.INSTANCE.getAutocraftingMonitor().getDefault().asItem());
                 case 4 -> new ItemStack(cretae.cookiewyq.rs_create_compat.RS_Create_Compat
                     .SEQUENCE_PATTERN_TERMINAL_BLOCK.get().asItem()); // 序列装配终端方块
+                case 5 -> new ItemStack(cretae.cookiewyq.rs_create_compat.RS_Create_Compat
+                    .UNIT_PATTERN_MANAGER_BLOCK.get().asItem()); // 单元样板管理舱方块
                 // 第 101 轮「能耗监视」：图标用 RS 控制器方块（网络供电核心，语义最贴「耗电」）。
                 // 用户原话「图标我暂时没想好」⇒ 先用语义最准的原版方块，之后要换只改这一行。
                 case 6 -> new ItemStack(Blocks.INSTANCE.getController().getDefault().asItem());
-                default -> new ItemStack(cretae.cookiewyq.rs_create_compat.RS_Create_Compat
-                    .UNIT_PATTERN_MANAGER_BLOCK.get().asItem()); // 单元样板管理舱方块
+                // 第 131 轮第 8 档「发送」：用原版漏斗（「把东西送出去」的原版符号，且不依赖任何
+                // 本模组方块的注册顺序 —— 这颗图标必须恒非空，空图标 = 玩家看到一颗看不见的 Tab）。
+                case 7 -> new ItemStack(Items.HOPPER);
+                // 兜底给一个非空图标：未知模式号也不画空 Tab（数组长度与 MODE_COUNT 同步，正常到不了）
+                default -> new ItemStack(Items.CHEST);
             };
         }
 

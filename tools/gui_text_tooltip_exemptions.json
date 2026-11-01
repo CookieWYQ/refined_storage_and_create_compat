@@ -1,7 +1,7 @@
 {
   "schema": "rscc-gui-text-tooltip-exemptions/1",
   "round": 126,
-  "note": "第 126 轮一次性盘点的存量未覆盖点（谁、哪一行、为什么暂时不补）。冻结 ≠ 认可：本轮之后新增的未覆盖点不在这张表里就 FAIL（tools/selfcheck_round126_gui_text_tooltip.py）。修好一处就删掉对应 site；残留站点会被脚本报成 stale WARN（不判负），清理是收尾项。规则原文见 docs/ROUND126_GUI_TEXT_TOOLTIP.md §2。 第 130 轮：区域条重构后清理 4 条失效冻结、追加 2 条新站点点位（标题带 / 空态提示句）。",
+  "note": "第 126 轮一次性盘点的存量未覆盖点（谁、哪一行、为什么暂时不补）。冻结 ≠ 认可：本轮之后新增的未覆盖点不在这张表里就 FAIL（tools/selfcheck_round126_gui_text_tooltip.py）。修好一处就删掉对应 site；残留站点会被脚本报成 stale WARN（不判负），清理是收尾项。规则原文见 docs/ROUND126_GUI_TEXT_TOOLTIP.md §2。 第 130 轮：区域条重构后清理 4 条失效冻结、追加 2 条新站点点位（标题带 / 空态提示句）。 第 131 轮：AreaStripPanel 行内过滤图标删除 ⇒ 坐标行可用宽不再扣 iconW、high 端点的 x 变化 ⇒ 该 site 指纹随实现更新为 68fd085e6af3（line 840 text high）；同时删掉 AdvancedCollectionCacheScreen 的「先选一个区域」空态提示条目 —— 那句提示已按用户要求删除，站点不存在了（留着就是永久 stale）。 第 131 轮 B 组：接收器界面改成终端网格 ⇒ 旧的「页码 N/M / 资源行名三元 / 行内数量」三处站点随旧列表一起删除，整组冻结条目作废并删除（新网格的角标文本已改成唯一工厂 amountText(...)，格子 tooltip 引用同一工厂 ⇒ 规则 (a) 覆盖；「插件」分区标题改用 // rscc:no-tooltip 固定短标签）。",
   "groups": [
     {
       "file": "grid/ResourcePickerScreen.java",
@@ -153,8 +153,8 @@
           "text": "low"
         },
         {
-          "fingerprint": "41d2851cb906",
-          "line": 858,
+          "fingerprint": "68fd085e6af3",
+          "line": 840,
           "text": "high"
         },
         {
@@ -449,27 +449,6 @@
       ]
     },
     {
-      "file": "screen/NetworkResourceReceiverScreen.java",
-      "reason": "第 126 轮已给「名称提示 / 状态 / 缓存摘要 / 流体摘要」四行补了 hover 兜底（见该文件的 renderReadoutLineTooltips）。剩下的三处：页码 N/M（数字）、资源行名三元表达式、行内数量 —— 其中行名与数量已由 renderEntryTooltip 的行 tooltip 覆盖（含完整名称 + 数量），脚本的启发式认不出三元/数字写法。",
-      "sites": [
-        {
-          "fingerprint": "e7ed67caf176",
-          "line": 436,
-          "text": "(page + 1) + \"/\" + pageCount"
-        },
-        {
-          "fingerprint": "a5e0fd244671",
-          "line": 487,
-          "text": "name == null ? Component.empty() : name"
-        },
-        {
-          "fingerprint": "37c17fbfefad",
-          "line": 491,
-          "text": "amount"
-        }
-      ]
-    },
-    {
       "file": "screen/QuantityKeeperScreen.java",
       "reason": "「目标：物品名」行。物品名是自由文本、该行也走 drawFitLine，属于真实缺口；但该界面有全屏大界面版本（AdvancedQuantityKeeperScreen，已修），基础版留待第 127 轮。",
       "sites": [
@@ -692,17 +671,6 @@
           "fingerprint": "2cbd49a6a6cb",
           "line": 44,
           "text": "getMessage()"
-        }
-      ]
-    },
-    {
-      "file": "screen/AdvancedCollectionCacheScreen.java",
-      "reason": "「先选一个区域」空态提示句（固定 lang 文案，且在匹配区面板正中被半透明底衬托，本身就是提示）。它不承载数据、长度由语言文件控制。",
-      "sites": [
-        {
-          "fingerprint": "23eecca1a0f4",
-          "line": 574,
-          "text": "hint"
         }
       ]
     }

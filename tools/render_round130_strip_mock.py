@@ -10,9 +10,12 @@
   * 新加的搜索框 / 删除确认 / 三个动作图标会不会互相压住，光看代码看不出来。
 所以本脚本用**源码里的真实常量**（`AreaStripPanel` 的 W / PAD / TITLE_H / SEARCH_H / ROW_H / ACT_*）
 + **真实文案**（`zh_cn.json` 的 `area_strip.*` 键）+ 一份样例区域数据，画三张并排：
-  A 常态（5 个区域，第 2 个是「当前在干活」，带 2 个过滤图标，第 4 行展开 6 个坐标框）
+  A 常态（5 个区域，第 2 个是「当前在干活」，第 4 行展开 6 个坐标框）
   B 删除确认态（第 2 行 armed：红字「确认删除 #2？」+ ✓ / ✗）
   C 搜索过滤中（输入框 `100`，标题「区域 x/5 · 命中 3」，只列命中行）
+
+第 131 轮：行内过滤图标（`ROW_ICON_MAX` / `ROW_ICON_PITCH`）已按用户要求删除 ⇒ 本脚本不再读这两个
+常量、坐标行可用宽不再扣 iconW（脚本必须能重跑；几何仍全部来自 AreaStripPanel 的真实常量）。
 
 硬约定（防止图文漂移）
 ----------------------
@@ -100,7 +103,7 @@ def load_geometry():
     source = read_text(PANEL_JAVA)
     names = ["W", "MIN_W", "HARD_MIN_W", "GAP", "SCREEN_MARGIN", "ROW_H", "PAD",
              "TITLE_H", "SEARCH_H", "SEARCH_GAP", "SEARCH_ROWS_GAP",
-             "FOOTER_H", "FOOTER_GAP", "ROW_ICON_MAX", "ROW_ICON_PITCH",
+             "FOOTER_H", "FOOTER_GAP",
              "ACT_ICON", "ACT_PITCH", "ACT_COUNT", "NAME_LINE_H", "EXPAND_H",
              "FIELD_H", "SCROLL_W", "HIGHLIGHT_W", "BG_W", "BG_H"]
     geom = {name: const_int(source, name) for name in names}
@@ -301,7 +304,7 @@ def draw_panel(canvas, ox, oy, geom, lang, state):
     act_w = geom["ACT_COUNT"] * geom["ACT_PITCH"] + (geom["ACT_COUNT"] - 1)
     current_raw = AREAS[current][0] if current >= 0 else -1
     for list_index in rows:
-        raw, name, lo, hi, filters = AREAS[list_index]
+        raw, name, lo, hi, _filters = AREAS[list_index]
         row_h = geom["ROW_H"] + (geom["EXPAND_H"] if list_index == expanded else 0)
         is_current = raw == current_raw
         if is_current:
@@ -326,19 +329,15 @@ def draw_panel(canvas, ox, oy, geom, lang, state):
             for index, glyph in enumerate((lang_of(lang, "rename.glyph"),
                                            lang_of(lang, "delete.glyph"))):
                 canvas.text(ax + index * geom["ACT_PITCH"], top + 2, glyph, DIM)
-        # 坐标行 + 右侧过滤图标摘要：复刻源码的「三段式择优」（整串 → 两端点 → 才缩字）
+        # 坐标行：复刻源码的「三段式择优」（整串 → 两端点 → 才缩字）。
+        # 第 131 轮：行内过滤图标已删除 ⇒ 坐标行独占整条可用宽（不再扣 iconW，也没有图标要画）。
         coords = coord_text((raw, name, lo, hi))
         joined_w = canvas.text_width(coords)
         low = "%d,%d,%d" % lo
         high = "%d,%d,%d" % hi
         low_w, high_w = canvas.text_width(low), canvas.text_width(high)
         full_w = cx + cw - (cx + 2) - act_w
-        icons = min(filters, geom["ROW_ICON_MAX"])
-        icon_w = 0 if icons <= 0 else icons * geom["ROW_ICON_PITCH"] + 2
-        if joined_w + 2 * geom["ROW_ICON_PITCH"] + 2 > full_w:
-            icons = 0
-            icon_w = 0
-        coord_w = max(12, full_w - icon_w)
+        coord_w = max(12, full_w)
         coord_x = cx + 2
         if joined_w <= coord_w:
             canvas.fit_text(coord_x, top + geom["NAME_LINE_H"], coords, coord_w, DIM, "坐标行")
@@ -347,9 +346,6 @@ def draw_panel(canvas, ox, oy, geom, lang, state):
             canvas.text(coord_x + coord_w - high_w, top + geom["NAME_LINE_H"], high, DIM)
         else:
             canvas.fit_text(coord_x, top + geom["NAME_LINE_H"], coords, coord_w, DIM, "坐标行")
-        for index in range(icons):
-            ix = cx + cw - (icons - index) * geom["ROW_ICON_PITCH"]
-            canvas.rect(ix, top + geom["NAME_LINE_H"], 8, 8, (0x5A, 0x8A, 0x3C))
 
         # 展开：6 个数字框（两行 × 3 列）
         if list_index == expanded:

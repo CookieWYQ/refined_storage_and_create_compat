@@ -151,18 +151,16 @@ public class NetworkResourceRequesterBlock extends Block implements EntityBlock 
             && level.getBlockEntity(pos) instanceof NetworkResourceRequesterBlockEntity requester) {
             if (!NetworkResourceRequesterMenu.openPickerFor(serverPlayer, requester)) {
                 if (NetworkResourceRequesterMenu.isPickerConnected(requester)) {
-                    // 网络没问题 ⇒ 只是这次 openMenu 没成：给一句原因，不再叠开设置界面
+                    // 网络没问题 ⇒ 只是这次 openMenu 没成：给一句原因
                     serverPlayer.displayClientMessage(Component.translatable(
                         NetworkResourceRequesterMenu.MSG_PICKER_OPEN_FAILED), true);
                 } else {
-                    // 没接网络 ⇒ 网格打不开是必然的：说明原因**并退回设置界面**（否则无法设目标）
+                    // 没接网络 ⇒ 网格打不开是必然的：只说明原因。
+                    // 第 131 轮：请求器「设置界面」已整页删除，因此**没有可退回的界面**了
+                    //（`getMenuProvider` 的注释也写明「第 131 轮起菜单永远不会被打开」）。
+                    // 这里原本还有一条 `player.openMenu(...)` 兜底，现在它是死路径，已删除。
                     serverPlayer.displayClientMessage(Component.translatable(
                         NetworkResourceRequesterMenu.MSG_PICKER_NO_NETWORK), true);
-                    // 设置界面也可能开不成（createMenu 返回 null）—— 那也必须有回话
-                    if (player.openMenu(state.getMenuProvider(level, pos), pos).isEmpty()) {
-                        serverPlayer.displayClientMessage(Component.translatable(
-                            NetworkResourceRequesterMenu.MSG_PICKER_OPEN_FAILED), true);
-                    }
                 }
             }
         }
@@ -202,8 +200,8 @@ public class NetworkResourceRequesterBlock extends Block implements EntityBlock 
                 new BlockContentReleaser.Host() {
                     @Override
                     public void collectItems(final List<ItemStack> out) {
-                        // 升级物品 + 回滚暂存里的物品：两者都是真实物品，都不能丢
-                        BlockContentReleaser.collectHandler(requester.getUpgradeContainer(), out);
+                        // 第 131 轮：请求器的 6 个升级槽已删除（用户拍板「跟插件槽没关系」），
+                        // 因此这里只剩回滚暂存里的真实物品必须结算 —— 不能丢任何一件。
                         out.addAll(requester.releaseReturnBufferItems());
                     }
 

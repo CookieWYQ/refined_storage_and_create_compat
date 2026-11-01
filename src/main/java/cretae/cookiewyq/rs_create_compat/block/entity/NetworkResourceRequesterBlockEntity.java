@@ -19,8 +19,9 @@ import com.refinedmods.refinedstorage.neoforge.api.RefinedStorageNeoForgeApi;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.NetworkResourceReceiverNetworkNode;
 import cretae.cookiewyq.rs_create_compat.network.NetworkResourceRequesterNetworkNode;
-import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
-import cretae.cookiewyq.rs_create_compat.support.RsccSpeedStackUpgradeContainer;
+import cretae.cookiewyq.rs_create_compat.support.PendingSenderSends;
+import cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend;
+import cretae.cookiewyq.rs_create_compat.support.SenderShortage;
 import cretae.cookiewyq.rs_create_compat.support.ViewOnlyHandlers;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -30,6 +31,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.RegistryOps;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -112,7 +114,7 @@ import java.util.Map;
  * 按「每 tick 批数」逐步投完：总量恒等于订单量</b>（不存在「一次只投 64 件」的上限），
  * 只是可能要跨多 tick 完成；只有「本 tick 批数用完」的部分会自动留下续投，
  * 缓存满 / 网络不够属于缺口（明确提示、本次请求结束，下次触发重新计算）。这句话写进了升级槽 tooltip
- * （{@code NetworkResourceRequesterScreen} 的 {@code upgrade.pacing} 行）。</p>
+ * （网格工具栏的节拍文字；第 131 轮起节拍固定，不再由升级给出）。</p>
  * <p>节流闸门接在 {@link #triggerRequest()} 上（{@link #throttleTick()}），真实投递在闸门之后；
  * 每 tick 的动作只有两类：{@link #doWork()} 里的缓冲重试，以及「上一 tick 批数没用完的请求」续投
  * （{@link #continuePendingDelivery()}）。两者都为空时，{@code doWork()} 一个网络查询都不做。</p>
@@ -132,8 +134,6 @@ public class NetworkResourceRequesterBlockEntity
      * （反之也不能因为读档把这个状态清零而丢掉一次真实上升沿）。</p>
      */
     private static final String TAG_POWERED = "RedstonePowered";
-    /** 升级槽容器在 NBT 里的键（与接收器 / 各机器统一的写法）。 */
-    private static final String TAG_UPGRADES = "Upgrades";
     /** 订单清单在 NBT 里的键（形状 = RS 的 `{resource, amount}` 列表）。 */
     private static final String TAG_ORDERS = "Orders";
     /** 上一次解析成功的接收器坐标（只用于区分「目标区块未加载」与「目标真的没了」）。 */
@@ -283,6 +283,14 @@ public class NetworkResourceRequesterBlockEntity
     @Nullable
     private BlockPos lastResolvedTargetPos;
 
+    /**
+     * 「合成后补投」的待办（第 131 轮 F 组）：玩家选「合成 25 并发送 75」之后，
+     * 缺口由 RS 异步合成，这里每 tick 看一次「网络里现在够不够」—— 够了就投给目标接收器。
+     * <p><b>不落盘</b>：它描述「合成任务还在跑」这一当下的机器状态，写进 NBT 只会变成
+     * 「一个永远等不到货的补投任务」；不落盘最坏只是「重进存档后这次补投不做了」，资源仍在网络里。</p>
+     */
+    private final List<PendingSenderSends.PendingSend> pendingSends = new ArrayList<>();
+
     /** 失败提示的限频表（reason → 上次提示的 gameTime）。只为防刷屏，不改任何投递语义。 */
     private final Map<String, Long> lastHintTicks = new LinkedHashMap<>();
 
@@ -294,26 +302,6 @@ public class NetworkResourceRequesterBlockEntity
      * 属于此刻的机器状态；落盘一个可能说谎的计数器只会引入「读档后卡 N tick」这类看不见的偏差。</p>
      */
     private int throttleCooldown;
-
-    /**
-     * 6 个升级槽（只收速度 + 叠加；判据与接收器<b>同一份实现</b> {@link RsccSpeedStackUpgradeContainer}）。
-     * <p>设计文档 §1.4 第 2 条：请求器也要 6 槽，否则「无数量上限」会退化成
-     * 「一个脉冲搬不完，剩下的不知道什么时候搬」。</p>
-     */
-    private final RsccSpeedStackUpgradeContainer upgradeContainer =
-        new RsccSpeedStackUpgradeContainer(new RsccSpeedStackUpgradeContainer.Host() {
-            @Override
-            public void dropStack(final ItemStack stack) {
-                RsccSpeedStackUpgradeContainer.dropIntoWorld(getLevel(), worldPosition, stack);
-            }
-
-            @Override
-            public void onUpgradesChanged() {
-                setChanged();
-            }
-        },
-            // 与接收器逐字同源：没有服务端世界就不动任何东西（判据现问，见容器 javadoc）
-            () -> getLevel() != null && !getLevel().isClientSide());
 
     public NetworkResourceRequesterBlockEntity(final BlockPos pos, final BlockState state) {
         super(RS_Create_Compat.NETWORK_RESOURCE_REQUESTER_BLOCK_ENTITY.get(), pos, state,
@@ -328,68 +316,29 @@ public class NetworkResourceRequesterBlockEntity
         return mainNetworkNode;
     }
 
-    /** 升级槽容器（界面与第 ② 层校验共用同一份；<b>不是</b>拷贝）。 */
-    public RsccSpeedStackUpgradeContainer getUpgradeContainer() {
-        return upgradeContainer;
-    }
-
-    // ==================== 节流入口（唯一数值来源 = 升级容器 → RsccRateLimiter） ====================
+    // ==================== 节拍（第 131 轮起固定，不再吃升级） ====================
 
     /**
-     * 节流闸门：返回「这一轮要不要动作」，并推进倒计时。
-     * <p>语义与接收器完全一致（见 {@code NetworkResourceReceiverBlockEntity#throttleTick()}）：
-     * 间隔恒为 1（闸门每次触发都放行），速度升级通过「每 tick 批数」提速、叠加升级放大单批投递量，
-     * 两者都经 {@link RsccRateLimiter} 换算（见 {@link #deliverBatch} 的预算）。</p>
+     * 节流闸门：返回「这一轮要不要动作」。
+     *
+     * <p>第 131 轮用户拍板：「发送器跟插件槽没关系，<b>红石激活的速度决定发送速度</b>」——
+     * 因此本闸门只剩一个物理下限（每次触发都放行）。真正决定吞吐的是
+     * {@link #getThrottleBatchesPerTick()} / {@link #getThrottleBatch()} 两个常量。
+     * 保留本方法是为了让 {@code triggerRequest} 的闸门顺序（F0 → F1 → F2 → F3）与文档 /
+     * 历史断言保持一致：闸门仍然存在，只是永远放行。</p>
      */
     public boolean throttleTick() {
-        if (--throttleCooldown > 0) {
-            return false;
-        }
-        // 间隔一律来自容器（→ 恒为 1）：本类绝不自己写 `<<` / `*` 公式。
-        throttleCooldown = upgradeContainer.throttleIntervalTicks();
         return true;
     }
 
-    /** 每 tick 批数（速度升级旋钮）：与节拍同源（都来自升级容器）。 */
+    /** 每 tick 批数（固定常量；红石脉冲多快就发多快，不吃速度升级）。 */
     public int getThrottleBatchesPerTick() {
-        return upgradeContainer.throttleBatchesPerTick();
+        return cretae.cookiewyq.rs_create_compat.support.SenderDelivery.FIXED_BATCHES_PER_TICK;
     }
 
-    /** 单批投递量（件）：与节拍同源（都来自升级容器 → {@link RsccRateLimiter}）。 */
+    /** 单批投递量（固定常量；不吃叠加升级）。 */
     public long getThrottleBatch() {
-        return upgradeContainer.throttleBatch();
-    }
-
-    /**
-     * 供菜单同步的实时数据（与接收器逐字同一套索引，界面因此可以共用同一段显示代码）。
-     * <p>0 = <b>每 tick 批数</b>（速度升级旋钮），1 = 单批投递量（件，叠加升级旋钮）。
-     * 升级个数本身由升级槽里的物品直接可见，不再同步一份只供显示、且没人读的副本。</p>
-     */
-    public net.minecraft.world.inventory.ContainerData getContainerData() {
-        return new net.minecraft.world.inventory.ContainerData() {
-            @Override
-            public int get(final int index) {
-                return switch (index) {
-                    // 0 = 每 tick 批数（速度升级旋钮）。旧实现这里是「节拍间隔」，但间隔物理下限
-                    // 就是 1 tick，速度升级永远无法让它变小 ⇒ 那个字段永远撒谎。
-                    case 0 -> upgradeContainer.throttleBatchesPerTick();
-                    // 批量是 long（饱和乘法可以到 Long.MAX_VALUE），同步通道只有 int：
-                    // 夹到 Integer.MAX_VALUE 只影响「界面极端显示」，不影响任何实际投递量。
-                    case 1 -> (int) Math.min(upgradeContainer.throttleBatch(), Integer.MAX_VALUE);
-                    default -> 0;
-                };
-            }
-
-            @Override
-            public void set(final int index, final int value) {
-                // 升级数与节流都是服务端权威值，客户端不得改写
-            }
-
-            @Override
-            public int getCount() {
-                return 2;
-            }
-        };
+        return cretae.cookiewyq.rs_create_compat.support.SenderDelivery.FIXED_BATCH_SIZE;
     }
 
     /** 本机耗电（FE/t）：与接收器同一口径。 */
@@ -619,6 +568,22 @@ public class NetworkResourceRequesterBlockEntity
      * {@link #continuePendingDelivery()} 下一 tick 接着投，绝不丢掉、也绝不重复投。</p>
      */
     public void triggerRequest() {
+        triggerRequest(null, null);
+    }
+
+    /** 只投「这些」（F 组：夹过库存的现有部分），不再询问缺口（询问已经发生过了）。 */
+    public void triggerRequest(@Nullable final List<ResourceAmount> plan) {
+        triggerRequest(null, plan);
+    }
+
+    /**
+     * 投递的<b>唯一实现</b>。
+     *
+     * @param asker 触发者（界面按钮 = 点按钮的玩家；红石 = {@code null} ⇒ 现场找最近的玩家来问缺口）
+     * @param plan  {@code null} = 按整张订单投；非 null = 只投这份计划（F 组「先投现有部分」）
+     */
+    public void triggerRequest(@Nullable final ServerPlayer asker,
+                               @Nullable final List<ResourceAmount> plan) {
         if (level == null || level.isClientSide()) {
             return; // 只有服务端权威世界才投递（客户端没有网络 / 没有可写的方块实体）
         }
@@ -669,8 +634,17 @@ public class NetworkResourceRequesterBlockEntity
             hint("no_orders");
             return; // F3：没有订单就没有可投的东西
         }
+        // F 组（第 131 轮）：先算缺口 —— 有缺口且该资源可自动合成 ⇒ **先不发**，向玩家询问。
+        // 只在「按整张订单投」时问（plan != null 的那一次正是询问之后的「投现有部分」，再问就会死循环）。
+        if (plan == null) {
+            final ServerPlayer recipient = asker != null ? asker : nearestPlayerForShortage();
+            if (recipient != null && SenderShortage.ask(recipient,
+                new RequesterSenderBackend(this))) {
+                return; // 已经发出询问：本轮一件都不投（用户要求「先不发」）
+            }
+        }
         // 「这一次触发要投的量」= 订单清单的数量（每次触发都投这么多，绝不递减清单）
-        enqueuePendingPlan();
+        enqueuePendingPlan(plan);
         // 账目：本轮计划 = 当前订单总量。必须在 deliverBatch 之前开始，投出的量才算得进这一轮
         beginRound();
         final long moved = deliverBatch(network, receiver);
@@ -708,6 +682,11 @@ public class NetworkResourceRequesterBlockEntity
         // 重新上电后继续投 / 继续归还，一件资源都不会丢。
         if (!mainNetworkNode.isActive()) {
             return;
+        }
+        // 第 131 轮 F 组：合成后的补投。凑齐即投、超时（10 分钟）放弃并提示，绝不无限挂起。
+        // 放在「缓冲 / 续投」之前：补投是用户刚确认过的动作，优先级高于后台归还。
+        if (!pendingSends.isEmpty()) {
+            PendingSenderSends.tick(this, pendingSends);
         }
         if (returnBuffer.isEmpty() && pendingPlan.isEmpty()) {
             return; // 没有暂存资源、也没有未投完的请求 ⇒ 什么都不查
@@ -826,187 +805,66 @@ public class NetworkResourceRequesterBlockEntity
     /**
      * 逐条投递 {@link #pendingPlan}（本次请求还差多少），返回<b>真正落进接收器缓存的总件数</b>。
      *
-     * <p><b>一次触发 = 整张订单（总量恒等于订单量）</b>（用户要求：「订单数量就是目标量」，
-     * 不存在「限制 16 / 64 件」）：每条计划按 {@link #getThrottleBatch()} 分批，
-     * <b>在本 tick 可用的批数内循环</b>，直到「该条达到目标量 / 网络取不到 / 接收器吃不下 /
-     * 本 tick 的批数用完」。批数 = {@code min(MAX_BATCHES_PER_TICK, throttleBatchesPerTick())}
-     * （速度升级旋钮）。<b>只有最后一种</b>会把剩余带进下一 tick 自动续投
-     * （见 {@link #continuePendingDelivery()}）；其余两种是缺口，明确提示后结束本次请求。</p>
+     * <p>第 131 轮把「四步走 + 守恒账 + 回滚 + 暂存」整段搬进
+     * {@code support/SenderDelivery#deliver}（终端发送模式复用同一份实现），
+     * 本方法只剩三件方块实体自己的事：① 按 gameTime 记账本 tick 批数预算；
+     * ② 把「本 tick 批数用完」的剩余写回 {@link #pendingPlan}（下一 tick 续投）；
+     * ③ 提示走 {@link #hint}（限频）、回滚失败进 {@link #returnBuffer}。</p>
      *
-     * <p>每批都按同一套四步走（顺序不可换）：</p>
-     * <ol>
-     *     <li>{@code extract(SIMULATE)}：网络里<b>能</b>取多少（请求量 = {@code min(还差多少, 单批量)}）；</li>
-     *     <li>接收器缓存 {@code SIMULATE}：缓存<b>能吃</b>多少；</li>
-     *     <li>{@code extract(EXECUTE)}：取 <b>min(能取, 能吃)</b> —— 先夹再取，从源头上避免「取出来放不下」；</li>
-     *     <li>写缓存；写不进去的余量 {@code insert(EXECUTE)} 回滚网络，网络也不收的进 {@link #returnBuffer}。</li>
-     * </ol>
-     *
-     * <p><b>为什么不会过量、不会重复投</b>：每批的请求量恒为 {@code min(remaining, batch)}；
-     * {@code remaining} <b>只按真的写进接收器的量</b>递减（{@code remaining -= inserted}）——
-     * 回滚掉的部分没有投进去，所以计划量不会被多减，下一次会重新 SIMULATE 再看能不能取。
-     * 「先夹再取」保证取出来的量永远 ≤ 接收器当场能吃的量。</p>
-     *
-     * <p><b>为什么有界</b>：本 tick 最多花 {@code min(MAX_BATCHES_PER_TICK, throttleBatchesPerTick())} 批，
-     * 而且只有「真的从网络取到资源」的那一批才计数（空探测不计数），所以「网络空着 / 缓存满」不会空转；
-     * 其中 {@link #MAX_BATCHES_PER_TICK} 是防单 tick 卡死的硬上限（正常玩法到不了，满级批数只有 64）。</p>
+     * <p><b>节拍固定</b>：每 tick 批数 / 单批量是常量（用户拍板「红石激活多快就发多快」），
+     * 不再有速度 / 叠加升级参与。</p>
      */
     private long deliverBatch(final Network network, final NetworkResourceReceiverBlockEntity receiver) {
-        final StorageNetworkComponent storage = network.getComponent(StorageNetworkComponent.class);
-        shortfallThisDelivery = false;
-        if (storage == null) {
-            hint("no_storage");
-            shortfallThisDelivery = true;
-            return 0L;
-        }
-        final long batch = Math.max(1L, getThrottleBatch());
-        // 每 tick 批数 = 速度升级旋钮（1/2/4/…/64）；MAX_BATCHES_PER_TICK 只是防单 tick 卡死的硬兜底。
-        // 两处都不得自写公式：批数来自升级容器 → RsccRateLimiter。
-        final int perTickBatches = Math.min(MAX_BATCHES_PER_TICK, getThrottleBatchesPerTick());
-        // 本 tick 的预算：同一个 gameTime 内无论触发 / 续投被调用几次，合计都只花这些批
+        // 每 tick 批数 / 单批量都是固定常量（用户第 131 轮拍板：红石脉冲多快就发多快）。
+        // 预算按 gameTime 记账：同一个 tick 内无论触发 / 续投被调用几次，合计都只花这些批。
+        final int perTickBatches =
+            Math.min(cretae.cookiewyq.rs_create_compat.support.SenderDelivery.MAX_BATCHES_PER_TICK,
+                getThrottleBatchesPerTick());
         final long now = level == null ? 0L : level.getGameTime();
         if (now != deliveryBudgetTick) {
             deliveryBudgetTick = now;
             deliveryBudgetUsed = 0;
         }
-        int batches = deliveryBudgetUsed;
-        long moved = 0L;
-        // 快照遍历：投递过程中界面 / 读档可能替换订单或计划，绝不在遍历内部列表时改它
-        final List<ResourceAmount> plan = List.copyOf(pendingPlan);
-        // 本 tick 之后还差多少：只有「批数用完」造成的没投完才带进下一 tick
-        final List<ResourceAmount> carry = new ArrayList<>();
-        for (final ResourceAmount order : plan) {
-            final ResourceKey resource = order.resource();
-            long remaining = order.amount();
-            if (remaining <= 0L) {
-                continue;
-            }
-            // 资源身份 <b>只</b>认 RS 的 ResourceKey：物品 / 流体 / 气体（装了联动后）一律走同一条路径。
-            // 唯一的拒绝条件是「这个键不是 PlatformResourceKey」—— 那样它既进不了存档也同步不了，
-            // 所以明确提示「不支持」，而不是悄悄跳过（判据在接收器那边的 canHandle，不是类型白名单）。
-            if (!(resource instanceof PlatformResourceKey)) {
-                hint("unsupported", describeResource(resource));
-                shortfallThisDelivery = true;
-                continue; // 这一条永远投不了 ⇒ 直接丢掉，不跨 tick
-            }
-            boolean stalled = false;
-            while (remaining > 0L && batches < perTickBatches) {
-                // ⚠️ 每批只请求 min(还差多少, 单批量)：绝不因为「计划还有」就超量
-                final long wanted = Math.min(remaining, batch);
-                // ① 先模拟：网络里能取多少
-                final long available = storage.extract(resource, wanted, Action.SIMULATE, Actor.EMPTY);
-                if (available <= 0L) {
-                    hint("no_stock", describeResource(resource));
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-                // ② 再模拟：接收器能吃多少（物品 / 流体进缓存，其它类型直通它朝向的容器）。
-                // 第三方容器可能抛异常：异常发生在「还没取出任何东西」之前，因此直接结束这一条，
-                // 守恒账不受影响（一件资源都没动）。
-                final long acceptable;
-                try {
-                    acceptable = applyToReceiverCache(receiver, resource, available, true);
-                } catch (final RuntimeException e) {
-                    LOGGER.error("[rs_create_compat] 请求器@{} 模拟写入 {} 时目标抛异常，已跳过（未取出任何资源）",
-                        worldPosition, resource, e);
-                    hint("deliver_exception", describeResource(resource));
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-                if (acceptable <= 0L) {
-                    // 分清两种情况：通道根本不存在（不支持这种资源）vs 通道存在但满了。
-                    // canHandle 本身也会问第三方容器，同样要防它抛异常。
-                    boolean channelExists;
-                    try {
-                        channelExists = receiver.canHandle(resource);
-                    } catch (final RuntimeException e) {
-                        channelExists = false;
-                        LOGGER.error("[rs_create_compat] 请求器@{} 探测 {} 的接收通道时抛异常",
-                            worldPosition, resource, e);
+        // 投递引擎只有一份（support/SenderDelivery）：终端发送模式复用同一段代码，
+        // 因此「取料 → 夹容量 → 写入 → 回滚 → 暂存」的守恒语义不可能在两处漂移。
+        final cretae.cookiewyq.rs_create_compat.support.SenderDelivery.Result result =
+            cretae.cookiewyq.rs_create_compat.support.SenderDelivery.deliver(network,
+                new cretae.cookiewyq.rs_create_compat.support.SenderDelivery.ReceiverSink() {
+                    @Override
+                    public long apply(final ResourceKey resource, final long amount,
+                                      final boolean simulate) {
+                        return applyToReceiverCache(receiver, resource, amount, simulate);
                     }
-                    if (channelExists) {
-                        hint("receiver_full", receiver.getReceiverDisplayName(),
-                            describeResource(resource));
-                    } else {
-                        hint("unsupported", describeResource(resource));
+
+                    @Override
+                    public boolean canHandle(final ResourceKey resource) {
+                        return receiver.canHandle(resource);
                     }
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-                // ③ 真正取：只取「能取 ∩ 能吃」的量
-                final long got = storage.extract(resource, Math.min(available, acceptable),
-                    Action.EXECUTE, Actor.EMPTY);
-                if (got <= 0L) {
-                    // 理论不可达（SIMULATE 刚放行）；真出现也绝不假装成功
-                    hint("extract_failed", describeResource(resource));
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-                batches++; // 只有真的取到资源才消耗本 tick 的批量预算（空探测不计数）
-                // ④ 写入接收器缓存。异常路径同样守恒：按「一件都没写进去」结算，
-                // 让下面的 remainder 逻辑把 got 原样回滚网络 / 进缓冲。
-                // （宁可极端情况下重复，也绝不销毁 —— 这是本工程的守恒铁律。）
-                long inserted;
-                try {
-                    inserted = applyToReceiverCache(receiver, resource, got, false);
-                } catch (final RuntimeException e) {
-                    inserted = 0L;
-                    LOGGER.error("[rs_create_compat] 请求器@{} 真正写入 {} 时目标抛异常，"
-                        + "按未写入回滚（got={}）", worldPosition, resource, got, e);
-                    hint("deliver_exception", describeResource(resource));
-                }
-                final long remainder = got - inserted;
-                long rolledBack = 0L;
-                long kept = 0L;
-                if (remainder > 0L) {
-                    // 守恒：先原样写回 RS 网络；网络也拒收的那部分留在自己的缓冲里
-                    rolledBack = storage.insert(resource, remainder, Action.EXECUTE, Actor.EMPTY);
-                    kept = remainder - rolledBack;
-                    if (kept > 0L) {
-                        bufferReturn(resource, kept);
-                        hint("buffer_buffered", describeResource(resource), kept);
+
+                    @Override
+                    public String displayName() {
+                        return receiver.getReceiverDisplayName();
                     }
-                    if (rolledBack > 0L) {
-                        hint("partial", receiver.getReceiverDisplayName(), describeResource(resource),
-                            inserted, rolledBack, got);
+                },
+                List.copyOf(pendingPlan), perTickBatches, getThrottleBatch(),
+                deliveryBudgetUsed,
+                new cretae.cookiewyq.rs_create_compat.support.SenderDelivery.Feedback() {
+                    @Override
+                    public void hint(final String reason, final Object... args) {
+                        NetworkResourceRequesterBlockEntity.this.hint(reason, args);
                     }
-                }
-                // 守恒自证：取出量 == 写入量 + 回滚量 + 暂存量。任何一项写错都在这里立刻暴露。
-                if (got != inserted + rolledBack + kept) {
-                    LOGGER.error("[rs_create_compat] 请求器@{} 守恒校验失败：got={} inserted={} rolledBack={} kept={}",
-                        worldPosition, got, inserted, rolledBack, kept);
-                }
-                moved += inserted;
-                // 计划量只按「真的写进接收器」的量递减 ⇒ 不会重复投、不会过量
-                remaining -= inserted;
-                if (inserted <= 0L) {
-                    // 一点都没写进去：本 tick 不再对这条空转（回滚 / 暂存已经记过账）
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-                if (available < wanted) {
-                    // 网络里就这么多：投完能投的，剩下的不再指望本 tick（明确提示数量不足）
-                    // 报的是「本条请求要多少 / 这次一共投出多少」，不是单批的 wanted
-                    hint("short_stock", describeResource(resource), order.amount(),
-                        order.amount() - remaining);
-                    shortfallThisDelivery = true;
-                    stalled = true;
-                    break;
-                }
-            }
-            if (remaining > 0L && !stalled) {
-                // 唯一的跨 tick 情形：本 tick 的批数用完了（订单比一个 tick 能投的更多）
-                carry.add(new ResourceAmount(resource, remaining));
-            }
-        }
+
+                    @Override
+                    public void buffer(final ResourceKey resource, final long amount) {
+                        bufferReturn(resource, amount);
+                    }
+                });
+        // 计划量只按「真的写进接收器」的量递减由引擎保证；这里只把剩余接下 tick 的部分写回计划
         pendingPlan.clear();
-        pendingPlan.addAll(carry);
-        deliveryBudgetUsed = batches; // 把本 tick 已经花掉的批数交回去给下一次调用
-        return moved;
+        pendingPlan.addAll(result.carry());
+        deliveryBudgetUsed = result.batchesUsed();
+        shortfallThisDelivery = result.shortfall();
+        return result.moved();
     }
 
     /**
@@ -1016,7 +874,18 @@ public class NetworkResourceRequesterBlockEntity
      * <p>两次触发 = 两次请求，各自的数量都要投出去；同资源在计划里合并成一条（饱和相加），
      * 因此计划条目数只与「订单里有几种资源」有关。</p>
      */
-    private void enqueuePendingPlan() {
+    private void enqueuePendingPlan(@Nullable final List<ResourceAmount> explicitPlan) {
+        if (explicitPlan != null) {
+            // F 组：只投「夹过库存的那一份」（用户选「合成并发送」/「只发送现有」时的前一半）
+            for (final ResourceAmount entry : explicitPlan) {
+                if (entry == null || entry.amount() <= 0L
+                    || !(entry.resource() instanceof PlatformResourceKey)) {
+                    continue;
+                }
+                mergeIntoPendingPlan(entry.resource(), entry.amount());
+            }
+            return;
+        }
         for (final ResourceAmount order : List.copyOf(orders)) {
             final ResourceKey resource = order.resource();
             final long amount = order.amount();
@@ -1141,6 +1010,54 @@ public class NetworkResourceRequesterBlockEntity
         setChanged();
     }
 
+    /**
+     * support 层（{@link PendingSenderSends} / {@link SenderShortage}）往缓冲里交一件回滚失败资源。
+     * <p>为什么开放这个方法：投递引擎是共享的，补投路径也可能出现「取出来又放不回去」，
+     * 那部分资源必须进同一个 {@link #returnBuffer}（下一 tick 归还网络），<b>绝不能另开一个容器</b>。</p>
+     */
+    public void bufferReturned(final ResourceKey resource, final long amount) {
+        bufferReturn(resource, amount);
+    }
+
+    /** support 层登记「合成后补投」待办（见 {@link #pendingSends}）。 */
+    public void addPendingSends(final List<PendingSenderSends.PendingSend> sends) {
+        if (sends == null || sends.isEmpty()) {
+            return;
+        }
+        pendingSends.addAll(sends);
+    }
+
+    /** 场上还挂着的补投待办（只读，自检 / 调试用）。 */
+    public List<PendingSenderSends.PendingSend> pendingSendsView() {
+        return List.copyOf(pendingSends);
+    }
+
+    /**
+     * 红石触发时找一个「可以问缺口」的玩家：取 64 格内最近的一名。
+     * <p>没有玩家在附近 ⇒ 返回 {@code null}，本轮按旧路径发送（投现有 + 缺口提示），
+     * 绝不因为「问不出口」而什么都不做。</p>
+     */
+    @Nullable
+    private ServerPlayer nearestPlayerForShortage() {
+        if (level == null || level.getServer() == null) {
+            return null;
+        }
+        ServerPlayer best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (final Player player : level.players()) {
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                continue;
+            }
+            final double distance = player.distanceToSqr(worldPosition.getX() + 0.5,
+                worldPosition.getY() + 0.5, worldPosition.getZ() + 0.5);
+            if (distance <= 4096.0 && distance < bestDistance) {
+                best = serverPlayer;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
     /** 记住解析成功的接收器坐标（只用于区分「未加载」与「找不到」）。 */
     private void rememberResolvedTarget(final NetworkResourceReceiverBlockEntity receiver) {
         final BlockPos pos = receiver.getBlockPos();
@@ -1167,7 +1084,7 @@ public class NetworkResourceRequesterBlockEntity
      * 红石钟每 2 tick 触发一次时，没有这一道会把聊天框刷爆；限频只影响「重复提示」，
      * 不影响任何投递 / 回滚语义。</p>
      */
-    private void hint(final String reason, final Object... args) {
+    public void hint(final String reason, final Object... args) {
         if (level == null || level.isClientSide()) {
             return;
         }
@@ -1219,20 +1136,19 @@ public class NetworkResourceRequesterBlockEntity
             case "order_rejected" -> "有 %s 条已选资源无法保存（资源键不支持落盘或数量非正），已拒绝";
             // 跨 tick 续投的目标没了（拆除 / 改名成未配置 / 断网）：计划作废，绝不丢资源
             case "pending_lost" -> "投递目标「%s」已不可用（拆除 / 改名 / 断开网络），未投完的请求已作废";
+            // 网络没有存储组件（理论上不会发生）：明确报出来，而不是静默「投了 0 件」
+            case "no_storage" -> "RS 网络里没有可用的存储，无法取料";
+            // F 组：合成后补投超时（10 分钟）
+            case "shortage_gave_up" -> "补投超时（10 分钟）：接收器「%s」还差 %s，自动合成没有凑齐，已放弃本次补投";
+            // 守恒自证失败：这是真正的 bug 信号，必须让玩家 / 日志看见，绝不静默
+            case "conservation_broken" -> "投递守恒校验失败（取出 %s / 写入 %s / 回滚 %s / 暂存 %s），请把日志发给作者";
             default -> "请求器投递失败：" + reason;
         };
     }
 
-    /** 资源显示名（物品 / 流体各取自己的 hover name；其它类型退回 toString）。 */
+    /** 资源显示名（委托共享实现：物品 / 流体各取自己的 hover name，其它类型退回 toString）。 */
     private static Component describeResource(final ResourceKey resource) {
-        if (resource instanceof ItemResource item) {
-            return item.toItemStack(1).getHoverName();
-        }
-        if (resource instanceof FluidResource fluid) {
-            return new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid.fluid()), 1,
-                fluid.components()).getHoverName();
-        }
-        return Component.literal(String.valueOf(resource));
+        return cretae.cookiewyq.rs_create_compat.support.SenderDelivery.describeResource(resource);
     }
 
     // ==================== 目标解析（现解析，不做注册表快照） ====================
@@ -1253,28 +1169,9 @@ public class NetworkResourceRequesterBlockEntity
      * @return 命中的接收器（0 个 = 未找到；1 个 = 命中；≥2 个 = 重名冲突，调用方必须拒绝而不是挑一个）
      */
     public List<NetworkResourceReceiverBlockEntity> resolveReceiversByName(@Nullable final String name) {
-        if (name == null || name.isEmpty()) {
-            return List.of();
-        }
-        final Network network = getNode().getNetworkOrNull();
-        if (network == null) {
-            return List.of();
-        }
-        final List<NetworkResourceReceiverBlockEntity> hits = new ArrayList<>();
-        for (final NetworkNodeContainer container : network.getComponent(GraphNetworkComponent.class)
-            .getContainers()) {
-            if (!(container.getNode() instanceof NetworkResourceReceiverNetworkNode node)) {
-                continue;
-            }
-            final NetworkResourceReceiverBlockEntity receiver = node.getBlockEntity();
-            if (receiver == null) {
-                continue;
-            }
-            if (name.equals(receiver.getReceiverName()) && receiver.isProperlyConfigured()) {
-                hits.add(receiver);
-            }
-        }
-        return hits;
+        // 枚举口径只有一处（SenderDelivery）：终端发送模式 / 目标选择子界面用的都是它
+        return cretae.cookiewyq.rs_create_compat.support.SenderDelivery
+            .resolveReceiversByName(getNode() == null ? null : getNode().getNetworkOrNull(), name);
     }
 
     // ==================== 持久化 ====================
@@ -1287,8 +1184,6 @@ public class NetworkResourceRequesterBlockEntity
         // 红石电平落盘：重进存档后第一次 neighborChanged 不会因为「电平与上次相同」而不触发
         // —— 重载后玩家再给一次脉冲必须能工作，这是「脉冲触发」这个语义的基本要求。
         tag.putBoolean(TAG_POWERED, redstonePowered);
-        // 升级槽落盘（与接收器同一个键名 Upgrades；两台机器各有自己的方块实体，不会互相覆盖）
-        tag.put(TAG_UPGRADES, upgradeContainer.serializeNBT(registries));
         // 订单清单：走 RS 自己的 `{resource, amount}` codec（物品 / 流体同一份实现）
         ORDER_CODEC.encodeStart(ops(registries), orders).result()
             .ifPresent(encoded -> tag.put(TAG_ORDERS, encoded));
@@ -1317,15 +1212,8 @@ public class NetworkResourceRequesterBlockEntity
         redstonePowered = tag.getBoolean(TAG_POWERED);
         lastResolvedTargetPos = tag.contains(TAG_LAST_TARGET)
             ? BlockPos.of(tag.getLong(TAG_LAST_TARGET)) : null;
-        // 读档期间不校验中间状态，读完统一校验一次（历史存档里的非法 / 超限升级在这一刻被弹出）
-        upgradeContainer.beginLoading();
-        try {
-            if (tag.contains(TAG_UPGRADES)) {
-                upgradeContainer.deserializeNBT(registries, tag.getCompound(TAG_UPGRADES));
-            }
-        } finally {
-            upgradeContainer.finishLoading();
-        }
+        // 第 131 轮：请求器不再吃升级，旧存档里的 Upgrades 键**原样忽略**（不读、不写、不迁移）——
+        // 读回也不会用，写了只会让玩家以为它还在生效。
         // 待投计划：先清空（方块实体可能被复用），再按 codec 读回；坏数据 ⇒ 空计划（不丢任何资源）
         pendingPlan.clear();
         if (tag.contains(TAG_PENDING_PLAN)) {
@@ -1369,11 +1257,10 @@ public class NetworkResourceRequesterBlockEntity
         return registries == null ? NbtOps.INSTANCE : RegistryOps.create(NbtOps.INSTANCE, registries);
     }
 
-    /** 区块加载完成：再校验一次（与接收器 / 其它机器的 onLoad 时机一致，成本是 6 次槽位读取）。 */
+    /** 区块加载完成：本机没有需要复核的槽位内容（升级槽已删除），只走基类。 */
     @Override
     public void onLoad() {
         super.onLoad();
-        upgradeContainer.validate();
     }
 
     /**

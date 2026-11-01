@@ -237,12 +237,21 @@ def judge_dedicated_server_safe(net_text: str, support_text: str) -> list:
 
 
 def judge_mode_wiring(item_text: str, switch_text: str, tabs_text: str) -> list:
-    """⑩ 模式枚举 / Tab / 返回模式接线。"""
+    """⑩ 模式枚举 / Tab / 返回模式接线。
+
+    第 131 轮起 MODE_COUNT 不再恒为 7（新增 MODE_SEND=7 / MODE_COUNT=8），因此这里改成
+    「派生 + 下限」判据：MODE_ENERGY 必须仍是 6、MODE_COUNT 必须 ≥ 7（覆盖到能耗档）、
+    Tab 语言键至少含本轮那 7 条（多出来的新档不算回归，但少的必须判负）。
+    写死 7 只会把「本轮合法地新增一档」误报成能耗页回归。
+    """
     bad = []
     if "MODE_ENERGY = 6" not in item_text:
         bad.append("MODE_ENERGY 不是 6")
-    if "MODE_COUNT = 7" not in item_text:
-        bad.append("MODE_COUNT 不是 7")
+    count_match = re.search(r"MODE_COUNT\s*=\s*(\d+)\s*;", item_text)
+    if not count_match:
+        bad.append("找不到 MODE_COUNT 字面量")
+    elif int(count_match.group(1)) < 7:
+        bad.append("MODE_COUNT 是 %s，小于 7（覆盖不到能耗档）" % count_match.group(1))
     if "mode == MODE_ENERGY" not in item_text:
         bad.append("isModeSupported 没把能耗模式算进去")
     if "case MODE_ENERGY" not in item_text:
@@ -254,8 +263,8 @@ def judge_mode_wiring(item_text: str, switch_text: str, tabs_text: str) -> list:
     if "NetworkEnergyAudit.stop" not in switch_text:
         bad.append("切走时没有结束会话")
     keys = re.findall(r'"(gui\.rs_create_compat\.advanced_remote_terminal\.mode\.[a-z_]+)"', tabs_text)
-    if len(keys) != 7:
-        bad.append("Tab 语言键不是 7 条（实际 %d）" % len(keys))
+    if len(keys) < 7:
+        bad.append("Tab 语言键少于 7 条（实际 %d）" % len(keys))
     if "mode.energy" not in tabs_text:
         bad.append("Tab 语言键里没有能耗模式")
     if "new ItemStack[AdvancedRemoteTerminalItem.MODE_COUNT]" not in tabs_text:
@@ -655,7 +664,7 @@ def main() -> int:
     for violation in judge_mode_wiring(item, switch, tabs):
         check(False, "模式接线判据", violation)
     if not judge_mode_wiring(item, switch, tabs):
-        check(True, "MODE_ENERGY=6 / MODE_COUNT=7 / Tab 7 条 / 返回模式已接线")
+        check(True, "MODE_ENERGY=6 / MODE_COUNT≥7 / Tab ≥7 条 / 返回模式已接线")
     check("returnMode" in snapshot, "returnMode 随快照下发（返回终端回到原来那档）")
     check("closeContainer()" in audit, "切进能耗页前关闭旧容器菜单（纯 Screen 无 Menu）")
     check("isPauseScreen" in screen, "pauseScreen 语义与其它自建界面一致")
@@ -708,7 +717,9 @@ def main() -> int:
     check(bool(judge_highlight_ttl(bad_ttl)), "反例 TTL 不走 Config ⇒ TTL 判据判负")
     bad_payloads = payloads + "\n        event.registrar(MODID).playToClient(SyncEnergyAuditPacket.TYPE, null, null);\n"
     check(bool(judge_packets(snapshot, request, bad_payloads)), "反例 重复注册 S2C ⇒ 包判据判负")
-    bad_mode = item.replace("MODE_COUNT = 7", "MODE_COUNT = 6")
+    # 反例：把 MODE_COUNT 改成 6（覆盖不到能耗档）。不能用字面量 replace —— 第 131 轮起
+    # MODE_COUNT 是 8，字面量 replace 会变成空操作，反例就退化成「永远判负/永远通过」的假证明。
+    bad_mode = re.sub(r"MODE_COUNT\s*=\s*\d+\s*;", "MODE_COUNT = 6;", item)
     check(bool(judge_mode_wiring(bad_mode, switch, tabs)), "反例 MODE_COUNT 仍是 6 ⇒ 模式判据判负")
     bad_config = config.replace("energyAuditMaxTypes", "energyAuditMaxKindsX")
     check(bool(judge_config(bad_config, audit, screen, highlight)), "反例 缺 Config 键 ⇒ Config 判据判负")

@@ -187,12 +187,13 @@ public class ClientInit {
         // 单元样板管理舱（按执行舱分组的单元样板管理 + 无线终端里的同一页）
         event.register(RS_Create_Compat.UNIT_PATTERN_MANAGER_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.UnitPatternManagerScreen::new);
-        // 网络资源接收器 / 请求器：改名 / 目标 / 订单清单 / 立即发送的配置界面
+        // 网络资源接收器：改名输入 + 可滚动网格（第 131 轮改成「取东西的地方」，仍是容器界面）
         //（数据包与校验在 network/*Packet + menu，本类只挂屏幕）
         event.register(RS_Create_Compat.NETWORK_RESOURCE_RECEIVER_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceReceiverScreen::new);
-        event.register(RS_Create_Compat.NETWORK_RESOURCE_REQUESTER_MENU.get(),
-            cretae.cookiewyq.rs_create_compat.client.screen.NetworkResourceRequesterScreen::new);
+        // 网络资源请求器的「设置界面」第 131 轮**整页删除**（用户：这界面没有任何作用）：
+        // 它的职责已经全部在网格界面里（目标选择 / 订单 / 发送），因此这里不再注册屏幕。
+        // 菜单类型本身保留（瘦菜单，永远打不开），只为不动既有注册表 / 存档数据。
         // 容器代理器：代理对象槽 + 六面角色按钮 + 「同一库存不要接两个外部存储」警告
         event.register(RS_Create_Compat.INVENTORY_PROXY_MENU.get(),
             cretae.cookiewyq.rs_create_compat.client.screen.InventoryProxyScreen::new);

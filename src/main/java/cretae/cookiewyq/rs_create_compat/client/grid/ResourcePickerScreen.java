@@ -9,9 +9,12 @@ import com.refinedmods.refinedstorage.common.support.resource.ResourceTypes;
 import cretae.cookiewyq.rs_create_compat.client.widget.McGui;
 import cretae.cookiewyq.rs_create_compat.client.widget.RsccTextFit;
 import cretae.cookiewyq.rs_create_compat.client.widget.RsccNumberField;
-import cretae.cookiewyq.rs_create_compat.menu.NetworkResourceRequesterMenu;
+import cretae.cookiewyq.rs_create_compat.client.screen.SenderCraftPromptScreen;
+import cretae.cookiewyq.rs_create_compat.client.screen.SenderTargetSelectScreen;
+import cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend;
 import cretae.cookiewyq.rs_create_compat.network.RequesterOrderPacket;
 import cretae.cookiewyq.rs_create_compat.network.SetRequesterTargetPacket;
+import cretae.cookiewyq.rs_create_compat.network.SenderShortagePromptPacket;
 import cretae.cookiewyq.rs_create_compat.network.SyncRequesterConfigPacket;
 import cretae.cookiewyq.rs_create_compat.network.TriggerRequesterPacket;
 import net.minecraft.client.gui.GuiGraphics;
@@ -45,15 +48,17 @@ import java.util.Set;
  *     可滚轮滚动、<b>自带搜索框</b>（只过滤已加入的条目，大小写不敏感，匹配名称 / 资源 id）；</li>
  *     <li><b>清单底部</b>：改数量（输入框 + 回车应用 / −/+ 步进并立即应用，
  *     全部走既有 C2S 包与服务端校验）；</li>
- *     <li><b>顶部工具栏</b>：目标接收器（循环切换）/ 立即发送 / 清空订单 / 节流文字 /
- *     「设置」（切回原来的请求器设置界面）。</li>
+ *     <li><b>顶部工具栏</b>：目标接收器（点击打开可搜索的子界面挑选）/ 立即发送 / 清空订单 /
+ *     节拍文字（固定常量，不再是升级旋钮）。第 131 轮起<b>没有</b>「设置」按钮 ——
+ *     用户确认那个设置界面整页删除，网格就是发送器的唯一界面。</li>
  * </ul>
  *
  * <h2>客户端只读：所有写入都是「请求」</h2>
  * <p>增 / 删 / 改数量发 {@link RequesterOrderPacket}（动作 + 下标 + 完整资源键），
- * 目标切换发 {@link SetRequesterTargetPacket}，发送发 {@link TriggerRequesterPacket}
- * （服务端走与红石同一个 {@code triggerRequest()}），切设置界面发
- * {@code RequesterOrderPacket.ACTION_OPEN_SETTINGS}。服务端每一步都重新解析
+ * 目标切换发 {@link SetRequesterTargetPacket}（候选由 {@link SenderTargetSelectScreen} 子界面给出），
+ * 发送发 {@link TriggerRequesterPacket}（服务端走与红石同一个 {@code triggerRequest()}）。
+ * 缺口 + 可自动合成时，服务端会回 {@link SenderShortagePromptPacket}，
+ * 本屏据此弹出 {@link SenderCraftPromptScreen} 询问（「先不发」是服务端决定的）。服务端每一步都重新解析
  * 「玩家现在打开的是哪台请求器」并校验距离，客户端<b>不写世界、不查能力、不读方块实体</b>，
  * 显示层只吃两份只读来源：打开时的菜单快照 + {@link SyncRequesterConfigPacket} 的权威快照。</p>
  *
@@ -141,8 +146,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     public static final int SEND_W = 52;
     /** 「清空订单」按钮宽。 */
     public static final int CLEAR_W = 46;
-    /** 「设置」按钮宽。 */
-    public static final int SETTINGS_W = 40;
 
     // ==================== 颜色 ====================
     private static final int COLOR_TITLE = 0xFF333333;
@@ -189,8 +192,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     private Button sendButton;
     /** 工具栏：清空订单。 */
     private Button clearButton;
-    /** 工具栏：打开设置界面（原来的请求器小面板）。 */
-    private Button settingsButton;
 
     /** 当前聚焦的订单条目（{@link #rows} 的下标；-1 = 没有）。 */
     private int focusIndex = -1;
@@ -288,9 +289,9 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         addRenderableWidget(filterBox);
     }
 
-    /** 顶部工具栏：目标接收器 / 立即发送 / 清空订单 / 设置。 */
+    /** 顶部工具栏：目标接收器（子界面）/ 立即发送 / 清空订单。 */
     private void buildToolbar() {
-        targetButton = Button.builder(targetLabel(), button -> cycleTarget(hasShiftDown() ? -1 : 1))
+        targetButton = Button.builder(targetLabel(), button -> openTargetSelect())
             .bounds(toolbarX, toolbarY, TARGET_W, TOOLBAR_H)
             .build();
         addRenderableWidget(targetButton);
@@ -304,11 +305,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             .bounds(clearX(), toolbarY, CLEAR_W, TOOLBAR_H)
             .build();
         addRenderableWidget(clearButton);
-        settingsButton = Button.builder(Component.translatable(LANG + "toolbar.settings"),
-                button -> openSettings())
-            .bounds(settingsX(), toolbarY, SETTINGS_W, TOOLBAR_H)
-            .build();
-        addRenderableWidget(settingsButton);
     }
 
     /** 算出面板位置 / 容量（屏幕尺寸变化时 {@code init} 会重新调用）。 */
@@ -329,7 +325,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         toolbarX = leftPos;
         final int right = Math.min(panelX + PANEL_W, width - 2);
         toolbarW = Math.max(0, right - toolbarX);
-        pacingX = settingsX() + SETTINGS_W + BTN_GAP + GAP;
+        pacingX = clearX() + CLEAR_W + BTN_GAP + GAP;
         pacingW = Math.max(0, toolbarX + toolbarW - pacingX);
     }
 
@@ -343,10 +339,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     private int clearX() {
         return sendX() + SEND_W + BTN_GAP;
-    }
-
-    private int settingsX() {
-        return clearX() + CLEAR_W + BTN_GAP;
     }
 
     /** 清单标题行的 y（面板坐标）。 */
@@ -621,40 +613,34 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         if (packet != null) {
             rebuildRowsFromPacket(packet);
         }
+        // 第 131 轮 F 组：服务端判定「有缺口且可自动合成」时不会发送，而是回一份询问。
+        // 取走即清空 ⇒ 同一个询问只弹一次窗；关窗（Esc）= 什么都不做（不发、不合成）。
+        final SenderShortagePromptPacket prompt =
+            SenderShortagePromptPacket.takeFor(getMenu().containerId);
+        if (prompt != null) {
+            net.minecraft.client.Minecraft.getInstance().setScreen(
+                new SenderCraftPromptScreen(this, prompt));
+        }
         updateButtons();
     }
 
     // ==================== 工具栏动作（全部只发请求，不写本地配置） ====================
 
     /**
-     * 循环切换目标接收器：<b>点一次就提交一次</b>。
+     * 打开<b>目标接收器选择子界面</b>（第 131 轮 C 组）。
      *
-     * <p>为什么这里不像设置界面那样「翻页 + 选定」两步：工具栏只有一个按钮位（右列只有 118px，
-     * 顶部工具条也只有一个按钮的宽度），而<b>每一次点击都是玩家的一次显式决定</b>；
-     * 服务端仍然按名字现解析（找不到 / 重名一律拒绝并回提示），所以最坏情况是「没改成」，
-     * 不会把资源投到一台没被选中的机器上。Shift+左键 = 上一台。</p>
+     * <p>旧实现是「点一次按钮 = 切到下一台并立即提交」（Shift+左键 = 上一台）。用户明确否掉了它：
+     * 「并不是像现在这样子，就一个按钮在点来点去」——机器多的时候玩家根本不知道点了几次、
+     * 点到了谁。现在点按钮只负责<b>打开列表</b>，玩家在子界面里搜索 / 挑一台 / 点确定，
+     * 提交仍然是同一个 {@link SetRequesterTargetPacket}（服务端仍按名字现解析、找不到或重名一律拒绝）。</p>
+     *
+     * <p>候选为空也照开：子界面会写明「本网络还没有已命名的接收器」——
+     * 比在工具栏上点一下只回一句提示更容易看懂该去做什么。</p>
      */
-    private void cycleTarget(final int delta) {
-        if (receivers.isEmpty()) {
-            // 点了必须给一句：本网络里没有可选的接收器
-            messageKey = QLANG + "target.known.none";
-            return;
-        }
-        // 目标还没设 / 已不在本网络（拆了 / 改名了）⇒ 第一次点击直接落到候选第一台，
-        // 而不是「从 0 再 +1」跳过第一台（那会让玩家以为第一台永远选不中）。
-        int base = -1;
-        for (int index = 0; index < receivers.size(); index++) {
-            if (receivers.get(index).name().equals(syncedTarget)) {
-                base = index;
-                break;
-            }
-        }
-        final SyncRequesterConfigPacket.ReceiverView next = base < 0
-            ? receivers.get(0)
-            : receivers.get(Math.floorMod(base + delta, receivers.size()));
+    private void openTargetSelect() {
         messageKey = "";
-        net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-            new SetRequesterTargetPacket(getMenu().containerId, next.name()));
+        net.minecraft.client.Minecraft.getInstance().setScreen(
+            new SenderTargetSelectScreen(this, getMenu().containerId, receivers, syncedTarget));
     }
 
     /** 工具栏「立即发送」：服务端走与红石同一个 {@code triggerRequest()}。 */
@@ -670,18 +656,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
             new RequesterOrderPacket(getMenu().containerId, RequesterOrderPacket.ACTION_CLEAR,
                 -1, "", false, 0));
-    }
-
-    /**
-     * 工具栏「设置」：切回原来的请求器界面（命名目标 / 插件槽 / 投递进度）。
-     * <p>菜单类型只能由服务端 {@code openMenu} 决定，所以这里只是发一个「请打开设置」的动作；
-     * 动作借用既有 C2S 包，不新增 payload 注册。</p>
-     */
-    private void openSettings() {
-        messageKey = "";
-        net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-            new RequesterOrderPacket(getMenu().containerId,
-                RequesterOrderPacket.ACTION_OPEN_SETTINGS, -1, "", false, 0));
     }
 
     // ==================== 订单清单编辑（全部只发请求） ====================
@@ -1061,12 +1035,16 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     /** 服务端提示是否属于「成功」类（决定颜色；判据是一组常量，不猜字符串后缀）。 */
     private boolean isSuccessMessage() {
-        return NetworkResourceRequesterMenu.MSG_ORDER_ADDED.equals(messageKey)
-            || NetworkResourceRequesterMenu.MSG_ORDER_REMOVED.equals(messageKey)
-            || NetworkResourceRequesterMenu.MSG_ORDER_UPDATED.equals(messageKey)
-            || NetworkResourceRequesterMenu.MSG_ORDER_CLEARED.equals(messageKey)
-            || NetworkResourceRequesterMenu.MSG_TARGET_OK.equals(messageKey)
-            || NetworkResourceRequesterMenu.MSG_TRIGGER_OK.equals(messageKey);
+        return RequesterSenderBackend.MSG_ORDER_ADDED.equals(messageKey)
+            || RequesterSenderBackend.MSG_ORDER_REMOVED.equals(messageKey)
+            || RequesterSenderBackend.MSG_ORDER_UPDATED.equals(messageKey)
+            || RequesterSenderBackend.MSG_ORDER_CLEARED.equals(messageKey)
+            || RequesterSenderBackend.MSG_TARGET_OK.equals(messageKey)
+            || RequesterSenderBackend.MSG_TRIGGER_OK.equals(messageKey)
+            || cretae.cookiewyq.rs_create_compat.support.SenderShortage.MSG_SHORTAGE_CRAFTING
+                .equals(messageKey)
+            || cretae.cookiewyq.rs_create_compat.support.SenderShortage.MSG_SHORTAGE_SENT_ONLY
+                .equals(messageKey);
     }
 
     // ==================== tooltip（全部手动绘制：MC 不会替我们调） ====================
@@ -1118,17 +1096,13 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
                 java.util.Optional.empty(), mouseX, mouseY);
             return true;
         }
-        if (settingsButton != null && settingsButton.isMouseOver(mouseX, mouseY)) {
-            guiGraphics.renderTooltip(font, List.of(
-                    Component.translatable(LANG + "toolbar.settings.hint")),
-                java.util.Optional.empty(), mouseX, mouseY);
-            return true;
-        }
         if (pacingW >= 24 && mouseX >= pacingX && mouseX < pacingX + pacingW
             && mouseY >= toolbarY && mouseY < toolbarY + TOOLBAR_H) {
-            // 节流口径与设置界面逐字同一份文案（同一个语言键），空格不够时也能看到全文
+            // 第 131 轮：节拍固定（红石脉冲多快就发多快，不吃升级）。
+            // 旧文案说的是「速度升级 / 叠加升级」——那套旋钮已经不存在，必须换掉，
+            // 否则界面在撒谎（玩家会去找一个被删掉的槽）。
             guiGraphics.renderTooltip(font, List.of(
-                    Component.translatable(QLANG + "upgrade.pacing",
+                    Component.translatable(LANG + "toolbar.rate.hint",
                         pacingBatchesPerTick, RsccNumberField.grouped(pacingBatch))),
                 java.util.Optional.empty(), mouseX, mouseY);
             return true;

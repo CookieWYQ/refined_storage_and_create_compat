@@ -39,6 +39,10 @@
      工具提示用 Slot#index / 高级菜单传基础版 MenuType / 预算不夹取 / 区域模式退回半径 / 换面不失效能力 /
      维度不符不拦编辑 / 常驻红字回归 / 面提示键拼错）。
 
+第 131 轮：高级界面的「状态带绘制」已按用户要求删除（那行摘要被点名「非常丑、非常废话」），
+状态带改由基类 isStatusVisible 只在真问题时出字 ⇒ `statusLine(` 的计数判据从「定义 + 状态行 +
+tooltip ≥3」收紧为「定义 + tooltip **恰好 2**」（多一处出口也判负；判据只收紧/反转，不放宽）。
+
 用法：python tools/selfcheck_round93_proxy_cache_area.py
 退出码：0 = 全部 PASS。
 """
@@ -689,8 +693,11 @@ def audit(raw):
         if full not in zh or full not in en:
             problems.append("area-status-lang")
             break
-    # 状态文案只有一个来源：render 的状态行与区域槽 tooltip 都调 statusLine()
-    if adv_screen.count("statusLine(") < 3:
+    # 状态文案只有一个来源：本屏只剩「区域槽 tooltip」这一个使用点。
+    # 第 131 轮：状态带绘制（drawStatusLine 覆写）随用户「那行提示非常丑、非常废话」整条删除，
+    # 状态带改由基类 isStatusVisible 统一管（只在真问题时出字）⇒ 计数从 ≥3（定义 + 状态行 + tooltip）
+    # 收紧成**恰好 2**（定义 1 + tooltip 调用 1）。这不是放宽：多一处调用也判负（不允许第二个出口）。
+    if adv_screen.count("statusLine(") != 2:
         problems.append("area-status")
 
     # ---------------- ②e 预算 / 游标 ----------------
@@ -1096,8 +1103,9 @@ adv_screen_s = strip_comments_and_strings(sources["AdvancedCollectionCacheScreen
 check("P1 区域槽 tooltip 用「菜单内下标」定位（Slot#index 恒为 0 的坑）",
       "menu.slots.indexOf(hoveredSlot) == AdvancedCollectionCacheMenu.AREA_SLOT_INDEX" in adv_screen_s
       and "hoveredSlot.index == AdvancedCollectionCacheMenu.AREA_SLOT_INDEX" not in adv_screen_s)
-check("P1 区域槽 tooltip 与状态行共用四态文案（不再无条件写「生效 N 个区域」）",
-      adv_screen_s.count("statusLine(") >= 3
+check("P1 区域槽 tooltip 用四态文案（第 131 轮：状态带绘制已删 ⇒ 本屏 statusLine 只剩"
+      "「定义 + tooltip 调用」恰好 2 处；仍不允许无条件写「生效 N 个区域」）",
+      adv_screen_s.count("statusLine(") == 2
       and all(('LANG + "%s"' % key) in strip_comments(sources["AdvancedCollectionCacheScreen.java"])
               for key in ("info.active", "info.empty", "info.dimension", "info.none")))
 handler_s = strip_comments_and_strings(sources["AreaSelectorHandler.java"])

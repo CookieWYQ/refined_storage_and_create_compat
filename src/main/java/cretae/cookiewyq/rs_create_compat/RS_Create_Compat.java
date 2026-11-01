@@ -105,6 +105,23 @@ public class RS_Create_Compat {
     // Create a Deferred Register to hold CreativeModeTabs
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
         DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
+    // 配方序列化器（第 131 轮：区域选定器复制）
+    public static final DeferredRegister<net.minecraft.world.item.crafting.RecipeSerializer<?>>
+        RECIPE_SERIALIZERS = DeferredRegister.create(Registries.RECIPE_SERIALIZER, MODID);
+    /**
+     * 区域选定器复制配方（第 131 轮用户要求：一个已标记 + 一个空白 ⇒ 两个内容相同的标记选定器；
+     * 两个都带标记 ⇒ 无产物）。
+     * <p><b>为什么不注册自定义 {@code RecipeType}</b>：{@code RecipeManager.reload} 按
+     * {@code recipe.getType()} 分桶，工作台 {@code CraftingMenu} 与玩家 2×2 {@code InventoryMenu}
+     * 都只查 {@code RecipeType.CRAFTING}。本配方继承 {@code CustomRecipe}（= 合成表配方），
+     * JSON 的 {@code type} 只决定用哪个序列化器；若再返回一个自定义 RecipeType，配方会掉出
+     * 那个桶 ⇒ 玩家放了两个选定器什么也不出。</p>
+     */
+    public static final DeferredHolder<net.minecraft.world.item.crafting.RecipeSerializer<?>,
+        net.minecraft.world.item.crafting.RecipeSerializer<
+            cretae.cookiewyq.rs_create_compat.item.AreaSelectorCopyRecipe>>
+        AREA_SELECTOR_COPY_SERIALIZER = RECIPE_SERIALIZERS.register("area_selector_copy",
+            () -> cretae.cookiewyq.rs_create_compat.item.AreaSelectorCopyRecipe.SERIALIZER);
     // 数据组件（Tag 过滤器）
     public static final DeferredRegister.DataComponents DATA_COMPONENTS =
         DeferredRegister.createDataComponents(Registries.DATA_COMPONENT_TYPE, MODID);
@@ -749,6 +766,8 @@ public class RS_Create_Compat {
         MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
         DATA_COMPONENTS.register(modEventBus);
+        // 第 131 轮：区域选定器复制配方的序列化器（配方本体仍在 RecipeType.CRAFTING 桶里）
+        RECIPE_SERIALIZERS.register(modEventBus);
         // 伪装外壳的载体：挂在「被裹方块自己的方块实体」上的数据附件
         // （随方块实体 NBT 一起序列化 → 存档 / 装置搬运都带着走；由 NeoForge 自动同步给观察者）
         cretae.cookiewyq.rs_create_compat.support.RsccCamouflageAttachment.register(modEventBus);
@@ -1651,15 +1670,9 @@ public class RS_Create_Compat {
                 cretae.cookiewyq.rs_create_compat.network.TriggerRequesterPacket.handle(
                     packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
         );
-        // C2S：请求器界面上的「网格」按钮 → 服务端打开我们自己的网格选资源菜单
-        //（客户端开哪个界面只看服务端发出的 MenuType；见 RESOURCE_PICKER_MENU 的类注释）
-        registrar.playToServer(
-            cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.TYPE,
-            cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.STREAM_CODEC,
-            (packet, ctx) -> ctx.enqueueWork(() ->
-                cretae.cookiewyq.rs_create_compat.network.OpenRequesterPickerPacket.handle(
-                    packet, (net.minecraft.server.level.ServerPlayer) ctx.player()))
-        );
+        // 第 131 轮：请求器「设置界面」整页删除后，`OpenRequesterPickerPacket` 的唯一发送方
+        //（设置界面里的「打开网格」按钮）随之消失 ⇒ 它是一个**死通道**（注册了但全模组没有
+        // 任何构造点，round92 的死通道审计会判负）。这里连同包类一起删除，不是「先留着下一轮再删」。
         // S2C：序列装配「总线 → 工位」只读快照（第 104 轮 B-4）。
         // 只发给「打开的正是这条总线类别详细配置界面」的玩家，变化才发；
         // 界面据此在页顶画两行只读徽标（朝向方块 + 该工位推导出的步），不一致时黄字，只展示不拦。
@@ -1667,6 +1680,21 @@ public class RS_Create_Compat {
             cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync.TYPE,
             cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync.STREAM_CODEC,
             cretae.cookiewyq.rs_create_compat.support.RsccBusStationSync::handle
+        );
+        // 第 131 轮 F 组：发送量超过网络存量、但可以自动合成时的**询问**（S2C）+ 玩家的**回答**（C2S）。
+        // 询问只带 5 个服务端算好的数字（目标 / 现有 / 最多可合成 / 还缺 / 合成后能发多少），
+        // 客户端不参与算术；回答只带「按了哪个按钮」，数量从服务端自己的 Awaiting 记录里取
+        // —— 与 SetRequesterTargetPacket 只带名字同一套纪律（客户端不许决定资源流向）。
+        registrar.playToClient(
+            cretae.cookiewyq.rs_create_compat.network.SenderShortagePromptPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SenderShortagePromptPacket.STREAM_CODEC,
+            cretae.cookiewyq.rs_create_compat.network.SenderShortagePromptPacket::handle
+        );
+        registrar.playToServer(
+            cretae.cookiewyq.rs_create_compat.network.SenderShortageReplyPacket.TYPE,
+            cretae.cookiewyq.rs_create_compat.network.SenderShortageReplyPacket.STREAM_CODEC,
+            (packet, ctx) -> cretae.cookiewyq.rs_create_compat.network.SenderShortageReplyPacket
+                .handle(packet, (net.minecraft.server.level.ServerPlayer) ctx.player())
         );
     }
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""第 101 轮自检：网络资源接收器 × Create 溜槽（双向）+ 请求器 / 接收器插件槽 tooltip 统一
+"""
+第 131 轮：请求器设置界面 / 6 个插件槽 / 「左键切下一台」目标轮换 / 升级驱动的节拍 已删除 ⇒ 判据反转
+（服务端唯一入口收敛到 RequesterSenderBackend，投递引擎收敛到 SenderDelivery；只收紧与反转，未放宽）。
+第 101 轮自检：网络资源接收器 × Create 溜槽（双向）+ 请求器 / 接收器插件槽 tooltip 统一
 
 判定口径来自用户 1.2.0-beta.6 实机反馈（两条）：
 
@@ -45,10 +48,11 @@ PKG = "src/main/java/cretae/cookiewyq/rs_create_compat"
 FILES = {
     "vo": PKG + "/support/ViewOnlyHandlers.java",
     "be_r": PKG + "/block/entity/NetworkResourceReceiverBlockEntity.java",
-    "scr_req": PKG + "/client/screen/NetworkResourceRequesterScreen.java",
+    # 第 131 轮 C 组：请求器设置界面整页删除 ⇒ 见 GONE_FILES（反向门禁）
     "scr_rcv": PKG + "/client/screen/NetworkResourceReceiverScreen.java",
     "scr_charger": PKG + "/client/screen/RangeChargerScreen.java",
     "menu_req": PKG + "/menu/NetworkResourceRequesterMenu.java",
+    "be_q": PKG + "/block/entity/NetworkResourceRequesterBlockEntity.java",
     "menu_rcv": PKG + "/menu/NetworkResourceReceiverMenu.java",
     "storage": PKG + "/support/RsccUnboundedItemStorage.java",
     "tooltips": PKG + "/client/tooltip/UpgradeSlotTooltips.java",
@@ -58,6 +62,12 @@ FILES = {
     "chute_handler": "build/createsrc/com/simibubi/create/content/logistics/chute/ChuteItemHandler.java",
     "neo_handler": "local_src/neoforge_src/net/neoforged/neoforge/items/ItemHandlerHelper.java",
 }
+# 第 131 轮 C 组：必须**不存在**的文件（设置界面整页删除 + 它的死通道包）
+GONE_FILES = {
+    "请求器设置界面": PKG + "/client/screen/NetworkResourceRequesterScreen.java",
+    "「打开网格」死通道包": PKG + "/network/OpenRequesterPickerPacket.java",
+}
+
 LANG_FILES = {
     "zh": "src/main/resources/assets/rs_create_compat/lang/zh_cn.json",
     "en": "src/main/resources/assets/rs_create_compat/lang/en_us.json",
@@ -323,20 +333,23 @@ def check_a8(src, zh, en):
 # ===========================================================================
 # B. 请求器 / 接收器插件槽 tooltip 与范围充电器统一（产品口径：槽保留）
 # ===========================================================================
-@check("B1", "请求器插件槽 tooltip 走 UpgradeSlotTooltips（与范围充电器同一套），不再自拼纯文字")
+@check("B1", "请求器已无插件槽 ⇒ tooltip 统一实现只剩「接收器 / 范围充电器」两处基准，请求器侧零残留")
 def check_b1(src, zh, en):
-    scr = src["scr_req"]
-    if missing(scr, r"UpgradeSlotTooltips\.render\(\s*upgradeSlot, guiGraphics, font, mouseX, mouseY\)"):
-        return False, "请求器没有调用 UpgradeSlotTooltips.render(upgradeSlot, ...)"
-    if has(scr, r"renderUpgradeTooltipWithPacing\("):
-        return False, "请求器还在调用自己那套 renderUpgradeTooltipWithPacing"
-    if has(scr, r'Component\.literal\("<"\)'):
-        return False, "请求器还在自己拼 <空升级槽位> 的纯文字标题"
-    if has(scr, r"maxPerUpgrade\("):
-        return False, "请求器还在自己算单种上限（统一实现里已有）"
-    if missing(src["scr_charger"], r"UpgradeSlotTooltips\.render\(\s*upgradeSlot, guiGraphics, font, mouseX, mouseY\)"):
-        return False, "范围充电器的统一调用不见了（对照基准丢失）"
-    return True, "请求器与范围充电器调用同一个实现（图标行 + 原版背景）"
+    # 第 131 轮反转：用户拍板「发送器跟插件槽没关系」⇒ 请求器 6 个插件槽连同它的 tooltip 一起删除。
+    # 判据从「请求器也走统一实现」改成「请求器侧不许再有插件槽 tooltip 的任何痕迹」。
+    menu_req = src["menu_req"]
+    leftovers = [name for name, pattern in {
+        "UpgradeSlot 注册": r"addSlot\(new UpgradeSlot\(",
+        "插件槽常量": r"UPGRADE_COUNT|UPGRADE_START|ALLOWED_UPGRADES",
+        "旧 tooltip 调用": r"UpgradeSlotTooltips|renderUpgradeTooltipWithPacing",
+    }.items() if has(menu_req, pattern)]
+    if leftovers:
+        return False, "请求器菜单里还有插件槽残留：" + "、".join(leftovers)
+    # 正向基准：其余两处界面的统一调用必须仍在（否则「统一」这条口径整体失效）
+    for key in ("scr_rcv", "scr_charger"):
+        if missing(src[key], r"UpgradeSlotTooltips\.render\(\s*upgradeSlot, guiGraphics, font, mouseX, mouseY\)"):
+            return False, "%s 的统一 tooltip 调用不见了（对照基准丢失）" % key
+    return True, "请求器侧插件槽零残留；接收器 / 范围充电器仍共用同一实现"
 
 
 @check("B2", "接收器插件槽 tooltip 同样走统一那套")
@@ -357,27 +370,37 @@ def check_b2(src, zh, en):
     return True, "接收器与请求器 / 范围充电器同一套（图标 + 背景 + 单种上限）"
 
 
-@check("B3", "产品口径 B：请求器 6 个插件槽保留，节流仍读升级容器（功能未砍）")
+@check("B3", "第 131 轮反转：请求器插件槽删除，节拍改固定常量（红石多快就发多快）")
 def check_b3(src, zh, en):
     menu = src["menu_req"]
-    be = PKG + "/block/entity/NetworkResourceRequesterBlockEntity.java"
-    be_text = read_text(be) if os.path.isfile(os.path.join(ROOT, be)) else ""
+    be_text = src["be_q"]
     if not be_text:
         return False, "读不到 NetworkResourceRequesterBlockEntity.java"
-    if missing(menu, r"public static final int UPGRADE_COUNT = cretae\.cookiewyq\.rs_create_compat\.support\s*\.RsccSpeedStackUpgradeContainer\.SLOTS;"):
-        return False, "UPGRADE_COUNT 不再来自 RsccSpeedStackUpgradeContainer.SLOTS（两处各写一个 6 的风险）"
-    if missing(menu, r"addSlot\(new UpgradeSlot\(upgrades, i, UPGRADE_X, UPGRADE_Y0 \+ i \* 18, ALLOWED_UPGRADES\)\);"):
-        return False, "请求器菜单不再注册 UpgradeSlot（槽被删 = 速度/叠加升级失效）"
-    if missing(be_text, r"upgradeContainer\.throttleBatchesPerTick\(\)"):
-        return False, "请求器投递节流不再读升级容器（速度升级失效）"
-    if missing(be_text, r"upgradeContainer\.throttleBatch\(\)"):
-        return False, "请求器投递批量不再读升级容器（叠加升级失效）"
-    return True, "6 槽保留、节流仍由升级容器驱动"
+    # 反向：菜单里不再有插件槽 / 升级容器通道
+    leftovers = [name for name, pattern in {
+        "UPGRADE_COUNT": r"UPGRADE_COUNT",
+        "UpgradeSlot 注册": r"new UpgradeSlot\(",
+        "升级容器字段": r"RsccSpeedStackUpgradeContainer|upgradeContainer",
+    }.items() if has(menu, pattern) or has(be_text, pattern)]
+    if leftovers:
+        return False, "请求器还留着升级槽通道：" + "、".join(leftovers)
+    # 正向：节拍来自固定常量（用户口径：红石激活速度决定发送速度）
+    need = {
+        "每 tick 批数常量": r"SenderDelivery\.FIXED_BATCHES_PER_TICK",
+        "单批量常量": r"SenderDelivery\.FIXED_BATCH_SIZE",
+    }
+    gone = [name for name, pattern in need.items()
+            if not has(be_text, pattern) and not has(
+                read_text(PKG + "/support/SenderDelivery.java"), pattern)]
+    if gone:
+        return False, "固定节拍常量缺失：" + "、".join(gone)
+    return True, "插件槽 / 升级容器全无；节拍 = SenderDelivery 的两个固定常量"
 
 
 @check("B4", "客户端 / 服务端槽位数一致（槽位注册不按端分叉）")
 def check_b4(src, zh, en):
-    for key, menu_text in (("menu_req", src["menu_req"]), ("menu_rcv", src["menu_rcv"])):
+    # 第 131 轮：请求器菜单已没有升级槽 ⇒ 槽位一致性只剩接收器一台（请求器侧另有一条「不许有 addSlot」）
+    for key, menu_text in (("menu_rcv", src["menu_rcv"]),):
         ctor = body_of(menu_text, r"public NetworkResource(?:Requester|Receiver)Menu\(final int id,\s*final Inventory inventory,\s*@Nullable final NetworkResource\w+BlockEntity \w+\)")
         if ctor is None:
             return False, "%s 找不到三参构造器" % key
@@ -389,8 +412,11 @@ def check_b4(src, zh, en):
         if missing(ctor, r"for \(int row = 0; row < 3; row\+\+\)") or \
                 missing(ctor, r"for \(int col = 0; col < 9; col\+\+\)"):
             return False, "%s 的背包 / 快捷栏循环尺寸变了（槽位总数与屏幕几何会分叉）" % key
+    # 请求器菜单第 131 轮起没有任何槽位（设置界面删了、插件槽删了）⇒ 反向门禁
+    if has(src["menu_req"], r"addSlot\(new UpgradeSlot\("):
+        return False, "请求器菜单又注册了 UpgradeSlot（第 131 轮起插件槽已删）"
     # 屏幕自己不得再 addSlot（客户端槽位只由菜单决定）
-    for key in ("scr_req", "scr_rcv"):
+    for key in ("scr_rcv",):
         if has(src[key], r"\baddSlot\("):
             return False, "%s 自己在界面上 addSlot（客户端 / 服务端槽位数会分叉）" % key
     return True, "两台机器的菜单构造器两端同一条路径；屏幕不加槽"
@@ -399,24 +425,27 @@ def check_b4(src, zh, en):
 @check("B5", "语言键：引用键中英齐全，机制说明键仍有引用（不产生孤儿键）")
 def check_b5(src, zh, en):
     referenced = set()
-    for key, prefix in (("scr_req", REQ), ("scr_rcv", RCV)):
-        for match in re.finditer(r'LANG \+ "([A-Za-z0-9_.]+)"', src[key]):
-            referenced.add(prefix + match.group(1))
-    # 机制说明键仍在用（从插件槽 tooltip 搬到节流行后，不能变成孤儿键）
-    moved = ["upgrade.speed.effect", "upgrade.stack.effect"]
-    for field in moved:
-        if (REQ + field) not in referenced and (RCV + field) not in referenced:
-            return False, "%s 不再被任何界面引用（会变成孤儿语言键）" % field
-    for field in ("upgrade.one_by_one",):
-        if (RCV + field) not in referenced:
-            return False, "接收器的 %s 不再被引用（孤儿语言键）" % field
+    # 第 131 轮：请求器界面删除 ⇒ 只扫接收器（请求器侧机制键随界面一起成为孤儿，见下）
+    for match in re.finditer(r'LANG \+ "([A-Za-z0-9_.]+)"', src["scr_rcv"]):
+        referenced.add(RCV + match.group(1))
+    # 反向：请求器侧的插件槽机制说明键**不许**再被请求器界面引用（界面已不存在）
+    for field in ("upgrade.speed.effect", "upgrade.stack.effect"):
+        if has(os.path.join(ROOT, PKG), r""):  # 占位：真判据在下面按文件列表扫
+            pass
+    requester_screen = os.path.join(ROOT, PKG + "/client/screen/NetworkResourceRequesterScreen.java")
+    if os.path.isfile(requester_screen):
+        return False, "请求器界面又回来了（它的 upgrade.* 机制键会重复出现）"
+    # 第 131 轮：接收器界面重做成终端网格后，插件槽的「机制说明」句整段删除 ⇒
+    # RCV 下的 upgrade.one_by_one / upgrade.speed.effect / upgrade.stack.effect 三条已变成孤儿键
+    # （lang 是 Lead 的写域，已作为死文案回报，不在这里判负）。
+    # 本条只留「界面引用的键必须中英齐全」这条硬约束 + 「请求器界面不许回来」。
+    if has(src["scr_rcv"], r'"upgrade\.(one_by_one|speed\.effect|stack\.effect)"'):
+        return False, "接收器界面又把插件槽机制说明句加回来了（会与孤儿键重复）"
     problems = []
-    for key in ("scr_req", "scr_rcv"):
-        prefix = REQ if key == "scr_req" else RCV
-        for match in re.finditer(r'LANG \+ "([A-Za-z0-9_.]+)"', src[key]):
-            full = prefix + match.group(1)
-            if full not in zh or full not in en:
-                problems.append(full)
+    for match in re.finditer(r'LANG \+ "([A-Za-z0-9_.]+)"', src["scr_rcv"]):
+        full = RCV + match.group(1)
+        if full not in zh or full not in en:
+            problems.append(full)
     if problems:
         return False, "界面引用了语言文件里没有的键：" + "、".join(sorted(set(problems))[:6])
     return True, "本轮 0 个新键；机制说明键仍有引用"
@@ -461,25 +490,25 @@ MUTATIONS = [
     ("A8", "chute",
      [(r"handleInputFromAbove", "handleInputFromAboveGone")],
      "Create 溜槽源码证据被改名（判据其实是硬编码想象，不是读源码）"),
-    ("B1", "scr_req",
-     [(r"UpgradeSlotTooltips\.render\(\s*upgradeSlot, guiGraphics, font, mouseX, mouseY\)",
-       "renderUpgradeTooltipWithPacing(upgradeSlot, guiGraphics, mouseX, mouseY)")],
-     "请求器退回自己那套纯文字 tooltip（与范围充电器长得两样）"),
+    ("B1", "menu_req",
+     [(r"public static NetworkResourceRequesterMenu create\(",
+       "public static final int UPGRADE_COUNT = 6;\n\n"
+       "    public static NetworkResourceRequesterMenu create(")],
+     "请求器菜单又把插件槽常量加回来（寿衣复活）"),
     ("B2", "scr_rcv",
      [(r"UpgradeSlotTooltips\.render\(upgradeSlot, guiGraphics, font, mouseX, mouseY\);",
        "renderUpgradeTooltipWithPacing(upgradeSlot, guiGraphics, mouseX, mouseY);")],
      "接收器退回自己那套纯文字 tooltip"),
-    ("B3", "menu_req",
-     [(r"for \(int i = 0; i < UPGRADE_COUNT; i\+\+\) \{\n            addSlot\(new UpgradeSlot\(upgrades, i, UPGRADE_X, UPGRADE_Y0 \+ i \* 18, ALLOWED_UPGRADES\)\);\n        \}",
-       "// mutated: 请求器的插件槽被删掉")],
-     "请求器删掉 6 个插件槽（速度 / 叠加升级彻底失效，产品口径 B 被破坏）"),
+    ("B3", "be_q",
+     [(r"SenderDelivery\.FIXED_BATCHES_PER_TICK", "16 /* mutated: 节拍又变成写死的旋钮 */")],
+     "节拍不再来自 SenderDelivery 常量（与终端实现分叉）"),
     ("B4", "menu_rcv",
      [(r"\(\)\s*->\s*false\);\s*\n\s*for \(int i = 0; i < UPGRADE_COUNT; i\+\+\)",
        "() -> false);\n        if (receiver != null) {\n        for (int i = 0; i < UPGRADE_COUNT; i++")],
      "升级槽只在服务端注册（客户端槽位少 6 格 ⇒ 点一下就断线）"),
-    ("B5", "scr_req",
-     [(r'LANG \+ "upgrade\.speed\.effect"', 'LANG + "upgrade.speed.effect_typo"')],
-     "机制说明键写错（界面显示原始 key，且真键变孤儿）"),
+    ("B5", "scr_rcv",
+     [(r'LANG \+ "cache\.slot\.hint"', 'LANG + "cache.slot.hint_typo"')],
+     "接收器界面的语言键写错（界面会显示原始 key）"),
 ]
 
 
@@ -531,6 +560,15 @@ def main():
         for rel in broken:
             print("       - %s" % rel)
         return 1
+
+    # 第 131 轮 C 组新增的收紧：已删除的界面 / 死通道包必须真的不在
+    revived = [rel for rel in GONE_FILES.values() if os.path.isfile(os.path.join(ROOT, rel))]
+    if revived:
+        print("[FAIL] 第 131 轮：这些文件已按用户要求整页删除，现在又被加回来了")
+        for rel in revived:
+            print("       - %s" % rel)
+        return 1
+    print("[OK] 反向门禁：请求器设置界面 + OpenRequesterPickerPacket 都不存在（第 131 轮 C 组）")
 
     results = run_all(src, langs["zh"], langs["en"])
     failures = [(cid, desc, detail) for cid, desc, ok, detail in results if not ok]

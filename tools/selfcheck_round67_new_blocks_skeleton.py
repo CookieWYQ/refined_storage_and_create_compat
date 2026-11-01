@@ -16,7 +16,9 @@
   ③ **菜单屏幕已注册且都在 client/ 包**：`client/ClientInit` 里 register 了两个菜单类型，
      两个 Screen 类都位于 `client/screen/` 下；服务端可见的新类里不含任何客户端专属类型。
   ④ **升级槽**：接收器 **6 槽**、白名单**只含两类**（speed_upgrade + stack_upgrade）；
-     请求器**也有** 6 槽（2026-10-17 起，见设计文档 §1.4 第 2 条：速度 = 每 tick 几批、
+     * 【第 131 轮反转】请求器设置界面删除 + 请求器 6 个插件槽删除 ⇒ ③ 段改成「请求器屏幕必须不存在、
+     *   不注册」、④d/④e 反转成「请求器没有升级容器 / 不落盘升级」（判据只收紧与反转，未放宽）。
+     * 请求器**也有** 6 槽（2026-10-17 起，见设计文档 §1.4 第 2 条：速度 = 每 tick 几批、
      叠加 = 每批多少，两台机器的判据与容器**同一份实现**）。
   ⑤ **三层准入校验**都在：
      ① 界面 `UpgradeSlot` 白名单 = 那两类；
@@ -214,16 +216,24 @@ def check_registration():
 def check_screens_client_only():
     """③ 屏幕注册 + 屏幕类必须都在 client/ 包（专服安全硬规则）。"""
     client_init = code_of("client/ClientInit.java")
-    for menu in ("NETWORK_RESOURCE_RECEIVER_MENU", "NETWORK_RESOURCE_REQUESTER_MENU"):
-        check("③a ClientInit 注册了 %s 的屏幕" % menu, menu in client_init)
-    for screen in ("NetworkResourceReceiverScreen", "NetworkResourceRequesterScreen"):
-        path = os.path.join(JAVA, "client", "screen", screen + ".java")
-        check("③b %s 位于 client/screen/ 包下" % screen, os.path.isfile(path))
-        if os.path.isfile(path):
-            text = read(path)
-            check("③c %s 声明了 client.screen 包且继承 AbstractContainerScreen" % screen,
-                  text.startswith("package cretae.cookiewyq.rs_create_compat.client.screen;")
-                  and "extends AbstractContainerScreen" in text)
+    # 第 131 轮：请求器设置界面整页删除 ⇒ 只注册接收器那一块；
+    # 并且请求器菜单**不许**再被注册屏幕（注册了就是一个没有界面的死菜单）。
+    check("③a ClientInit 注册了 NETWORK_RESOURCE_RECEIVER_MENU 的屏幕",
+          "NETWORK_RESOURCE_RECEIVER_MENU" in client_init)
+    check("③a' ClientInit **不再**注册 NETWORK_RESOURCE_REQUESTER_MENU（设置界面已删）",
+          "NETWORK_RESOURCE_REQUESTER_MENU" not in client_init)
+    receiver_scr = os.path.join(JAVA, "client", "screen", "NetworkResourceReceiverScreen.java")
+    check("③b NetworkResourceReceiverScreen 位于 client/screen/ 包下",
+          os.path.isfile(receiver_scr))
+    if os.path.isfile(receiver_scr):
+        text = read(receiver_scr)
+        check("③c NetworkResourceReceiverScreen 声明了 client.screen 包且继承 AbstractContainerScreen",
+              text.startswith("package cretae.cookiewyq.rs_create_compat.client.screen;")
+              and "extends AbstractContainerScreen" in text)
+    # 反向门禁：请求器界面必须真的删了（不是「读不到就跳过」）
+    check("③c' 请求器设置界面文件必须不存在（第 131 轮整页删除）",
+          not os.path.isfile(os.path.join(JAVA, "client", "screen",
+                                          "NetworkResourceRequesterScreen.java")))
     # 反向断言：服务端可见的新类里不得出现客户端专属类型
     for rel in ("block/NetworkResourceReceiverBlock.java", "block/NetworkResourceRequesterBlock.java",
                 "block/entity/%s.java" % RECEIVER_BE, "block/entity/%s.java" % REQUESTER_BE,
@@ -266,21 +276,23 @@ def check_upgrade_slots():
           and "upgradeContainer.validate()" in be_recv)
 
     req_be = code_of("block/entity/%s.java" % REQUESTER_BE)
-    # 【2026-10-17 收尾时改】请求器**也**装 6 个升级槽：设计文档 §1.4 第 2 条把两台机器的旋钮
-    # 定成「速度升级 = 每 tick 几批、叠加升级 = 每批多少」，否则「无数量上限」会退化成
-    # 「一次触发搬不完，剩下的不知道什么时候搬」。槽位与判据与接收器**同一份实现**。
-    check("④d 请求器**有** 6 个升级槽，且与接收器同一份容器实现 / 同一份白名单",
-          "RsccSpeedStackUpgradeContainer upgradeContainer" in req_be
-          and "RsccSpeedStackUpgradeContainer.Host()" in req_be
-          and "for (int i = 0; i < UPGRADE_COUNT; i++)"
-              in code_of("menu/NetworkResourceRequesterMenu.java")
-          and "NetworkResourceReceiverMenu.ALLOWED_UPGRADES"
-              in code_of("menu/NetworkResourceRequesterMenu.java")
-          and "new UpgradeSlot(" in code_of("menu/NetworkResourceRequesterMenu.java"))
-    check("④e 请求器的升级也要落盘 + 读档后统一校验（与接收器同一条路径）",
-          "TAG_UPGRADES" in req_be
-          and "upgradeContainer.finishLoading()" in req_be
-          and "upgradeContainer.validate()" in req_be)
+    req_menu = code_of("menu/NetworkResourceRequesterMenu.java")
+    # 【第 131 轮反转】用户拍板「发送器跟插件槽没关系，红石激活的速度决定发送速度」⇒
+    # 请求器的 6 个插件槽删除，节拍改成 SenderDelivery 的两个固定常量。
+    # 判据从「请求器也有 6 槽」反转成「请求器侧升级通道零残留 + 节拍读固定常量」。
+    check("④d 请求器**没有**升级槽（容器 / 菜单 UpgradeSlot / 白名单引用全无）",
+          "RsccSpeedStackUpgradeContainer upgradeContainer" not in req_be
+          and "RsccSpeedStackUpgradeContainer.Host()" not in req_be
+          and "new UpgradeSlot(" not in req_menu
+          and "ALLOWED_UPGRADES" not in req_menu
+          and "UPGRADE_COUNT" not in req_menu)
+    check("④e 请求器也不再落盘升级（TAG_UPGRADES / finishLoading / validate 全无），"
+          "节拍改由 SenderDelivery 固定常量给出",
+          "TAG_UPGRADES" not in req_be
+          and "upgradeContainer.finishLoading()" not in req_be
+          and "upgradeContainer.validate()" not in req_be
+          and "SenderDelivery.FIXED_BATCHES_PER_TICK" in req_be
+          and "SenderDelivery.FIXED_BATCH_SIZE" in req_be)
 
     dest = code_of("RegisterUpgradeDestinations.java")
     check("⑤e 第 ③ 层：RS 升级注册表登记了接收器 + 速度/叠加各 6",

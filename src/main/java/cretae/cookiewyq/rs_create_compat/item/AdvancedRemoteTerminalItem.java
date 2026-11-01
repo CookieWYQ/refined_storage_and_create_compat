@@ -76,8 +76,18 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
      * （见 {@code support/NetworkEnergyAudit#open}）。</p>
      */
     public static final int MODE_ENERGY = 6;
+    /**
+     * 模式 7：<b>发送</b>（第 131 轮，用户原话「给我们的终端再加一个功能，就是也支持这一个网络资源发送器的功能」）。
+     *
+     * <p>打开的界面与<b>网络资源请求器方块</b>是<b>同一个</b> {@code client/grid/ResourcePickerScreen}
+     * （{@code ResourcePickerMenu.openFor(player, backend, title)}），只是后端换成
+     * {@code support/TerminalSenderBackend}：订单与目标存终端物品的 {@code CustomData}、
+     * 网络取终端物品绑定的那张 RS 网络、投递走同一份 {@code support/SenderDelivery}。
+     * 因此不存在「终端版发送界面」这第二套实现。</p>
+     */
+    public static final int MODE_SEND = 7;
     /** 模式总数（Tab 一排画这么多颗；{@code TerminalModeTabOverlay} 的图标 / 语言键数组必须与之等长）。 */
-    public static final int MODE_COUNT = 7;
+    public static final int MODE_COUNT = 8;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AdvancedRemoteTerminalItem.class);
 
@@ -288,7 +298,7 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
     public static boolean isModeSupported(final int mode) {
         return mode == MODE_GRID || mode == MODE_MONITOR || mode == MODE_PATTERNS
             || mode == MODE_MANAGER || mode == MODE_SEQUENCE || mode == MODE_UNIT_MANAGER
-            || mode == MODE_ENERGY;
+            || mode == MODE_ENERGY || mode == MODE_SEND;
     }
 
     /**
@@ -324,6 +334,9 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
                 // 先 closeContainer() 再下发第一份快照，客户端据此开界面。
                 case MODE_ENERGY -> cretae.cookiewyq.rs_create_compat.support.NetworkEnergyAudit
                     .open(player, returnMode);
+                // 第 131 轮：发送（与请求器方块<b>同一个</b>网格界面，后端 = TerminalSenderBackend）。
+                // 返回值 = 「界面真的开出来了」，据此决定要不要启动 Mode Tab 的电量心跳。
+                case MODE_SEND -> opened = openSendMode(player, stack, slotReference, title);
                 default -> openWirelessCraftingGrid(player, stack, slotReference);
             }
         } catch (final Throwable t) {
@@ -550,6 +563,59 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             bindEmptyNetworkToVirtualBe(be);
         }
         cretae.cookiewyq.rs_create_compat.menu.UnitPatternManagerMenu.open(player, be, title);
+    }
+
+    /**
+     * MODE 7：<b>发送</b> —— 打开与网络资源请求器方块<b>完全相同</b>的网格界面
+     * （{@code ResourcePickerMenu.openFor(player, backend, title)}），后端 = 终端物品实现。
+     *
+     * <h2>为什么不新写一个「终端发送界面」</h2>
+     * <p>用户要的是「终端也支持发送器的功能」，不是「第二个发送界面」。界面（选资源 / 订单清单 /
+     * 目标选择子界面 / 缺口询问 / 发送按钮）与投递引擎（{@code support/SenderDelivery}）都只有一份，
+     * 终端只换「状态存在哪儿」（物品 {@code CustomData}）与「网络从哪儿来」（终端绑定的网络）。
+     * 这样两条路径不可能出现校验差异或投递语义漂移。</p>
+     *
+     * <h2>失败时一定有话说（绝不「点了没反应」）</h2>
+     * <ul>
+     *     <li><b>终端物品在打开这一刻就已经不在身上</b>：这里就拒绝并提示，<b>不</b>让界面先开出来再被
+     *     {@code stillValid} 关掉（那种「一闪就没」比打不开更难懂）；</li>
+     *     <li><b>没绑定网络 / 网络没电</b>：界面<b>照开</b>（网格是灰空态，与其它模式「绑空网络照开」
+     *     一致；订单 / 目标仍然可编辑），并且一打开就把<b>第一条</b>原因写进界面底部提示行
+     *     （{@code TerminalSenderBackend#firstIssueKey()}），点「发送」时再逐条拒绝 —— 契约 §3.D4 的要求；</li>
+     *     <li><b>{@code openMenu} 本身没成</b>（玩家已有界面等）：回一条与请求器相同的
+     *     {@code ResourcePickerMenu.MSG_OPEN_FAILED}。</li>
+     * </ul>
+     *
+     * @return 界面是否真的开出来了（调用方据此决定要不要启动 Mode Tab 的电量心跳）
+     */
+    private boolean openSendMode(final ServerPlayer player,
+                                 final ItemStack stack,
+                                 final SlotReference slotReference,
+                                 final Component title) {
+        final cretae.cookiewyq.rs_create_compat.support.TerminalSenderBackend backend =
+            cretae.cookiewyq.rs_create_compat.support.TerminalSenderBackend.open(player, slotReference);
+        if (backend == null) {
+            // 打开阶段就拒绝：终端不在身上 ⇒ 没有可承载订单 / 目标的物品，界面开了也没有意义
+            player.displayClientMessage(Component.translatable(
+                cretae.cookiewyq.rs_create_compat.support.TerminalSenderBackend.MSG_NO_TERMINAL), true);
+            return false;
+        }
+        final boolean opened = cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerMenu
+            .openFor(player, backend, title);
+        if (!opened) {
+            player.displayClientMessage(Component.translatable(
+                cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerMenu.MSG_OPEN_FAILED), true);
+            return false;
+        }
+        // 「界面照开但发送会被拒」时，一进来就在界面底部提示行写清原因（契约 §3.D4：说明而不是静默）。
+        // 判据与 TerminalSenderBackend.triggerWithPlan 的闸门同源同序（终端在 → 目标 → 网络 → 电量 → 订单），
+        // 走 RequesterSenderBackend.syncTo 这条既有 S2C 通道，不新增包、不新增界面代码。
+        final String firstIssue = backend.firstIssueKey();
+        if (firstIssue != null) {
+            cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend.syncTo(
+                player, backend, firstIssue, -1);
+        }
+        return true;
     }
 
     /** 合成终端模式：调用 RS 官方配件 Quartz Arsenal 的<b>原版</b>无线合成终端物品（Universal-Grid 同款调用）。

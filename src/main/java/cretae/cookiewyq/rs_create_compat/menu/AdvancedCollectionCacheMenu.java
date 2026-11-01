@@ -106,6 +106,14 @@ public class AdvancedCollectionCacheMenu extends CollectionCacheMenu {
         // （138 槽 vs 服务端 139 槽），首次全量同步即 initializeContents 越界 ⇒ 客户端断线。
         super(RS_Create_Compat.ADVANCED_COLLECTION_CACHE_MENU.get(), id, inventory, block);
         this.advanced = block;
+        // 第 131 轮（用户第 4 条「打开的时候记住上一次选择的那个条目，然后自动切换」）：
+        // 打开界面就直接回到上次编辑的区域 —— 记忆值存在方块实体 NBT（LastEditingArea），
+        // 这里只做「读回来 + 越界收敛成 -1」（换过选定器 / 删过区域后序号可能失效）。
+        // 放在构造器而不是界面 init：这是服务端权威状态（客户端那份从数据槽 DATA_AREA_EDITING 同步），
+        // 且 setSynchronizer() 建屏后会立刻 syncMarkers()，那一刻匹配区窗口就已经是这个区域的过滤。
+        if (block != null) {
+            this.editingAreaIndex = clampEditingArea(block.getLastEditingArea());
+        }
         final ItemStackHandler areaSlot = block != null ? block.getAreaSlot() : clientAreaSlot;
         addSlot(new SlotItemHandler(areaSlot, 0, AREA_SLOT_X, AREA_SLOT_Y) {
             @Override
@@ -291,17 +299,35 @@ public class AdvancedCollectionCacheMenu extends CollectionCacheMenu {
      * 切换「正在编辑过滤器的区域」（服务端；由 {@code SetAreaFilterContextPacket} 调用）。
      * <p>切换后立刻重发匹配区窗口：客户端那 48 个 ghost 格显示的就是该区域的过滤条目
      * （没有第二套槽位机制，编辑手感与编辑全局匹配区完全一致，标记配置子界面也直接复用）。</p>
+     * <p><b>第 131 轮</b>：这里是「记住上次编辑的区域」的<b>唯一持久化写入点</b>（用户第 4 条）——
+     * 玩家每切一次区域，就把收敛后的序号写进方块实体 NBT（键 {@code LastEditingArea}），
+     * 关界面再打开时构造器读回来直接生效。</p>
      *
      * @param areaIndex {@code -1} = 退出编辑（窗口清空）；越界值收敛到 -1
      */
     public void setEditingArea(final int areaIndex) {
-        final int clamped = areaIndex >= 0 && areaIndex < getAreaCount() ? areaIndex : -1;
+        final int clamped = clampEditingArea(areaIndex);
+        // 先落盘再判「值没变就 return」：序号相同也要保证记忆是当前值（例如读档回退成 -1 后
+        // 玩家又切回同一区域），否则关界面重开仍会回到旧记忆。
+        if (advanced != null) {
+            advanced.setLastEditingArea(clamped);
+        }
         if (editingAreaIndex == clamped) {
             return;
         }
         editingAreaIndex = clamped;
         setMatchOffset(0);
         syncMarkers();
+    }
+
+    /**
+     * 把区域序号收敛到当前有效范围（{@code -1} = 没有）。
+     * <p>构造器（读记忆）与 {@link #setEditingArea}（切上下文）<b>必须</b>用同一个判据 ——
+     * 否则会出现「记忆里是第 5 区、实际只有 3 个区域」这种指向不存在行的上下文，
+     * 匹配区标题带会写「区域 6 · 区域 6」却一格都写不进去。</p>
+     */
+    private int clampEditingArea(final int areaIndex) {
+        return areaIndex >= 0 && areaIndex < getAreaCount() ? areaIndex : -1;
     }
 
     /** 服务端：读方块实体上某区域的过滤条目（供「复制 / 清空」等动作，界面只读）。 */

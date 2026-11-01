@@ -89,6 +89,19 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
     /** 选定器专用槽数量（一个选定器 = 一份区域集合，多放无意义）。 */
     public static final int AREA_SLOT_COUNT = 1;
     private static final String TAG_AREA_SLOT = "AreaSelector";
+    /**
+     * 第 131 轮（用户第 4 条「打开的时候记住上一次选择的那个条目，然后自动切换」）：
+     * 「上次正在编辑过滤器的区域」存这里（= 快照 entries 的<b>可用位次</b>，与
+     * {@code AdvancedCollectionCacheMenu#setEditingArea} 同一口径；-1 = 上次没选）。
+     * <p>为什么落在方块实体而不是菜单：菜单是「一次打开会话」，关掉就没了；玩家要的是
+     * 「关掉界面再打开，匹配区直接就是上次那个区域的过滤」，所以必须跟着方块存档走。
+     * 两名玩家同时开同一台机器时是「后写入者赢」（菜单本就按玩家各存一份编辑上下文，
+     * 这里只做「默认值」记忆，不参与吸收判定）。</p>
+     */
+    private static final String TAG_LAST_EDITING_AREA = "LastEditingArea";
+
+    /** 上次编辑的区域（可用位次）；-1 = 没有 / 越界已被收敛。 */
+    private int lastEditingArea = -1;
 
     /** 界面状态（经菜单数据槽同步）：没装 / 生效中 / 区域为空 / 维度不符。 */
     public static final int AREA_STATUS_NONE = 0;
@@ -202,6 +215,27 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
     /** 菜单数据槽数量。 */
     public static int areaPanelDataCount() {
         return 6;
+    }
+
+    // ==================== 「上次编辑的区域」记忆（第 131 轮） ====================
+
+    /** 上次正在编辑过滤器的区域序号（可用位次；-1 = 没有）。打开界面时作为默认编辑上下文。 */
+    public int getLastEditingArea() {
+        return lastEditingArea;
+    }
+
+    /**
+     * 记下「当前在编辑哪个区域」（由 {@code AdvancedCollectionCacheMenu#setEditingArea} 在
+     * {@code SetAreaFilterContextPacket} 生效处调用 —— 那是编辑上下文唯一的权威写入口）。
+     * <p>只在真的变化时 {@link #setChanged()}：切换区域本来就是低频动作，但同一个值反复写会让区块
+     * 每 tick 都被标脏（玩家反复点同一行时白刷存档）。</p>
+     */
+    public void setLastEditingArea(final int areaIndex) {
+        if (lastEditingArea == areaIndex) {
+            return;
+        }
+        lastEditingArea = areaIndex;
+        setChanged();
     }
 
     /**
@@ -860,6 +894,10 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
     public void saveAdditional(final CompoundTag tag, final HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.put(TAG_AREA_SLOT, areaSlot.serializeNBT(registries));
+        // 第 131 轮：记住上次编辑的区域。-1（没选过）不写键，读档时缺键即 -1。
+        if (lastEditingArea >= 0) {
+            tag.putInt(TAG_LAST_EDITING_AREA, lastEditingArea);
+        }
         // 第 112 轮：每区域过滤已经搬到选定器物品上（AreaMarks）。这里只写「旧档遗留表」，
         // 正常存档里迁移完就是空表 —— 保留这个键是为了让迁移只发生一次且可回退观察。
         final ListTag filters = new ListTag();
@@ -889,6 +927,8 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
         if (tag.contains(TAG_AREA_SLOT)) {
             areaSlot.deserializeNBT(registries, tag.getCompound(TAG_AREA_SLOT));
         }
+        // 第 131 轮：缺键（旧档 / 从没切换过）= -1，绝不能沿用上一个 BE 实例的内存值。
+        lastEditingArea = tag.contains(TAG_LAST_EDITING_AREA) ? tag.getInt(TAG_LAST_EDITING_AREA) : -1;
         legacyAreaFilters.clear();
         final ListTag filters = tag.getList(TAG_AREA_FILTERS, Tag.TAG_COMPOUND);
         for (int i = 0; i < filters.size(); i++) {

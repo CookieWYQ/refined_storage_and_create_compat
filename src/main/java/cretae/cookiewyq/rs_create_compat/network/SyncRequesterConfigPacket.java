@@ -7,8 +7,8 @@ import com.refinedmods.refinedstorage.common.support.resource.FluidResource;
 import com.refinedmods.refinedstorage.common.support.resource.ItemResource;
 import com.refinedmods.refinedstorage.common.support.resource.ResourceCodecs;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
-import cretae.cookiewyq.rs_create_compat.block.entity.NetworkResourceRequesterBlockEntity;
 import cretae.cookiewyq.rs_create_compat.support.RsccResourceKeys;
+import cretae.cookiewyq.rs_create_compat.support.SenderBackend;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -203,29 +203,33 @@ public record SyncRequesterConfigPacket(int containerId, String target, List<Ord
         );
 
     /**
-     * 服务端工厂：把方块实体里的权威配置压成可下发的快照。
+     * 服务端工厂：把**发送源**（请求器方块 / 终端物品，都通过 {@link SenderBackend}）的权威配置
+     * 压成可下发的快照。
      *
-     * <p>每一条都带上完整资源键（物品 / 流体 / 第三方类型一视同仁）。第三方类型的 {@code id}
-     * 用稳定令牌（{@link RsccResourceKeys#token}），因此旧界面也能显示、也能原样传回来做增删改的
-     * 二次确认；令牌编不出来时退回 {@code String.valueOf(resource)} —— 但<b>绝不让显示视图比真实清单短一条</b>
-     * （客户端用下标做增删改，少一条就会让后面的所有下标错位）。</p>
+     * <p>第 131 轮起本方法不再认识方块实体：两套发送源由 {@link SenderBackend} 给出订单 / 目标 /
+     * 节拍，界面因此只有一份显示逻辑。每一条都带完整资源键（物品 / 流体 / 第三方类型一视同仁）；
+     * 第三方类型的 {@code id} 用稳定令牌（{@link RsccResourceKeys#token}），能原样传回来做增删改的
+     * 二次确认；令牌编不出来时退回 {@code String.valueOf(resource)} —— 但<b>绝不让显示视图比真实清单
+     * 少一条</b>（客户端用下标做增删改，少一条就会让后面的所有下标错位）。</p>
      *
-     * @param receivers 本网络已命名接收器的只读视图（名字 + 坐标），由菜单的既有网络枚举给出；
+     * @param receivers 本网络已命名接收器的只读视图（名字 + 坐标），由 {@code SenderDelivery} 给出；
      *                  <b>本类不自己去扫网络</b>（枚举口径只能有一处）
-     * @param networkConnected 请求器此刻是否真的接在可用的 RS 网络上（由<b>菜单</b>算好传进来：
-     *                  {@code network/**} 不许引用 client 包里的连通性判据）
+     * @param networkConnected 发送源此刻是否真的接在可用的 RS 网络上（由 {@link SenderBackend#isConnected()}）
+     * @param registries 资源键编解码用的注册表上下文（第三方类型令牌需要；{@code null} ⇒ 用纯 JSON ops）
      */
     public static SyncRequesterConfigPacket of(final int containerId,
-                                              final NetworkResourceRequesterBlockEntity requester,
+                                              final SenderBackend backend,
                                               final List<ReceiverView> receivers,
                                               final String messageKey,
                                               final boolean lastSuccess,
                                               final int focusOrder,
-                                              final boolean networkConnected) {
-        final HolderLookup.Provider registries = requester.getLevel() == null
-            ? null : requester.getLevel().registryAccess();
+                                              final boolean networkConnected,
+                                              @Nullable final HolderLookup.Provider registries) {
         final List<OrderView> views = new ArrayList<>();
-        for (final ResourceAmount entry : requester.getOrders()) {
+        for (final ResourceAmount entry : backend.orders()) {
+            if (entry == null) {
+                continue;
+            }
             final ResourceKey resource = entry.resource();
             if (!(resource instanceof PlatformResourceKey key)) {
                 // 保底：绝不让显示视图比真实清单短一条（这种键 setOrders 已经过滤，正常不会出现）
@@ -248,13 +252,14 @@ public record SyncRequesterConfigPacket(int containerId, String target, List<Ord
             }
             views.add(new OrderView(id, fluid, entry.amount(), key));
         }
-        return new SyncRequesterConfigPacket(containerId, requester.getTargetName(),
+        return new SyncRequesterConfigPacket(containerId,
+            backend.targetName() == null ? "" : backend.targetName(),
             List.copyOf(views), List.copyOf(receivers),
             messageKey == null ? "" : messageKey, lastSuccess, focusOrder, networkConnected,
-            requester.getThrottleBatchesPerTick(), requester.getThrottleBatch(),
-            requester.getRoundPlanned(), requester.getRoundDelivered(),
-            requester.getRoundRemaining(), requester.getRoundShortfall(),
-            requester.isRoundActive());
+            backend.batchesPerTick(), backend.batchSize(),
+            // 「最近一轮投递的账」是请求器方块内部的分批细节：终端没有这个概念，
+            // 而网格界面也不显示它（缺口/目标由 SenderCraftPromptScreen 专门表达）⇒ 一律 0。
+            0L, 0L, 0L, 0L, false);
     }
 
     private static String idOf(final ResourceLocation id) {

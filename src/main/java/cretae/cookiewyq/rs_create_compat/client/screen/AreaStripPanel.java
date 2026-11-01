@@ -69,7 +69,7 @@ import java.util.List;
  * 顶部加一个常驻搜索框（名字 / 坐标都能搜），tooltip 从 6 行砍到 3 行。</p>
  *
  * <h2>数据源（契约 §4「数据源」一行）</h2>
- * <p>行列表、过滤图标摘要、当前行、可用位次<b>全部</b>只读
+ * <p>行列表、当前行、可用位次<b>全部</b>只读
  * {@link AdvancedAreaSnapshotPacket#lastFor(int)}；客户端<b>不判断</b>区域可用性、<b>不读</b>方块实体。
  * 本类<b>不再</b>读选定器物品上的标记表（第 130 轮起那份数据的唯一界面是匹配区）。</p>
  */
@@ -130,14 +130,13 @@ public final class AreaStripPanel {
     /** 底部按钮行高 / 两钮之间的缝。 */
     private static final int FOOTER_H = 16;
     private static final int FOOTER_GAP = 3;
-    /** 行内最多画几个过滤图标（与坐标行争宽度，2 个刚好）。 */
-    private static final int ROW_ICON_MAX = 2;
-    private static final int ROW_ICON_PITCH = 9;
     /**
      * 行内动作区：改名（✎）/ 删除（✕）两个 8px 图标，从右往左排。
      * <p>第 130 轮把原计划的第三个「看（◎）」撤掉了：{@link #peekArea(int)} 已经绑在
      * <b>右键行</b>上（同样的 5 秒世界框），而动作区少一个图标正好多出 10px 给坐标行 ——
      * 常见三位数坐标串（141px）因此能 1.0 倍放下，不再被缩到 0.93。用户要的「字别太小」优先。</p>
+     * <p>第 131 轮：行内<b>过滤物品图标</b>整条删除（用户图 3「这个物品图标不需要显示，
+     * 因为已经可以直接打开编辑了」）⇒ 动作区右侧不再预留图标位，坐标行可用宽 = 内容宽 - 动作区。</p>
      */
     private static final int ACT_ICON = 8;
     private static final int ACT_PITCH = 9;
@@ -791,7 +790,7 @@ public final class AreaStripPanel {
             drawActionIcon(guiGraphics, ax + ACT_PITCH, top + 2,
                 Component.translatable(LANG + "delete.glyph"), mouseX, mouseY);
         }
-        // 第二行：坐标紧凑串 (+ 右侧过滤图标摘要)
+        // 第二行：坐标紧凑串（第 131 轮起行内不再画过滤图标，整条可用宽都归坐标）
         // 起点固定 contentX()+2（不跟名字行的 ▶ 缩进）：坐标行多这 6px 就能让常见串 1.0 倍放下
         drawRowCoords(guiGraphics, row, top + NAME_LINE_H, contentX() + 2, actW);
         // 展开：6 个数字框（框本身由 renderInputs 画；这里画「从 / 到」标签与出错描红）
@@ -803,71 +802,47 @@ public final class AreaStripPanel {
     /**
      * 第二行：坐标。
      *
-     * <h2>为什么要「三段式择优」而不是一句 {@code drawFitLine}</h2>
+     * <h2>第 131 轮：行内过滤图标删除 ⇒ 坐标行独占整条可用宽</h2>
+     * <p>用户原话（图 3）：「这个物品图标不需要显示，因为已经可以直接打开编辑了」。
+     * 删掉行内那 1~2 个 8px 过滤图标（连同那两个图标常量与「图标预留宽度」逻辑一起删干净）后，
+     * 坐标行可用宽 = 内容宽 - 动作图标区，<b>不再扣 iconW</b> —— 这就是「行文字可用宽度按删除后重算」，
+     * 不留空洞、也不把省下来的 20px 白扔。</p>
+     *
+     * <h2>为什么要「两段式择优」而不是一句 {@code drawFitLine}</h2>
      * <p>用户第 130 轮原话「有一些字很小」的算术根因：128 宽 + 括号坐标串（≈150px）必然被缩到 0.6 倍。
-     * 但现在即便缩到 0.6 也不该再出现 —— 常见坐标串（含负号的三位数）要 132~153px，
-     * 而一行可用宽只有 131px（176 宽 - 动作图标 29 - 左边距 2）。于是按优先级择优：</p>
+     * 按优先级择优：</p>
      * <ol>
      *     <li><b>最优</b>：{@code min→max} 一整串放得下 ⇒ 1.0 倍画；</li>
      *     <li><b>次优</b>：放不下 ⇒ 拆成「左下角…右上角两个端点」，<b>去掉箭头</b>分别贴左右画
      *     （省 9px，视觉上仍是一行坐标，玩家不会误解）；</li>
      *     <li><b>兜底</b>：两个端点加起来还放不下（极值 / 超长负数）⇒ 才交给 {@link RsccTextFit}
-     *     缩字号（<b>缩之前先让位给文字</b>：过滤图标摘要在这条路上直接不画 —— 图标是摘要，文字才是信息）。</li>
+     *     缩字号（<b>绝不省略字符</b>）。</li>
      * </ol>
-     * <p>过滤图标只在「画完文字还剩 ≥ 图标宽 + 2px」时才画：它是锦上添花，绝不能挤占坐标。</p>
      */
     private void drawRowCoords(final GuiGraphics guiGraphics, final Row row, final int lineTop,
                                final int textX, final int actW) {
+        // 第 131 轮：可用宽只扣动作区（不再预留过滤图标位）
         final int fullW = Math.max(12, contentRight() - textX - actW);
         final Area area = row.area();
         final String joined = compactCoords(area);
+        if (font().width(joined) <= fullW) {
+            guiGraphics.drawString(font(), joined, textX, lineTop, COLOR_DIM, false);
+            return;
+        }
         final String low = cornerText(area.minX(), area.minY(), area.minZ());
         final String high = cornerText(area.maxX(), area.maxY(), area.maxZ());
-        final int joinedW = font().width(joined);
         final int lowW = font().width(low);
         final int highW = font().width(high);
         // 端点之间的最小呼吸位（0：两个端点紧贴也算「放得下」—— 它们之间没有分隔符就不会读错）
         final int gap = 2;
-
-        int icons = 0;
-        boolean drewJoined = joinedW <= fullW;
-        boolean drewSplit = !drewJoined && lowW + gap + highW <= fullW;
-        final int usedByText = drewJoined ? joinedW : (drewSplit ? lowW + gap + highW : joinedW);
-        if (usedByText + 2 * ROW_ICON_PITCH + 2 <= fullW) {
-            for (final MarkerEntry entry : row.filters()) {
-                if (icons >= ROW_ICON_MAX) {
-                    break;
-                }
-                if (entry != null && !entry.isEmpty() && !entry.fluid()) {
-                    icons++;
-                }
-            }
-        }
-        if (icons > 0 && !drewSplit && joinedW + icons * ROW_ICON_PITCH + 2 > fullW) {
-            // 画了图标就放不下整串 ⇒ 退回端点式（图标优先给「有图标的行」保留空间）
-            drewJoined = false;
-            drewSplit = lowW + gap + highW <= fullW;
-        }
-        final int iconW = icons <= 0 ? 0 : icons * ROW_ICON_PITCH + 2;
-        final int textW = Math.max(12, fullW - iconW);
-
-        if (drewJoined) {
-            guiGraphics.drawString(font(), joined, textX, lineTop, COLOR_DIM, false);
-        } else if (drewSplit) {
+        if (lowW + gap + highW <= fullW) {
             guiGraphics.drawString(font(), low, textX, lineTop, COLOR_DIM, false);
-            guiGraphics.drawString(font(), high, textX + textW - highW, lineTop, COLOR_DIM, false);
-        } else {
-            // 兜底：真的放不下（极值）⇒ 缩字号，且**不画图标**（文字优先）
-            RsccTextFit.drawFitLine(guiGraphics, font(), Component.literal(joined), textX, lineTop,
-                fullW, COLOR_DIM);
+            guiGraphics.drawString(font(), high, textX + fullW - highW, lineTop, COLOR_DIM, false);
             return;
         }
-        if (icons > 0) {
-            // 图标从右往左排，最后留 2px 呼吸位（与坐标文本的可用宽同源计算）
-            final int startX = contentRight() - icons * ROW_ICON_PITCH;
-            AdvancedCollectionCacheScreen.drawFilterIcons(guiGraphics, startX, lineTop,
-                visibleItemFilters(row.filters()), ROW_ICON_MAX);
-        }
+        // 兜底：真的放不下（极值）⇒ 缩字号（文字优先，绝不省略字符）
+        RsccTextFit.drawFitLine(guiGraphics, font(), Component.literal(joined), textX, lineTop,
+            fullW, COLOR_DIM);
     }
 
     /** 一个角的紧凑串：{@code x,y,z}（无空格无括号）。 */
@@ -879,16 +854,6 @@ public final class AreaStripPanel {
     private static String compactCoords(final Area area) {
         return cornerText(area.minX(), area.minY(), area.minZ())
             + "→" + cornerText(area.maxX(), area.maxY(), area.maxZ());
-    }
-
-    private static List<MarkerEntry> visibleItemFilters(final List<MarkerEntry> filters) {
-        final List<MarkerEntry> out = new ArrayList<>(filters.size());
-        for (final MarkerEntry entry : filters) {
-            if (entry != null && !entry.isEmpty() && !entry.fluid()) {
-                out.add(entry);
-            }
-        }
-        return out;
     }
 
     /** 一个 8px 宽的动作图标（文字行内小按钮；命中区由 {@link #actionAt} 与本方法同源计算）。 */

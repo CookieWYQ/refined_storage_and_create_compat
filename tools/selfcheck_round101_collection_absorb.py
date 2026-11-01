@@ -28,6 +28,10 @@ P1（用户核心需求）：「每个区域内可以吸收的东西都是不一
      断言「一轮扫描后缓存里恰好多了该吸的那些」；高级版三态 + 两区域不同过滤器。
   ② 源码锚点：每条修法在 Java 里的关键行必须存在（回退即红）。
   ③ 反例自证：改坏模型 / 判定写反 / 去掉匹配 / 跳过扫描 / 空集当全收 ⇒ 必须判负。
+
+第 131 轮：状态带摘要行（editAreaSummary）/ 状态带右端过滤图标（collectFrameIcons）/
+匹配区空态提示（drawMatchAreaHint 覆写）已按用户要求删除 ⇒ ④-19 / ④-20 判据反转成
+「这些落点必须不存在」，反例 ⑤-b9 也改成「把它们拼回 ⇒ 判负」（判据只收紧/反转，不放宽）。
 """
 
 import io
@@ -51,6 +55,11 @@ MENU_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/
 ADV_MENU_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/menu/AdvancedCollectionCacheMenu.java")
 SCREEN_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/client/screen/CollectionCacheScreen.java")
 ADV_SCREEN_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/client/screen/AdvancedCollectionCacheScreen.java")
+# 第 131 轮：区域行 / 状态带绘制出口分别落在「侧栏 AreaStripPanel」与「基类 CollectionCacheScreen」，
+# 因此把这两份源码也读进来 —— 判据不变（区域行仍要「序号 + 名称 + 坐标」、状态带仍要「只在真问题时出字」），
+# 只是落点跟着第 131 轮的实现搬了家（高级界面自己不再画摘要行 / 右端图标 / 状态行）。
+PANEL_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/client/screen/AreaStripPanel.java")
+BASE_SCREEN_PATH = SCREEN_PATH
 PACKET_PATH = os.path.join(ROOT, "src/main/java/cretae/cookiewyq/rs_create_compat/network/SetAreaFilterContextPacket.java")
 
 checks = []
@@ -416,6 +425,8 @@ menu = code_only(read(MENU_PATH))
 adv_menu = code_only(read(ADV_MENU_PATH))
 screen = code_only(read(SCREEN_PATH))
 adv_screen = code_only(read(ADV_SCREEN_PATH))
+base_screen = code_only(read(BASE_SCREEN_PATH))
+panel = code_only(read(PANEL_PATH))
 packet = code_only(read(PACKET_PATH))
 
 check("④-1 AreaScanHook 提供 entityQueryAreas()：按簇多盒（默认单盒，盒向上扩 1 格）",
@@ -514,36 +525,50 @@ def anchor_18(src):
             and "trimToWidth" not in src)
 
 
-def anchor_19(src):
-    """④-19 的恰好判据（反例也用它）。
+def anchor_19(src, base):
+    """④-19 的恰好判据（反例也用它，避免两处漂移）。
 
-    第 106 轮诚实更新（判据未削弱，只跟着实现搬家）：
-      * 旧锚点钉的是「◀ ▶ 循环按钮 + 78px 小格子摘要 + requiredScaleForLine 自适宽度」；
-      * 现在用户第 1/2 条要求「过滤器直显」，因此高级界面的形态变成
-        「编辑上下文摘要（editAreaSummary）画在整行状态带 + 右端直接画过滤图标（collectFrameIcons /
-        drawFilterIcons）+ 单显（toggleSingleShow）/ 全显（覆写 toggleRange）」；
-      * 编辑上下文不再靠 ◀ ▶ 循环（那两颗按钮压在升级槽上，已删除），改由区域列表点行 /
-        「编辑过滤」按钮设置（SetAreaFilterContextPacket 的发送点因此搬到了 AreaSelectorScreen，
-        这里改为断言「高级界面自己不再发这个包」+ 区域列表里确实发）；
-      * 仍然钉死「零省略号」：本文件不许出现 trimToWidth。
+    第 131 轮**诚实反转**（用户图 1/2/3「框起的部分全部删除」）：
+      * 第 106/107 轮钉的是「编辑上下文摘要（editAreaSummary）画在整行状态带 + 右端直接画
+        过滤图标（collectFrameIcons → drawFilterIcons）+ 匹配区空态提示（drawMatchAreaHint 覆写）」；
+      * 本轮用户逐条点名删掉这三处，因此判据反向：**这些落点必须一个都不存在**
+        （留一处就是留一条复活路径）。「正在编辑哪个区域」改由匹配区标题带的
+        `match_label` / `match_label.none` 表达 —— 这一条仍然正向钉住，信息没有丢。
+      * 「只在真问题时出字」仍由**基类**唯一出口保证：`isStatusVisible(code)` 先判、再画
+        （高级界面不再有第二个状态带绘制出口）。
+      * 「零省略号」照旧：本文件不许出现 trimToWidth / Required。
     """
-    return ("private Component editAreaSummary(" in src
-            and 'LANG + "filter.row.empty"' in src
-            and "protected void drawStatusLine(" in src
-            and "private void collectFrameIcons(" in src
-            and "public static int drawFilterIcons(" in src
-            and "Required" not in src
-            and "trimToWidth" not in src)
+    return ("editAreaSummary" not in src
+            and 'LANG + "filter.row.empty"' not in src
+            and "protected void drawStatusLine(" not in src
+            and "drawStatusBand(" not in src
+            and "collectFrameIcons" not in src
+            # 匹配区空态提示（基类 drawMatchAreaHint 的覆写）同属用户点名的「框起部分」。
+            and "drawMatchAreaHint" not in src
+            # drawFilterIcons 的**定义**保留给旧「区域列表」界面（AreaSelectorScreen 还在调），
+            # 因此这里钉的是「本屏零调用点」：文件里只剩那一处 static 定义。
+            and src.count("drawFilterIcons(") == 1
+            and 'LANG + "match_label' in src
+            and "protected static boolean isStatusVisible(final int code)" in base
+            and "if (!isStatusVisible(code)) {" in base
+            and "trimToWidth" not in src
+            and "Required" not in src)
 
 
 check("④-18 基础界面：状态行（服务端算、客户端只翻文案）画在整行留白并完整显示 ——"
       "第 104 轮：禁止省略号，放不下只缩字号（RsccTextFit），状态文本仍是服务端状态码的唯一翻译处",
       anchor_18(screen))
-check("④-19 高级界面：显示「正在编辑哪个区域」（空集区域明说『不吸任何东西』）+ 过滤图标直显"
-      "（单显/全显已并入侧栏，由 round125 §4 断言；第 124 轮口径：零省略号、只缩字号）",
-      anchor_19(adv_screen))
-check("④-20 「未命名」不再直接展示：区域行使用序号 + 尺寸摘要（界面文案键 filter.*）",
-      'LANG + "filter.row"' in adv_screen and 'LANG + "filter.none"' in adv_screen)
+check("④-19 高级界面：摘要行 / 状态带右端过滤图标 / 匹配区空态提示都已删除（第 131 轮用户逐条点名）；"
+      "「正在编辑哪个区域」只由匹配区标题带的 match_label / match_label.none 表达，"
+      "状态带仍由基类 isStatusVisible 保证「只在真问题时出字」（零省略号、只缩字号）",
+      anchor_19(adv_screen, base_screen))
+check("④-20 「未命名」不再直接展示：区域行（侧栏 AreaStripPanel，第 130 轮起的落点）用"
+      "「序号 + 名称（无名退回『区域 N』）+ 紧凑坐标串」，高级界面不再有 filter.* 摘要行",
+      '(row.rawIndex() + 1) + ". "' in panel
+      and "displayName(" in panel
+      and "LANG_REGION" in panel
+      and "compactCoords(" in panel
+      and "filter.row" not in adv_screen and "filter.none" not in adv_screen)
 
 # =====================================================================================
 # ⑤ 反例自证（源码级）：删掉关键行 ⇒ 对应锚点必须变红
@@ -577,11 +602,16 @@ check("⑤-b8 反例：基础界面把状态行退回「按像素截断 + 150px�
       not anchor_18(mutated(
           screen, "drawStatusLine(guiGraphics);",
           "drawStatusLine(guiGraphics); final String legacy = trimToWidth(statusLine.getString(), 150);")))
-check("⑤-b9 反例：高级界面把摘要退回「按像素截断」的小格子 ⇒ ④-19 判负",
+check("⑤-b9 反例：把状态带右端过滤图标（collectFrameIcons + drawFilterIcons 调用）拼回高级界面 ⇒ ④-19 判负",
       not anchor_19(mutated(
-          adv_screen, "drawStatusBand(guiGraphics, info, COLOR_SCOPE, textWidth);",
-          "drawStatusBand(guiGraphics, info, COLOR_SCOPE, textWidth);"
-          " final String legacy = trimToWidth(info.getString(), 78);")))
+          adv_screen, "public static int drawFilterIcons(",
+          "private void collectFrameIcons() { drawFilterIcons(null, 0, 0, null, 0); }\n"
+          "    public static int drawFilterIcons("), base_screen))
+check("⑤-b10 反例：把匹配区空态提示覆写（drawMatchAreaHint）拼回高级界面 ⇒ ④-19 判负",
+      not anchor_19(mutated(
+          adv_screen, "protected Component matchRegionLabel()",
+          "protected void drawMatchAreaHint(final GuiGraphics guiGraphics) { }\n"
+          "    protected Component matchRegionLabel()"), base_screen))
 check("⑤-c 源码口径：两个主界面里「按像素截断」的私有实现已删除（第 104 轮口径），"
       "省略号字面量交给 tools/selfcheck_no_ellipsis.py 全仓库扫",
       "trimToWidth" not in screen and "trimToWidth" not in adv_screen
@@ -593,6 +623,8 @@ if failures:
     for item in failures:
         print("  - %s" % item)
     sys.exit(1)
-print("[result] SELFCHECK OK：%d 项断言（含 3 类行为模型 + 10 条源码反例）；"
+print("[result] SELFCHECK OK：%d 项断言（含 3 类行为模型 + 11 条源码反例）；"
       "归流缓存仓 P0（区域底板实体 / 旧档数量门槛 / 失败退避）与 P1（每区域独立过滤器）"
-      "的判定规则与实现锚点均成立；第 104 轮：状态行 / 每区域摘要改为整行留白 + 缩字号完整显示" % len(checks))
+      "的判定规则与实现锚点均成立；第 104 轮：状态行 / 每区域摘要改为整行留白 + 缩字号完整显示；"
+      "第 131 轮：摘要行 / 右端过滤图标 / 匹配区空态提示按用户要求删除 ⇒ 判据已反转（必须不存在）"
+      % len(checks))

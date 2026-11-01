@@ -33,6 +33,9 @@
 反例自证：把上面任一条改回旧写法（列原始区域 / 同 slot 覆盖 / 不重喂 / 红字加回来 /
 行内印 id）时，对应断言必须判负 —— 每条反例都复用同一份判据函数，避免两处漂移。
 
+第 131 轮：状态带右端过滤图标（collectFrameIcons + 本屏 drawFilterIcons 调用）已按用户要求删除
+⇒ ⑤-9 判据反转成「本屏零调用点」，并新增反例 ⑥-b8（拼回即判负）；判据只收紧/反转，不放宽。
+
 用法：python tools/selfcheck_round106_adv_cache_areas.py
 """
 
@@ -445,10 +448,25 @@ check("⑤-8 区域行：序号 + 名字（无名给「区域 N」）+ 两个角
       and "ROW_2H" in area_screen and "ROW_3H" in area_screen
       and '"从 " + area.describeMin()' in area_screen
       and '"到 " + area.describeMax()' in area_screen)
-check("⑤-9 过滤器直显：状态带右端画过滤图标（当前编辑区域），并且走同一份窗口快照",
-      "private void collectFrameIcons()" in adv_screen
-      and "visibleMarkerEntry(i)" in adv_screen
-      and "public static int drawFilterIcons(" in adv_screen)
+def anchor_no_status_icons(src):
+    """⑤-9 的恰好判据（反例也用它，避免两处漂移）。
+
+    第 131 轮**诚实反转**：第 106 轮要求「状态带右端画过滤图标（collectFrameIcons +
+    visibleMarkerEntry + drawFilterIcons）」；用户第 131 轮图 1/图 3 点名「框起的部分全部删除」
+    ⇒ 判据反向：本屏**一件过滤图标都不画**、也没有 collectFrameIcons 这个收集器。
+    `drawFilterIcons` / `filterIconTooltipLines` 的**定义**仍保留（旧「区域列表」
+    `AreaSelectorScreen` 与 `AreaMarkScreen` 还在调用，那条链路不在本轮写作用域），
+    因此钉的是「本屏零调用点」：文件里只剩那一处 static 定义。
+    """
+    return ("private void collectFrameIcons()" not in src
+            and "visibleMarkerEntry(i)" not in src
+            and src.count("drawFilterIcons(") == 1
+            and "public static int drawFilterIcons(" in src)
+
+
+check("⑤-9 第 131 轮反转：过滤器图标不再画在状态带右端（collectFrameIcons / 本屏 drawFilterIcons "
+      "调用全部删除），drawFilterIcons 只作为旧「区域列表」界面的共用实现保留",
+      anchor_no_status_icons(adv_screen))
 # 第 112 轮：用户「无法正常的单独给某一个区域标记，就非得把这个标记放在方块中进行吗」⇒
 # 「编辑过滤」不再「切上下文 + 退回机器界面」，而是**直接打开该区域的标记界面**（手持也支持）；
 # 从机器里打开时仍然把 < > 上下文切过去（两处状态不打架）。
@@ -599,6 +617,12 @@ check("⑥-b7 反例：快照改成「每 tick 都发」（去掉版本号判据
           adv_menu, "if (version == lastSnapshotVersion && editingAreaIndex == lastSnapshotEditing",
           "if (false && version == lastSnapshotVersion && editingAreaIndex == lastSnapshotEditing"))
 
+check("⑥-b8 反例：把第 131 轮删掉的状态带右端过滤图标拼回本屏（collectFrameIcons 复活）⇒ ⑤-9 判负",
+      not anchor_no_status_icons(mutated(
+          adv_screen, "public static int drawFilterIcons(",
+          "private void collectFrameIcons() { drawFilterIcons(null, 0, 0, null, 0); }\n    "
+          "public static int drawFilterIcons(")))
+
 
 # =====================================================================================
 print("\n" + "=" * 78)
@@ -607,4 +631,4 @@ if FAILS:
     for item in FAILS:
         print("  - %s" % item)
     sys.exit(1)
-print("[result] SELFCHECK OK：%d 项断言（4 组行为模型 + 22 条源码锚点 + 8 条源码反例）" % len(CHECKS))
+print("[result] SELFCHECK OK：%d 项断言（4 组行为模型 + 22 条源码锚点 + 9 条源码反例）" % len(CHECKS))

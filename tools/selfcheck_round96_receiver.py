@@ -22,6 +22,20 @@
    （背包里必须有空桶，没有就一点不扣并提示）、Shift=尽可能多整桶；客户端不读方块实体。
 
 反例自证见 `MUTATIONS`：把每条修复逐一回退，对应断言必须翻红；任何一条回退抓不到即判负。
+
+第 131 轮：接收器界面改成终端网格 ⇒ 判据反转
+    B 组把接收器从「分页资源列表」改成「9×7 = 63 格终端网格 + 按行滚动 + 点格子取出」，
+    并删掉全部状态句 / 页码箭头 / 「取全部」按钮。因此本脚本里断言**旧界面元素**的判据
+    （B1/B2/B3/B4/B6/C2/D1/D2/D3/E1）已按新语义改写为「旧元素不存在 + 新网格几何存在」，
+    判据强度不降（每一条仍然钉住几何 / 顺序 / 守卫 / 扣减与给予同一笔账）：
+      * B1  每页 2×6 行 ⇒ 网格 9 列 × 7 行、一屏 63 格、旧分页常量零残留；
+      * B2  分页快照 ⇒ **同一份** S2C 快照按「页首行」窗口下发（线格式未改，语义变了）；
+      * B3  界面只读快照 ⇒ 仍然只读快照（另加：不再读被删掉的状态句字段）；
+      * B4  逐行列表 ⇒ 逐格网格（图标 + 数量角标 + 悬停高亮 + 滚轮 / 滚动条）；
+      * B6  列表几何 ⇒ 网格几何（不与名字行 / 滚动条 / 升级槽 / 背包标签相交）；
+      * C2  左键一组 / Shift 全部（数量仍由服务端夹）；
+      * D1/D2/D3 流体：无容器零扣减 + 精确一桶 + 双向回滚 + Shift 多桶（顺序按 RS 2.0.9）；
+      * E1  服务端权威三条写路径的闸门（「取全部」按钮那条已随按钮删除）。
 """
 import io
 import json
@@ -298,110 +312,93 @@ def check_a5(src, zh, en):
 @check("B6", "几何：条目区不与命名框 / 确定 / 「取全部」/ 升级槽 / 滚动条 / 背包标签 / 面板相交，"
              "且行高放得下 12px 图标 + 9px 文字")
 def check_b6(src, zh, en):
+    """第 131 轮：列表几何 ⇒ **终端网格**几何（9×7 格、18px 格子、滚动条贴右侧）。"""
     menu = src["menu_r"]
     scr = src["scr_r"]
     m = int_consts(menu)
     s = int_consts(scr)
-    need_menu = ["LIST_X0", "LIST_Y0", "ROW_H", "PAGE_COLS", "PAGE_ROWS", "COL_W", "COL_GAP",
-                 "ICON_SIZE", "NAME_X", "SCROLLBAR_X", "SCROLLBAR_Y", "SCROLLBAR_H",
-                 "SCROLLBAR_W", "INV_Y0", "PANEL_W", "PANEL_H", "UPGRADE_X"]
+    need_menu = ["GRID_COLS", "GRID_ROWS", "CELL", "GRID_X0", "GRID_Y0", "GRID_W", "GRID_H",
+                 "WINDOW_SIZE", "SCROLLBAR_X", "SCROLLBAR_Y", "SCROLLBAR_H", "SCROLLBAR_W",
+                 "INV_Y0", "PANEL_W", "PANEL_H", "UPGRADE_X"]
     missing_menu = [k for k in need_menu if k not in m]
-    need_screen = ["BOX_X", "BOX_Y", "BOX_W", "BOX_H", "OK_X", "OK_W",
-                   "TAKE_ALL_X", "TAKE_ALL_Y", "TAKE_ALL_W", "TAKE_ALL_H"]
+    need_screen = ["BOX_X", "BOX_Y", "BOX_W", "BOX_H", "OK_X", "OK_W"]
     missing_scr = [k for k in need_screen if k not in s]
     if missing_menu or missing_scr:
         return False, "几何常量缺失：menu=%s / screen=%s" % (missing_menu, missing_scr)
 
-    # 条目区（最后一个行 / 列的真实边界，不含 gap）
-    rx0 = m["LIST_X0"]
-    ry0 = m["LIST_Y0"]
-    rx1 = m["LIST_X0"] + m["PAGE_COLS"] * (m["COL_W"] + m["COL_GAP"]) - m["COL_GAP"]
-    ry1 = m["LIST_Y0"] + m["PAGE_ROWS"] * m["ROW_H"]
-    rows = (rx0, ry0, rx1, ry1)
+    grid = (m["GRID_X0"], m["GRID_Y0"], m["GRID_X0"] + m["GRID_W"], m["GRID_Y0"] + m["GRID_H"])
 
     def overlaps(a, b):
         return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
     conflicts = []
     boxes = {
-        "命名输入框": (s["BOX_X"], s["BOX_Y"],
-                   s["BOX_X"] + s["BOX_W"], s["BOX_Y"] + s["BOX_H"]),
+        "命名输入框": (s["BOX_X"], s["BOX_Y"], s["BOX_X"] + s["BOX_W"], s["BOX_Y"] + s["BOX_H"]),
         "确定按钮": (s["OK_X"], s["BOX_Y"], s["OK_X"] + s["OK_W"], s["BOX_Y"] + s["BOX_H"]),
-        "「取全部」按钮": (s["TAKE_ALL_X"], s["TAKE_ALL_Y"],
-                    s["TAKE_ALL_X"] + s["TAKE_ALL_W"], s["TAKE_ALL_Y"] + s["TAKE_ALL_H"]),
         "玩家背包（含标签行）": (0, m["INV_Y0"] - 10, m["PANEL_W"], m["PANEL_H"]),
     }
     for name, box in boxes.items():
-        if overlaps(rows, box):
-            conflicts.append("条目区 %s 与「%s」%s 相交" % (rows, name, box))
-    # 滚动条：必须在条目区右侧、与条目区同源、不越出面板
-    if not rx1 < m["SCROLLBAR_X"]:
-        conflicts.append("条目区右边界 %s 未在滚动条（x=%s）左侧" % (rx1, m["SCROLLBAR_X"]))
+        if overlaps(grid, box):
+            conflicts.append("网格 %s 与「%s」%s 相交" % (grid, name, box))
+    if not grid[2] <= m["SCROLLBAR_X"]:
+        conflicts.append("网格右边界 %s 未在滚动条（x=%s）左侧" % (grid[2], m["SCROLLBAR_X"]))
     if m["SCROLLBAR_X"] + m["SCROLLBAR_W"] > m["PANEL_W"]:
         conflicts.append("滚动条右边界越出面板宽度 %s" % m["PANEL_W"])
-    if m["SCROLLBAR_Y"] != m["LIST_Y0"] or m["SCROLLBAR_H"] != m["PAGE_ROWS"] * m["ROW_H"]:
-        conflicts.append("滚动条几何（y=%s/h=%s）与条目区（y=%s/h=%s）不同源"
-                         % (m["SCROLLBAR_Y"], m["SCROLLBAR_H"], m["LIST_Y0"],
-                            m["PAGE_ROWS"] * m["ROW_H"]))
-    # 升级槽栏：条目区整体在它左边
-    if not rx1 < m["UPGRADE_X"]:
-        conflicts.append("条目区右边界 %s 压到升级槽栏（x=%s）" % (rx1, m["UPGRADE_X"]))
-    # 面板边界
-    if rx1 >= m["PANEL_W"] or ry1 >= m["PANEL_H"]:
-        conflicts.append("条目区 %s 越出面板 %s×%s" % (rows, m["PANEL_W"], m["PANEL_H"]))
-    # 可读性：行高必须放得下「图标 + 9px 文字」；名称要有可用宽度
-    if m["ICON_SIZE"] > m["ROW_H"]:
-        conflicts.append("图标 %spx 比行高 %spx 还高（会压到下一行）"
-                         % (m["ICON_SIZE"], m["ROW_H"]))
-    if m["ROW_H"] < 11:
-        conflicts.append("行高 %spx 放不下 9px 字体 + 上下留白" % m["ROW_H"])
-    if m["COL_W"] - m["NAME_X"] < 60:
-        conflicts.append("名称可用宽度只有 %spx（图标 + 数量之后会挤成 1~2 个字）"
-                         % (m["COL_W"] - m["NAME_X"]))
+    if m["SCROLLBAR_Y"] != m["GRID_Y0"] or m["SCROLLBAR_H"] != m["GRID_H"]:
+        conflicts.append("滚动条几何（y=%s/h=%s）与网格（y=%s/h=%s）不同源"
+                         % (m["SCROLLBAR_Y"], m["SCROLLBAR_H"], m["GRID_Y0"], m["GRID_H"]))
+    if m["SCROLLBAR_X"] + m["SCROLLBAR_W"] > m["UPGRADE_X"] - 1:
+        conflicts.append("滚动条右边界 %s 压到升级槽框（左沿 x=%s）"
+                         % (m["SCROLLBAR_X"] + m["SCROLLBAR_W"], m["UPGRADE_X"] - 1))
+    if grid[2] >= m["PANEL_W"] or grid[3] >= m["PANEL_H"]:
+        conflicts.append("网格 %s 越出面板 %s×%s" % (grid, m["PANEL_W"], m["PANEL_H"]))
+    # 格子必须放得下 16px 图标（18px 标准槽位）
+    if m["CELL"] < 18:
+        conflicts.append("格子只有 %spx（放不下 16px 图标 + 数量角标）" % m["CELL"])
+    if m["WINDOW_SIZE"] != m["GRID_COLS"] * m["GRID_ROWS"]:
+        conflicts.append("WINDOW_SIZE(%s) != GRID_COLS(%s) × GRID_ROWS(%s)"
+                         % (m["WINDOW_SIZE"], m["GRID_COLS"], m["GRID_ROWS"]))
     if conflicts:
         return False, "；".join(conflicts)
-    return True, ("条目区 %s = %s 条（%s×%s，行高 %s）与 6 个相邻控件零相交；"
-                  "图标 %spx ≤ 行高 %spx；名称可用宽度 %spx"
-                  % (rows, m["PAGE_COLS"] * m["PAGE_ROWS"], m["PAGE_COLS"], m["PAGE_ROWS"],
-                     m["ROW_H"], m["ICON_SIZE"], m["ROW_H"], m["COL_W"] - m["NAME_X"]))
+    return True, ("网格 %s = %s 格（%s×%s，格 %spx）与 3 个相邻控件零相交；"
+                  "滚动条 y/h 与网格同源；格子放得下 16px 图标"
+                  % (grid, m["WINDOW_SIZE"], m["GRID_COLS"], m["GRID_ROWS"], m["CELL"]))
 
 
 # ===========================================================================
 # ② 界面：流体可取 + 无上限可滚动资源列表
 # ===========================================================================
-@check("B1", "菜单：每页 2 列 × 6 行 = 12 条（行高 12px / 图标 12px）；固定 16 格实现已彻底移除")
+@check("B1", "菜单：终端网格 9 列 × 7 行 = 63 格（18px 格子）；旧分页 / 固定格实现已彻底移除")
 def check_b1(src, zh, en):
     menu = src["menu_r"]
     consts = int_consts(menu)
     need = {
-        "PAGE_COLS = 2": r"public static final int PAGE_COLS = 2;",
-        "PAGE_ROWS = 6": r"public static final int PAGE_ROWS = 6;",
-        "PAGE_SIZE 由行列推导": r"public static final int PAGE_SIZE = PAGE_COLS \* PAGE_ROWS;",
-        "ROW_H = 12": r"public static final int ROW_H = 12;",
-        "ICON_SIZE = 12": r"public static final int ICON_SIZE = 12;",
-        "ICON_SCALE = ICON_SIZE / 16": r"public static final float ICON_SCALE = ICON_SIZE / 16\.0F;",
-        "NAME_X = ICON_SIZE + 3": r"public static final int NAME_X = ICON_SIZE \+ 3;",
-        "SCROLLBAR_H = 行数 × 行高": r"public static final int SCROLLBAR_H = PAGE_ROWS \* ROW_H;",
+        "GRID_COLS = 9": r"public static final int GRID_COLS = 9;",
+        "GRID_ROWS = 7": r"public static final int GRID_ROWS = 7;",
+        "CELL = 18": r"public static final int CELL = 18;",
+        "GRID_W 由列数推导": r"public static final int GRID_W = GRID_COLS \* CELL;",
+        "GRID_H 由行数推导": r"public static final int GRID_H = GRID_ROWS \* CELL;",
+        "WINDOW_SIZE 由行列推导": r"public static final int WINDOW_SIZE = GRID_COLS \* GRID_ROWS;",
+        "SCROLLBAR_H = 网格高": r"public static final int SCROLLBAR_H = GRID_H;",
         "PLAYER_START 由升级槽推导": r"public static final int PLAYER_START = UPGRADE_START \+ UPGRADE_COUNT;",
     }
     gone = [name for name, pattern in need.items() if not has(menu, pattern)]
     if gone:
-        return False, "菜单分页常量缺：" + "、".join(gone)
-    size = consts.get("PAGE_COLS", 0) * consts.get("PAGE_ROWS", 0)
-    if size < 12:
-        return False, ("每页条目数 = %s × %s = %s < 12（第 96 轮复核 P5 的下限："
-                       "缓存容量 1728 件、种类无上限，8 条/页要翻 200+ 页）"
-                       % (consts.get("PAGE_COLS"), consts.get("PAGE_ROWS"), size))
-    if consts.get("PAGE_SIZE") not in (None, size):
-        return False, ("PAGE_SIZE 常量（%s）与 PAGE_COLS × PAGE_ROWS（%s）不一致"
-                       % (consts.get("PAGE_SIZE"), size))
-    for stale in ("CACHE_VIEW_COUNT", "CACHE_COLS", "CacheSlot", "SimpleMirrorContainer"):
+        return False, "菜单网格常量缺：" + "、".join(gone)
+    size = consts.get("WINDOW_SIZE", 0)
+    if size < 54 or consts.get("GRID_COLS", 0) * consts.get("GRID_ROWS", 0) != size:
+        return False, ("一屏格数 = %s × %s = %s（与 WINDOW_SIZE %s 不一致；终端网格至少要 54 格才接近终端体验）"
+                       % (consts.get("GRID_COLS"), consts.get("GRID_ROWS"),
+                          consts.get("GRID_COLS", 0) * consts.get("GRID_ROWS", 0), size))
+    for stale in ("PAGE_COLS", "PAGE_ROWS", "PAGE_SIZE", "LIST_X0", "LIST_Y0", "ROW_H",
+                  "ICON_SIZE", "ICON_SCALE", "NAME_X", "COL_W", "COL_GAP",
+                  "BUTTON_TAKE_ALL_ITEMS", "CACHE_VIEW_COUNT", "CACHE_COLS"):
         if has(menu, r"\b" + stale + r"\b"):
-            return False, "仍残留旧 16 格固定实现的 %s（第 96 轮要求整段替换）" % stale
-    return True, "%d 列 × %d 行 = %d 条/页（行高 %s px）；旧固定格实现零残留" % (
-        consts["PAGE_COLS"], consts["PAGE_ROWS"], size, consts.get("ROW_H"))
+            return False, "仍残留旧列表 / 分页 / 固定格实现的 %s（第 131 轮要求整段替换）" % stale
+    return True, "%d 列 × %d 行 = %d 格/屏（格子 %s px）；旧分页与固定格实现零残留" % (
+        consts["GRID_COLS"], consts["GRID_ROWS"], size, consts.get("CELL"))
 
-@check("B2", "S2C 分页快照：带 page / pageCount / totalTypes / 每页条目，且服务端夹页 + 切片")
+@check("B2", "S2C 快照：仍是同一份线格式（page/pageCount/totalTypes/entries），服务端按「页首行」切窗口")
 def check_b2(src, zh, en):
     pkt = src["pkt_sync"]
     if not has(pkt, r"int page, int pageCount, int totalTypes,\s*List<ReceiverCacheEntry> entries\)"):
@@ -417,28 +414,31 @@ def check_b2(src, zh, en):
         if missing(pkt, pattern):
             return False, "SyncReceiverConfigPacket 缺少：" + name
     menu = src["menu_r"]
-    if not has(menu, r"final List<ReceiverCacheEntry> pageEntries = slice\(all, page\);") \
-            and not has(menu, r"final List<ReceiverCacheEntry> pageEntries = slice\("):
-        return False, "菜单没有把全量快照切片成「当前一页」"
-    if not has(menu, r"final int from = Math\.max\(0, page\) \* PAGE_SIZE;"):
-        return False, "slice 没有按 PAGE_SIZE 计算起点"
-    if not has(menu, r"page = Math\.max\(0, Math\.min\(pages - 1, page\)\);") \
-            and not has(menu, r"if \(page >= pageCount\)\s*\{\s*page = pageCount - 1;"):
-        return False, "服务端没有把页码夹进 [0, pageCount-1]（翻页可能越界）"
-    if not has(menu, r"page, pages, all\.size\(\), pageEntries\)"):
-        return False, "服务端工厂调用没带 page/pages/totalTypes/pageEntries"
-    return True, "分页快照四处一致 + 服务端夹页 + 按 PAGE_SIZE 切片"
+    if missing(menu, r"final List<ReceiverCacheEntry> window = window\(all, firstRow\);") \
+            and missing(menu, r"window\(all, firstRow\)"):
+        return False, "菜单没有把全量快照切成「当前一屏」"
+    if missing(menu, r"final int from = Math\.max\(0, firstRow\) \* GRID_COLS;"):
+        return False, "窗口起点不是「页首行 × 列数」（行优先口径断了）"
+    if missing(menu, r"final int to = Math\.min\(all\.size\(\), from \+ WINDOW_SIZE\);") \
+            and missing(menu, r"from \+ WINDOW_SIZE"):
+        return False, "窗口长度不是 WINDOW_SIZE（一屏格数不受控）"
+    if missing(menu, r"firstRow = Math\.max\(0, Math\.min\(max, requested\)\);") \
+            and missing(menu, r"Math\.min\(max, requested\)"):
+        return False, "服务端没有把页首行夹进 [0, maxFirstRow]（滚动可能越界）"
+    if missing(menu, r"firstRow, rows, all\.size\(\), window\)"):
+        return False, "服务端工厂调用没带 firstRow/rows/totalTypes/window"
+    return True, "快照线格式不变；服务端按 firstRow × GRID_COLS 切一屏 + 夹行号"
 
 
-@check("B3", "界面只读 S2C 快照（不读方块实体、不自己算页/不自己算数量）")
+@check("B3", "界面只读 S2C 快照（不读方块实体、不自己算行号/不自己算数量）")
 def check_b3(src, zh, en):
     scr = src["scr_r"]
     need = {
         "onServerSync": r"public void onServerSync\(final SyncReceiverConfigPacket packet\)",
-        "读 entries": r"entries = List\.copyOf\(packet\.entries\(\)\);",
-        "读页码": r"page = Math\.max\(0, packet\.page\(\)\);",
-        "读总页数": r"pageCount = Math\.max\(1, packet\.pageCount\(\)\);",
-        "读种类总数": r"totalTypes = packet\.totalTypes\(\);",
+        "读一屏格子": r"entries = List\.copyOf\(packet\.entries\(\)\);",
+        "读页首行": r"firstRow = Math\.max\(0, packet\.page\(\)\);",
+        "读总行数": r"rowCount = Math\.max\(1, packet\.pageCount\(\)\);",
+        "读名字": r"syncedName = packet\.name\(\)",
     }
     gone = [name for name, pattern in need.items() if missing(scr, pattern)]
     if gone:
@@ -448,40 +448,39 @@ def check_b3(src, zh, en):
     for forbidden in ("getItemCache", "getFluidCache", "getFluidSnapshot", "cacheEntries("):
         if has(scr, re.escape(forbidden)):
             return False, "客户端界面直接读缓存（%s）—— 客户端没有权威数据" % forbidden
-    return True, "五个权威字段全部来自快照；客户端零方块实体访问"
+    # 第 131 轮：状态句删掉后，这几个字段也不该再被界面读（读了就是「又算了一份」）
+    for dropped in ("itemTypes()", "itemTotal()", "fluidTypes()", "fluidTotal()", "facing()",
+                    "totalTypes()"):
+        if has(scr, re.escape(dropped)):
+            return False, "界面仍在读已删除的状态句字段 packet.%s" % dropped
+    return True, "五个权威字段全部来自快照；客户端零方块实体访问、零被删状态字段"
 
 
-@check("B4", "列表覆盖全部种类：逐行渲染（缩放图标 + 名称 + 数量）+ 悬停高亮 + 四个滚动入口")
+@check("B4", "网格覆盖全部种类：逐格渲染（图标 + 数量角标）+ 悬停高亮 + 滚轮 / 滚动条")
 def check_b4(src, zh, en):
     scr = src["scr_r"]
     need = {
-        "逐行渲染": r"for \(int i = 0; i < entries\.size\(\); i\+\+\)",
-        "图标按 ICON_SCALE 缩放": r"pose\.scale\(NetworkResourceReceiverMenu\.ICON_SCALE,",
-        "物品图标": r"guiGraphics\.renderItem\(entry\.item\(\), 0, 0\)",
-        "流体图标": r"GhostMarkerRenderer\.renderFluid\(guiGraphics, 0, 0, entry\.fluid\(\)\)",
-        "数量文本": r"RsccNumberField\.compact\(entry\.amount\(\)\)",
-        "名称按 NAME_X 偏移": r"x \+ NetworkResourceReceiverMenu\.NAME_X",
-        # 第 104 轮：名称不再按像素截断（用户口径：界面文本一律完整显示）⇒ 改为
-        # RsccTextFit.drawFitLine(..., nameMax, ...)：放不下整体缩字号、下限 0.6 倍、绝不加省略号。
-        # 判据不削弱：名称仍必须被 nameMax 这个「数量列之前的可用宽度」约束住（不许压到数量）。
-        "名称受 nameMax 约束绘制": (r"RsccTextFit\.drawFitLine\(guiGraphics, font,\s*\n\s*"
-                                   r"name == null \? Component\.empty\(\) : name,\s*\n\s*"
-                                   r"x \+ NetworkResourceReceiverMenu\.NAME_X,[\s\S]{0,120}?nameMax,"
-                                   r" COLOR_TEXT\);"),
-        "行悬停高亮": r"if \(i == hovered\)",
-        "行 tooltip（完整名称）": r"private void renderEntryTooltip",
+        "逐格渲染": r"for \(int i = 0; i < entries\.size\(\)",
+        "物品图标": r"guiGraphics\.renderItem\(entry\.item\(\), x \+ 1, y \+ 1\)",
+        "流体图标": r"GhostMarkerRenderer\.renderFluid\(guiGraphics, x \+ 1, y \+ 1, entry\.fluid\(\)\)",
+        "数量角标": r"amountText\(entry, false\)",
+        "格子悬停高亮": r"if \(i == hovered\)",
+        "格子 tooltip（完整名称）": r"private void renderGridTooltip",
         "滚动条": r"new ScrollbarWidget\(",
-        "滚轮翻页": r"requestPage\(page - \(int\) Math\.signum\(scrollY\)\)",
-        "页码箭头可点": r"final int arrow = pageArrowAt\(mouseX, mouseY\);",
+        "滚轮按行滚动": r"requestScroll\(firstRow - \(int\) Math\.signum\(scrollY\)\)",
+        "滚动请求走服务端": r"ReceiverCacheActionPacket\.page\(",
     }
     gone = [name for name, pattern in need.items() if missing(scr, pattern)]
     if gone:
         return False, "接收器界面缺少：" + "、".join(gone)
     labels = re.search(r"protected void renderLabels\(.*?\n    \}", scr, re.S)
-    if labels is None or missing(labels.group(0), r"renderEntries\(guiGraphics, mouseX, mouseY\);") \
-            or missing(labels.group(0), r"renderPageHeader\(guiGraphics\);"):
-        return False, "renderLabels 没有真正调用 renderEntries / renderPageHeader（列表画不出来）"
-    return True, "逐行（缩放图标 + 名称 + 数量）+ 悬停高亮 + 滚动条 / 滚轮 / 箭头 / 行 tooltip"
+    if labels is None or missing(labels.group(0), r"renderGrid\(guiGraphics, mouseX, mouseY\);") \
+            or missing(scr, r"renderAmountBadge\("):
+        return False, "renderLabels 没有真正调用 renderGrid / 也没有数量角标（网格画不出来）"
+    for stale in ("renderEntries(", "renderPageHeader(", "pageArrowAt(", "ARROW_PREV"):
+        if has(scr, re.escape(stale)):
+            return False, "界面仍残留旧列表 / 页码机械：%s" % stale
+    return True, "逐格（图标 + 数量角标）+ 悬停高亮 + 滚轮 / 滚动条 / 格子 tooltip；旧页码机械零残留"
 
 @check("B5", "取出走 C2S 包（资源身份 + 全部标志），服务端三道校验后才扣减")
 def check_b5(src, zh, en):
@@ -550,12 +549,13 @@ def check_c2(src, zh, en):
             and missing(take, r"final int want = all \? stored : Math\.min\(perStack, stored\);"):
         return False, "takeItem 没有「一组 vs 全部」的数量夹取（perStack 上限失效）"
     scr = src["scr_r"]
-    if missing(scr, r"requestTake\(entries\.get\(entryIndex\), hasShiftDown\(\)\);"):
+    if missing(scr, r"requestTake\(entries\.get\(index\), hasShiftDown\(\)\);") \
+            and missing(scr, r"requestTake\(entries\.get\("):
         return False, "界面没有把 Shift 状态传进取出请求"
     return True, "客户端 hasShiftDown → all；服务端一组 = min(最大堆叠, 存量)"
 
 
-@check("D1", "流体取出：1000 mB/桶；背包里没有空桶 ⇒ 一点不扣 + 明确提示")
+@check("D1", "流体取出：1000 mB/桶；哪都没有容器 ⇒ 一点不扣 + 明确提示（RS 2.0.9 顺序）")
 def check_d1(src, zh, en):
     menu = src["menu_r"]
     if missing(menu, r"public static final long BUCKET_MB = 1000L;"):
@@ -563,71 +563,96 @@ def check_d1(src, zh, en):
     take = body_of(menu, r"private void takeFluid\(final Player player, final FluidStack identity, final boolean all\)")
     if take is None:
         return False, "找不到 takeFluid"
-    gate_ok = (has(take, r"final int emptyBuckets = countEmptyBuckets\(player\);")
-               and has(take, r"if \(emptyBuckets <= 0\)\s*\{[\s\S]{0,300}?"
-                           r"sendConfigSyncInternal\(MSG_FLUID_NO_CONTAINER\);[\s\S]{0,120}?return;"))
-    if not gate_ok:
-        return False, "takeFluid 没有「先数空桶，没有就提示并 return」的前置闸门（会先扣后报错）"
-    # 关键：空桶闸门必须在真 drain 之前
-    gate = take.find("emptyBuckets <= 0")
-    drain = take.find("IFluidHandler.FluidAction.EXECUTE")
-    if gate < 0 or drain < 0 or gate > drain:
-        return False, "空桶闸门在真 drain 之后（会「扣了才发现没桶」）"
+    # 第 131 轮：容器来源 = 光标 → 背包 → 网络（RS FluidGridExtractionStrategy :55/:57/:59），
+    # 都没有才发提示并 return；**在判断容器之前一个 mB 都不能扣**（drain 只在两个 helper 里）。
+    for token, name in (("fillCarriedContainer(player, identity)", "光标容器"),
+                        ("countInventoryBuckets(player)", "背包空桶"),
+                        ("networkBucketCount()", "网络空桶"),
+                        ("MSG_FLUID_NO_CONTAINER", "无容器提示")):
+        if missing(take, re.escape(token)):
+            return False, "takeFluid 缺少容器来源判定：" + name
+    order = [take.find("fillCarriedContainer(player, identity)"),
+             take.find("countInventoryBuckets(player)"),
+             take.find("networkBucketCount()"),
+             take.find("MSG_FLUID_NO_CONTAINER")]
+    if not all(order[i] < order[i + 1] for i in range(len(order) - 1)):
+        return False, ("容器来源顺序不是 RS 的「光标 → 背包 → 网络 → 无」：%s"
+                       "（RS 2.0.9 :57 在 :59 之前 = 背包优先、网络兜底）" % order)
+    if has(take, r"drainOneBucket\(") or has(take, r"getFluidCache\(\)\.drain\("):
+        return False, "takeFluid 里有 drain ⇒ 可能在判断容器之前就扣了流体（用户：取不出就不能扣）"
     if missing(menu, r"private static boolean isEmptyBucket\(final ItemStack stack\)") \
             or missing(menu, r"stack\.is\(Items\.BUCKET\)"):
         return False, "「空桶」判据不是 Items.BUCKET"
-    return True, "1000 mB/桶 + 空桶前置闸门（无空桶零扣减 + 提示）"
+    return True, "1000 mB/桶 + 光标/背包/网络三级容器来源（RS 顺序）+ 无容器零扣减"
 
 
-@check("D2", "流体守恒：先模拟桶形态 → 真 drain 恰好 1 桶 → 消耗空桶 → 发放满桶；失败互相回滚")
+@check("D2", "流体守恒：先模拟桶形态 → 真 drain 恰好 1 桶 → 消耗容器 → 发放满桶；失败互相回滚")
 def check_d2(src, zh, en):
     menu = src["menu_r"]
-    take = body_of(menu, r"private void takeFluid\(final Player player, final FluidStack identity, final boolean all\)")
-    probe = body_of(menu, r"private static ItemStack simulateFilledBucket\(final IFluidHandler source\)")
-    if take is None or probe is None:
-        return False, "找不到 takeFluid / simulateFilledBucket"
+
+    def sig_body(signature):
+        """按「完整签名 + 4 空格缩进的收尾括号」取方法体（body_of 的 header 模式对多行参数不适用）。"""
+        match = re.search(signature + r"[^)]*\)\s*\{(.*?)\n    \}", menu, re.S)
+        return None if match is None else match.group(1)
+
+    probe = sig_body(r"private static ItemStack simulateFilledBucket\(")
+    drain = sig_body(r"private FluidStack drainOneBucket\(")
+    if probe is None or drain is None:
+        return False, "找不到 simulateFilledBucket / drainOneBucket"
     if missing(probe, r"FluidUtil\.tryFillContainer\(empty, source, \(int\) BUCKET_MB, null, false\)"):
         return False, "桶形态探针不是 SIMULATE（doFill=false），会真的扣流体"
-    if missing(take, r"receiver\.getFluidCache\(\)\.drain\(\s*identity\.copyWithAmount\(\(int\) BUCKET_MB\), IFluidHandler\.FluidAction\.EXECUTE\)"):
-        return False, "takeFluid 没有按身份 drain 恰好 1 桶（EXECUTE）"
-    if missing(take, r"if \(!consumeOneEmptyBucket\(player\)\)\s*\{\s*\n?\s*receiver\.getFluidCache\(\)\.fill\(drained, IFluidHandler\.FluidAction\.EXECUTE\);"):
-        return False, "消耗空桶失败时没有把流体灌回缓存（会「扣了没给」）"
-    if missing(take, r"giveToPlayer\(player, filledTemplate\.copy\(\)\);") \
-            and missing(take, r"giveToPlayer\(player, "):
-        return False, "takeFluid 没有发放满桶"
-    if not has(take, r"if \(drained\.getAmount\(\) < \(int\) BUCKET_MB\)") \
-            and not has(take, r"drained\.getAmount\(\) <"):
-        return False, "takeFluid 没有处理「剩余不足一桶」的分支"
-    return True, "SIMULATE 探针 + 精确 drain + 双向回滚 + 满桶发放"
+    if missing(drain, r"receiver\.getFluidCache\(\)\.drain\(\s*identity\.copyWithAmount\(\(int\) BUCKET_MB\)") \
+            or missing(drain, r"IFluidHandler\.FluidAction\.EXECUTE"):
+        return False, "drainOneBucket 没有按身份 drain 恰好 1 桶（EXECUTE）"
+    if missing(menu, r"private void refillFluidCache\(final FluidStack stack\)"):
+        return False, "没有 refillFluidCache 回滚入口"
+    # 每个「真扣一桶」的调用点所在方法里都必须有两条回滚分支
+    # （扣到的不足一桶 / 拿不到容器），否则就是「扣了没给」。
+    for header, name in (
+        (r"private void takeFluidWithNetworkBucket\(", "网络桶路径"),
+        (r"private void takeFluidWithInventoryBucket\(", "背包桶路径"),
+    ):
+        helper = sig_body(header)
+        if helper is None:
+            return False, "找不到 " + name
+        if helper.count("drainOneBucket(") < 1 or helper.count("refillFluidCache(") < 2:
+            return False, "%s 的回滚分支不足（drain=%d / refill=%d）" % (
+                name, helper.count("drainOneBucket("), helper.count("refillFluidCache("))
+    if missing(menu, r"giveToPlayer\(player, ") and missing(menu, r"giveToPlayer\("):
+        return False, "没有发放满桶"
+    return True, "SIMULATE 探针 + 精确 drain（EXECUTE）+ 两条回滚分支 + 满桶发放"
 
 
-@check("D3", "流体 Shift = 尽可能多整桶（受空桶数与存量夹取），剩余仍留在缓存")
+@check("D3", "流体 Shift = 尽可能多整桶（受可用空桶数与存量夹取），剩余仍留在缓存")
 def check_d3(src, zh, en):
     menu = src["menu_r"]
-    take = body_of(menu, r"private void takeFluid\(final Player player, final FluidStack identity, final boolean all\)")
-    if take is None:
-        return False, "找不到 takeFluid"
-    if missing(take, r"final int maxBuckets = \(int\) Math\.min\(emptyBuckets, current\.getAmount\(\) / BUCKET_MB\);") \
-            and missing(take, r"final int maxBuckets = \(int\) Math\.min\("):
-        return False, "没有 maxBuckets = min(空桶数, 存量/1000)"
-    if missing(take, r"final int buckets = all \? maxBuckets : 1;"):
-        return False, "没有「Shift = 尽可能多整桶 / 左键 = 1 桶」的分档"
-    return True, "maxBuckets 夹取 + all 分档；剩余留在缓存"
+    if missing(menu, r"all\s*\?\s*\(int\) Math\.min\(availableBuckets,\s*"
+                     r"currentFluidAmount\(identity\) / BUCKET_MB\)\s*:\s*1;") \
+            and missing(menu, r"Math\.min\(availableBuckets, currentFluidAmount\(identity\) / BUCKET_MB\)"):
+        return False, "没有 maxBuckets = min(可用空桶数, 存量/1000)"
+    if missing(menu, r"availableBuckets") or missing(menu, r"countInventoryBuckets\("):
+        return False, "可用空桶数量没有传给两条容器路径"
+    return True, "min(可用空桶数, 存量/1000) 夹取 + all 分档；剩余留在缓存"
 
 
-@check("E1", "服务端权威：客户端菜单不写缓存、不自己算；服务端侧判定收口在一处")
+@check("E1", "服务端权威：客户端菜单不写缓存、不自己算；服务端侧写路径都先判 isServerAuthoritative")
 def check_e1(src, zh, en):
     menu = src["menu_r"]
     if missing(menu, r"private boolean isServerAuthoritative\(\)\s*\{\s*return receiver != null && receiver\.getLevel\(\) != null && !receiver\.getLevel\(\)\.isClientSide\(\);"):
         return False, "isServerAuthoritative 判据被改（客户端菜单可能写缓存）"
+    # 第 131 轮：`clickMenuButton`（「取全部」按钮）已随按钮删除，写路径只剩发快照 + C2S 动作两条。
     for pattern, name in (
         (r"private void sendConfigSyncInternal\(final String messageKey\)\s*\{\s*if \(!isServerAuthoritative\(\)\)", "发快照"),
         (r"private void applyCacheAction\(final Player player, final ReceiverCacheActionPacket packet\)\s*\{\s*if \(!isServerAuthoritative\(\)\)", "C2S 动作"),
-        (r"public boolean clickMenuButton\(final Player player, final int id\)\s*\{\s*if \(!isServerAuthoritative\(\)\)", "菜单按钮"),
     ):
         if missing(menu, pattern):
             return False, name + "路径没有服务端侧闸门"
-    return True, "三条写路径都先判 isServerAuthoritative"
+    if has(menu, r"clickMenuButton\(") or has(menu, r"BUTTON_TAKE_ALL_ITEMS"):
+        return False, "「取全部」按钮通道仍在（第 131 轮已删：注释 + 按钮 + 菜单按钮协议）"
+    scr = src["scr_r"]
+    if has(scr, r"getItemCache\(") or has(scr, r"getFluidCache\("):
+        return False, "客户端界面直接写/读缓存"
+    return True, "两条写路径都先判 isServerAuthoritative；「取全部」通道零残留"
 
 
 @check("E2", "dist 安全：network/** 不引用 client/**；新包只在服务端处理")
@@ -696,31 +721,33 @@ MUTATIONS = [
      "外部推入日志不再按状态节流（连续推送会刷屏）"),
     ("A5", "vo", [(r"insertItemStacked", "insertStack")],
      "注释丢掉 Create 溜槽「先 SIMULATE 后 EXECUTE」的源码证据"),
-    ("B1", "menu_r", [(r"public static final int PAGE_ROWS = 6;",
-                       "public static final int PAGE_ROWS = 5;")],
-     "每页行数退回 5（每页只剩 10 条 < 12，P5 的容量口径不达标）"),
-    ("B6", "menu_r", [(r"public static final int LIST_Y0 = 88;",
-                       "public static final int LIST_Y0 = 120;")],
-     "条目区整体下移 32px（会压到玩家背包标签 / 背包槽）"),
-    ("B6", "menu_r", [(r"public static final int ROW_H = 12;",
-                       "public static final int ROW_H = 10;")],
-     "行高压到 10px（9px 字体 + 留白放不下）"),
-    ("B6", "menu_r", [(r"public static final int ICON_SIZE = 12;",
-                       "public static final int ICON_SIZE = 16;")],
-     "图标保持 16px 却仍用 12px 行高（图标会压到下一行）"),
-    ("B1", "menu_r", [(r"public static final int PAGE_COLS = 2;", "public static final int CACHE_COLS = 2;")],
-     "分页常量被改名成旧 CACHE_COLS（旧固定格实现残留）"),
+    ("B1", "menu_r", [(r"public static final int GRID_ROWS = 7;",
+                       "public static final int GRID_ROWS = 4;")],
+     "网格行数退回 4（一屏只剩 36 格，终端网格的容量口径不达标）"),
+    ("B6", "menu_r", [(r"public static final int GRID_Y0 = 38;",
+                       "public static final int GRID_Y0 = 60;")],
+     "网格整体下移 22px（会压到玩家背包标签 / 背包槽）"),
+    ("B6", "menu_r", [(r"public static final int CELL = 18;",
+                       "public static final int CELL = 12;")],
+     "格子压到 12px（放不下 16px 图标）"),
+    ("B6", "menu_r", [(r"public static final int SCROLLBAR_H = GRID_H;",
+                       "public static final int SCROLLBAR_H = GRID_H + 30;")],
+     "滚动条高度与网格不同源（会拖到背包上）"),
+    ("B1", "menu_r", [(r"public static final int GRID_COLS = 9;",
+                       "public static final int PAGE_COLS = 9;\n"
+                       "    public static final int GRID_COLS = 9;")],
+     "旧分页常量 PAGE_COLS 复活（旧列表实现残留）"),
     ("B2", "pkt_sync", [(r"ByteBufCodecs\.VAR_INT\.encode\(buf, packet\.pageCount\(\)\);", "// mutated")],
-     "快照不编码总页数（界面页码永远 1/1）"),
-    ("B2", "menu_r", [(r"page = Math\.max\(0, Math\.min\(pages - 1, page\)\);", "// mutated")],
-     "服务端不再夹页码（翻页可能越界空白）"),
+     "快照不编码总行数（界面滚动条永远拖不动）"),
+    ("B2", "menu_r", [(r"firstRow = Math\.max\(0, Math\.min\(max, requested\)\);", "// mutated")],
+     "服务端不再夹页首行（滚动可能越界空白）"),
     ("B3", "scr_r", [(r"entries = List\.copyOf\(packet\.entries\(\)\);",
                       "entries = List.copyOf(packet.entries()); // 见 menu.getReceiver() mutated")],
      "界面注释里出现 client 读 BE 的写法（纪律退化）"),
-    ("B4", "scr_r", [(r"requestPage\(page - \(int\) Math\.signum\(scrollY\)\);", "// mutated")],
-     "滚轮不再翻页（列表滚不动）"),
-    ("B4", "scr_r", [(r"guiGraphics\.renderItem\(entry\.item\(\), 0, 0\);", "// mutated")],
-     "物品行不再画图标"),
+    ("B4", "scr_r", [(r"requestScroll\(firstRow - \(int\) Math\.signum\(scrollY\)\);", "// mutated")],
+     "滚轮不再滚动（网格滚不动）"),
+    ("B4", "scr_r", [(r"guiGraphics\.renderItem\(entry\.item\(\), x \+ 1, y \+ 1\);", "// mutated")],
+     "格子不再画物品图标"),
     ("B5", "menu_r", [(r"if \(!menu\.stillValid\(player\)\)\s*\{\s*return;", "// mutated")],
      "C2S 取出不再校验距离 / 存在性"),
     ("C1", "menu_r", [(r"cache\.extractItem\(slot, Math\.min\(remaining, each\.getCount\(\)\), false\)",
@@ -729,21 +756,22 @@ MUTATIONS = [
     ("C2", "menu_r", [(r"final int want = all \? stored : Math\.min\(perStack, stored\);",
                        "final int want = all ? stored : stored;")],
      "左键也一次取光（左键 / Shift 分档失效）"),
-    ("D1", "menu_r", [(r"if \(emptyBuckets <= 0\)\s*\{[\s\S]{0,300}?sendConfigSyncInternal\(MSG_FLUID_NO_CONTAINER\);[\s\S]{0,120}?return;[\s\S]{0,20}?\n        \}",
-                       "// mutated: 没有空桶也照扣")],
-     "没有空桶也照扣（用户口径：没有空桶就不扣 + 提示）"),
-    ("D2", "menu_r", [(r"if \(!consumeOneEmptyBucket\(player\)\)\s*\{\s*\n\s*receiver\.getFluidCache\(\)\.fill\(drained, IFluidHandler\.FluidAction\.EXECUTE\);\s*\n\s*break;\s*\n\s*\}",
-                       "// mutated")],
-     "消耗空桶失败时不回滚（扣了没给）"),
-    ("D3", "menu_r", [(r"final int buckets = all \? maxBuckets : 1;", "final int buckets = 1;")],
-     "Shift 只能换一桶（尽可能多整桶失效）"),
+    ("D1", "menu_r", [(r"final FluidStack current = findCurrentFluid\(identity\);",
+                       "final FluidStack current = findCurrentFluid(identity);\n"
+                       "        drainOneBucket(identity); // mutated: 先扣再找容器")],
+     "先扣流体再找容器（都没有容器时也扣了 ⇒ 用户「取不出就不能扣」被破坏）"),
+    ("D2", "menu_r", [(r"refillFluidCache\(drained\);", ";")],
+     "扣到的流体不足一桶 / 拿不到容器时不回滚（扣了没给）"),
+    ("D3", "menu_r", [(r"all\s*\?\s*\(int\) Math\.min\(availableBuckets,\s*"
+                       r"currentFluidAmount\(identity\) / BUCKET_MB\)\s*:\s*1;", "1;")],
+     "Shift 也只能换一桶（尽可能多整桶失效）"),
     ("E1", "menu_r", [(r"private boolean isServerAuthoritative\(\)\s*\{\s*return receiver != null && receiver\.getLevel\(\) != null && !receiver\.getLevel\(\)\.isClientSide\(\);",
                        "private boolean isServerAuthoritative() {\n        return receiver != null; // mutated")],
      "服务端侧判据退化成「有方块实体就算」（客户端会写缓存）"),
     ("E2", "pkt_action", [(r"NetworkResourceReceiverMenu\.handleCacheAction\(player, packet\);",
                            "net.minecraft.client.Minecraft.getInstance(); // mutated")],
      "C2S 处理体引用客户端类型（专服崩）"),
-    ("E3", "scr_r", [(r'LANG \+ "cache\.take_all\.hint"', 'LANG + "cache.take_all.hint_typo"')],
+    ("E3", "scr_r", [(r'LANG \+ "cache\.slot\.hint"', 'LANG + "cache.slot.hint_typo"')],
      "界面引用了语言文件里不存在的键（会显示成原始 key）"),
     ("E4", "jade_provider", [(r"for \(final Component line : RsccReceiverJadePayload\.lines\(accessor\.getServerData\(\)\)\) \{",
                               "final boolean expanded = RsccTooltipLayers.held(RsccTooltipLayers.Layer.SHIFT);\n"

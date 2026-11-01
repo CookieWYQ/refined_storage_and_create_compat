@@ -71,13 +71,10 @@ public final class RegisterUpgradeDestinations {
         register("network_resource_receiver",
             "speed_upgrade", UpgradeSlot.MAX_PER_UPGRADE,
             "stack_upgrade", UpgradeSlot.MAX_PER_UPGRADE);
-        // 网络资源请求器：与接收器同为 6 个升级槽、同一份白名单（请求器的菜单直接引用
-        // NetworkResourceReceiverMenu.ALLOWED_UPGRADES，不各写一份）。
-        // 必须与接收器【成对登记】：本表是 RS 原生升级物品悬停提示的「哪些机器吃这个升级」来源，
-        // 漏一台的后果是提示里不列出请求器（功能不受影响，但玩家会以为装不进去）。
-        register("network_resource_requester",
-            "speed_upgrade", UpgradeSlot.MAX_PER_UPGRADE,
-            "stack_upgrade", UpgradeSlot.MAX_PER_UPGRADE);
+        // 第 131 轮：网络资源请求器的 6 个升级槽已按用户要求整条删除
+        //（用户原话「发送器功能保留，但不需要插件槽：红石激活的速度决定发送速度」）。
+        // 这里**必须不再登记**它 —— 本表是 RS 原生升级物品悬停提示的「哪些机器吃这个升级」来源，
+        // 留着就是误导性死数据（玩家会以为请求器还能插速度/叠加升级，实际没有槽可放）。
         // 降解室发电机（第 123 轮重做才有的 6 个升级槽 = 3 列 × 2 行）：
         // 与 DecompositionGeneratorMenu.ALLOWED_UPGRADES、以及 RsccSpeedStackUpgradeContainer 的
         // 第 ② 层校验【三处逐字一致】。语义见 DecompositionGeneratorSpec：
