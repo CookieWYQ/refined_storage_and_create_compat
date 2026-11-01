@@ -61,6 +61,8 @@
 | 专服探针 | **PASS**：`Done (1.747s)! For help, type "help"`，无 Mixin / dist 致命标记，`run/` 前后清单一致（只读自证 OK） |
 | jar | `rs_create_compat-1.2.0-beta.32.jar`，**2,945,672 B**，sha256 `b75f2d785709bc68a9342d4ac09edb29b660ccaa733c32d15c2dcd6f73915f14` |
 | 部署 | 四处 sha256 全等 → `DEPLOY_VERIFY_OK`（`tools/_verify_deploy_round131.py`：build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）；beta.31 就地 `.disabled` |
+| Git | commit `c6d2ea2` + tag `v1.2.0-beta.32`（**本地已提交/已打 tag**）。GitHub push 在交付时**未完成**：本机到 `github.com:443` 当前连不通（`baidu`/`gitee` 200，GitHub 000），不是仓库问题。网络恢复后执行：`git push origin main && git push origin v1.2.0-beta.32` |
+
 
 
 ## 4. 需要实机确认（我只有编译 / 像素 / 自检证据）
