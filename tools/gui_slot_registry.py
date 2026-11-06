@@ -277,42 +277,8 @@ PAINTED = [
             ("menu/IntermediateCacheMenu.java", r"INV_X0 \+ col \* 18, HOTBAR_Y"),
         ],
     ),
-    dict(
-        # 第 128 轮：原先代码自绘面板（McGui.panel + 逐槽 slotFrame），现在工具生成。
-        # 第 131 轮：接收器界面改成「终端网格」⇒ 背景里多烘焙 9×7 = 63 个 18px 格子。
-        #   **这些格子不是 Menu 槽位**（资源没有真实 Slot：点击是矩形命中 + C2S 包），
-        #   所以这一组写 `slots=0`：它只参与「PNG 烘焙格数」的账（painted_count = 105），
-        #   不参与「Menu 槽位数」的账（group_slot_sum 仍 = 42 = menu_slots）。
-        png="network_resource_receiver.png",
-        kind="plain",
-        screen="client/screen/NetworkResourceReceiverScreen.java",
-        menus=["menu/NetworkResourceReceiverMenu.java"],
-        menu_slots=42,  # 6 升级 + 36 玩家背包/快捷栏（网格 63 格不是 Menu 槽位）
-        groups=[
-            dict(name="插件槽", x=214, y=7, cols=1, rows=6,
-                 src="menu/NetworkResourceReceiverMenu.java (UPGRADE_X/UPGRADE_Y0)"),
-            dict(name="玩家背包", x=9, y=176, cols=9, rows=3,
-                 src="menu/NetworkResourceReceiverMenu.java (INV_X0/INV_Y0)"),
-            dict(name="快捷栏", x=9, y=230, cols=9, rows=1,
-                 src="menu/NetworkResourceReceiverMenu.java (HOTBAR_Y)"),
-            dict(name="资源网格（第 131 轮终端网格，非 Menu 槽位）", x=9, y=38, cols=9, rows=7,
-                 slots=0,
-                 src="menu/NetworkResourceReceiverMenu.java (GRID_X0/GRID_Y0 + GRID_COLS×GRID_ROWS)"),
-        ],
-        anchors=[
-            ("menu/NetworkResourceReceiverMenu.java", r"UPGRADE_X = 214"),
-            ("menu/NetworkResourceReceiverMenu.java", r"UPGRADE_Y0 = 7"),
-            ("menu/NetworkResourceReceiverMenu.java", r"UPGRADE_X, UPGRADE_Y0 \+ i \* 18"),
-            ("menu/NetworkResourceReceiverMenu.java", r"INV_X0 \+ col \* 18, INV_Y0 \+ row \* 18"),
-            ("menu/NetworkResourceReceiverMenu.java", r"INV_X0 \+ col \* 18, HOTBAR_Y"),
-            # 第 131 轮新增：网格坐标锚点（改网格几何就必须同步本登记表）
-            ("menu/NetworkResourceReceiverMenu.java", r"GRID_X0 = 9"),
-            ("menu/NetworkResourceReceiverMenu.java", r"GRID_Y0 = 38"),
-            ("menu/NetworkResourceReceiverMenu.java", r"GRID_COLS = 9"),
-            ("menu/NetworkResourceReceiverMenu.java", r"GRID_ROWS = 7"),
-            ("menu/NetworkResourceReceiverMenu.java", r"CELL = 18"),
-        ],
-    ),
+    # 第 132 轮：接收器界面改成 RS 的 GridScreen（资源网格 / 滚动条 / 数量角标全由 RS 画），
+    # 不再有自绘 PNG 与手写槽位账；network_resource_receiver.png 已无界面引用，故从登记表移除。
     # 第 131 轮：请求器「设置界面」（NetworkResourceRequesterScreen）按用户要求整页删除，
     # 6 个升级槽也一并删除（用户：红石激活速度决定发送速度，跟插件槽没关系）。
     # 因此这里不再登记 network_resource_requester.png 的槽位账（那张底图已无界面引用）。
@@ -503,9 +469,10 @@ MENUS = [
          bg="png", png="inventory_proxy.png", slots=37),
     dict(file="menu/NetworkResourceReceiverMenu.java",
          screen="client/screen/NetworkResourceReceiverScreen.java",
-         bg="png", png="network_resource_receiver.png", slots=42,
-         note="第 128 轮工具化：6 升级槽 + 36 玩家背包/快捷栏烘焙进底图；\n"
-              "资源行刻意不画 18×18 槽框（会压到 12px 行高，改用悬停高亮）"),
+         bg="rs_framework", slots=42,
+         note="第 132 轮：界面继承 RS 的 GridScreen（背景 = refinedstorage:grid.png，"
+              "资源格 / 滚动条 / 搜索框全由 RS 画）。extras 面板的 6 个升级槽 + 玩家 36 槽"
+              "由玩家背包槽位组成，坐标是客户端运行时按面板位置生成的，不再有自绘 PNG。"),
     # 第 131 轮：请求器设置界面已删除，瘦菜单没有任何界面，因此没有槽位账。
     dict(file="menu/QuantityKeeperMenu.java",
          screen="client/screen/QuantityKeeperScreen.java",
@@ -581,6 +548,13 @@ CODE_FRAMES = [
     dict(file="client/screen/ChargerFilterScreen.java", api="slotFrame", count=4, menu_slot=False,
          pattern=r"McGui\.slotFrame\(",
          note="列表行图标外框 4 处（不是 Menu 槽位）"),
+    # 第 132 轮：接收器 extras 面板里的 6 个升级槽（2×3）是真实 Menu 槽位；
+    # 面板位置在客户端运行时计算，因此槽框也必须运行时画（x/y 都先 −1 再交给 slotFrame）。
+    dict(file="client/screen/NetworkResourceReceiverScreen.java", api="slotFrame", count=1, menu_slot=True,
+         pattern=r"McGui\.slotFrame\(guiGraphics, slotX - 1, slotY - 1\)",
+         extra=[r"final int slotX = panelX \+ PANEL_PAD",
+                r"final int slotY = panelY \+ NetworkResourceReceiverMenu\.UPGRADE_Y0"],
+         note="6 个升级槽（i % 2 / i / 2 网格）由 panelX/panelY 运行时定位；槽框 = 内容坐标 − 1"),
 ]
 
 
@@ -595,6 +569,10 @@ ORPHAN = [
     # 「源码里不许再引用它」—— 将来谁把它接回新界面，这条就会判负，逼他改成正式登记。
     dict(png="network_resource_requester.png",
          why="第 131 轮：请求器设置界面整页删除（用户：这界面没有任何作用）⇒ 零引用"),
+    # 第 132 轮：接收器界面改成 RS 的 GridScreen（背景 = RS 的 grid.png），
+    # 第 128 轮生成的 236×252 自绘底图因此零引用；保留为历史美术资产，但禁止再被源码引用。
+    dict(png="network_resource_receiver.png",
+         why="第 132 轮：接收器界面改成 RS GridScreen ⇒ 自绘底图零引用"),
 ]
 
 

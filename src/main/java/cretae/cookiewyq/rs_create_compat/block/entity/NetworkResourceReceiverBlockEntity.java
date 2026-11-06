@@ -185,6 +185,16 @@ public class NetworkResourceReceiverBlockEntity
     private String receiverName = "";
 
     /**
+     * 缓存版本号（第 132 轮）：任何会改变缓存内容 / 触发 {@link #setChanged()} 的写入都 +1。
+     *
+     * <p>为什么需要它：界面已改成 RS 的 {@code GridScreen}，客户端不再每 10 tick 收一份全量列表，
+     * 而是由菜单在 {@code broadcastChanges()} 里用 {@code O(1)} 的版本比较判断「缓存到底变没变」，
+     * 变了才做一次增量同步（{@code AbstractGridContainerMenu#onChanged} → RS 的 {@code GridUpdatePacket}）。
+     * 没有这个计数器就只能每 tick 重扫全部缓存槽位（种类无上限，成本不可控）。</p>
+     */
+    private long cacheVersion;
+
+    /**
      * 节流闸门的倒计时（tick）：&gt; 0 时本 tick 不动作，减到 0 才放行并把
      * {@link RsccSpeedStackUpgradeContainer#throttleIntervalTicks()} 重新装进来。
      * <p>该间隔<b>恒为 1</b>（闸门每 tick 都放行）：「更快」由
@@ -255,6 +265,25 @@ public class NetworkResourceReceiverBlockEntity
     /** 流体缓存（同上）。 */
     public RsccUnboundedFluidStorage getFluidCache() {
         return fluidCache;
+    }
+
+    /**
+     * 缓存版本号（第 132 轮）：只增不减；菜单用它判断是否需要给打开中的 RS 网格发增量更新。
+     * <p>单调性比「精确值」更重要：菜单只比较「与上次同步时是否不同」，不解释数值本身。</p>
+     */
+    public long cacheVersion() {
+        return cacheVersion;
+    }
+
+    /**
+     * 任何「方块实体内容变了」的写入（缓存 / 升级 / 名字）都会经过这里 ⇒ 版本号自增。
+     * <p>走 {@code super.setChanged()} 而不是 {@code BlockEntity#setChanged()}：RS 的基类刻意绕开了
+     * 「邻接方块输出信号」的更新（本模组机器没有红石输出面），这里保留 RS 的性能口径。</p>
+     */
+    @Override
+    public void setChanged() {
+        super.setChanged();
+        cacheVersion++;
     }
 
     // ==================== 缓存快照（只服务界面 / Jade 的显示，绝不改任何状态） ====================
@@ -635,19 +664,25 @@ public class NetworkResourceReceiverBlockEntity
         if (resource == null || amount <= 0L) {
             return 0L;
         }
+        final long accepted;
         if (resource instanceof ItemResource item) {
-            return applyToItemCache(item, amount, simulate);
-        }
-        if (resource instanceof FluidResource fluid) {
-            return applyToFluidCache(fluid, amount, simulate);
-        }
-        if (resource instanceof PlatformResourceKey) {
+            accepted = applyToItemCache(item, amount, simulate);
+        } else if (resource instanceof FluidResource fluid) {
+            accepted = applyToFluidCache(fluid, amount, simulate);
+        } else if (resource instanceof PlatformResourceKey) {
             final RsccGenericResourceTarget.Target target = genericTarget();
-            return target == null
+            accepted = target == null
                 ? 0L
                 : target.insert(resource, amount, simulate ? Action.SIMULATE : Action.EXECUTE);
+        } else {
+            accepted = 0L; // 不可持久化的键：canHandle 已经判 false，这里只是防线
         }
-        return 0L; // 不可持久化的键：canHandle 已经判 false，这里只是防线
+        // 第 132 轮：请求器投递等「直接调 applyResource」的写入也必须落盘 + 让打开中的网格看到
+        // （旧实现只靠调用方 setChanged；请求器写的是它自己的方块实体，接收器缓存会漏标脏）。
+        if (!simulate && accepted > 0L) {
+            setChanged();
+        }
+        return accepted;
     }
 
     /** 物品：沿用改前的 {@code insertItem(0, ...)}（槽位被 {@code RsccUnboundedItemStorage} 忽略）。 */

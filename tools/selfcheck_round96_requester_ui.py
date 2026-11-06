@@ -58,6 +58,8 @@ FILES = {
     "pkt_sync": PKG + "/network/SyncRequesterConfigPacket.java",
     # 第 131 轮 C 组：请求器设置界面整页删除 ⇒ 变成**反向门禁**（见 GONE_FILES）
     "scr_grid": PKG + "/client/grid/ResourcePickerScreen.java",
+    # 第 132 轮：手写数量输入框删除，改数量走 RS 原生子界面
+    "scr_amount": PKG + "/client/grid/OrderAmountScreen.java",
     "menu_grid": PKG + "/client/grid/ResourcePickerMenu.java",
     # 第 131 轮新增：目标选择子界面 / 缺口询问子界面 / 发送源三层抽象
     "scr_target": PKG + "/client/screen/SenderTargetSelectScreen.java",
@@ -458,61 +460,65 @@ def check_c4(src, zh, en):
     return True, "× / 右键 → ACTION_REMOVE + 完整键"
 
 
-@check("C5", "改数量：回车应用 + −/+ 步进，全部走 ACTION_SET_AMOUNT 与 RsccNumberField")
+@check("C5", "改数量：点行内数量文字打开 RS 原生子界面，确认走 ACTION_SET_AMOUNT + int 夹取")
 def check_c5(src, zh, en):
     scr = src["scr_grid"]
-    needed = {
-        "回车": r"applyAmount\(\);\s*\n\s*return true;",
-        "应用实现": r"private void applyAmount\(\)",
-        "步进": r"private void stepAmount\(final int direction\)",
+    amount = src.get("scr_amount", "")
+    needed_scr = {
+        "打开入口": r"private void openAmountScreen\(final int index\)",
+        "构造子界面": r"new OrderAmountScreen\(this, initial, max, value -> sendSetAmount\(index, value\)\)",
         "动作码": r"RequesterOrderPacket\.ACTION_SET_AMOUNT",
-        "整数夹取": r"RsccNumberField\.clampToInt\(",
-        "解析口径": r"RsccNumberField\.parse\(",
-        "步长按钮": r"button -> stepAmount\(-1\)",
+        "整数夹取": r"RsccNumberField\.clampToInt\(Math\.max\(1L, amount\)\)",
     }
-    missing = [name for name, pattern in needed.items() if not has(scr, pattern)]
+    needed_amount = {
+        "继承 RS 数量屏": r"extends AbstractAmountScreen<",
+        "Long 运算": r"LongAmountOperations\.INSTANCE",
+        "贴图宽": r"imageWidth = 180;",
+        "贴图高": r"imageHeight = 99;",
+    }
+    missing = [name for name, pattern in needed_scr.items() if not has(scr, pattern)]
+    missing += [name for name, pattern in needed_amount.items() if not has(amount, pattern)]
     if missing:
-        return False, "改数量缺少：" + "、".join(missing)
-    if has(scr, r"Long\.parseLong\(|Integer\.parseInt\("):
-        return False, "界面自己写了数字解析（解析口径必须只有 RsccNumberField）"
-    return True, "回车 + −/+ → ACTION_SET_AMOUNT，解析只走 RsccNumberField"
+        return False, "RS 数量子界面接线缺少：" + "、".join(missing)
+    if has(scr, r"amountBox|minusButton|plusButton|stepAmount|applyAmount|currentAmount"):
+        return False, "手写数量控件 / 步进入口仍残留（应与第 132 轮契约一起删除）"
+    return True, "行内数量文字 → OrderAmountScreen → ACTION_SET_AMOUNT，int 夹取"
 
 
-@check("C6", "可见行是权威下标的投影：删除 / 改数量发的是 rows 下标（过滤态不会删错条目）")
+@check("C6", "数量编辑用权威下标：回调直接 sendSetAmount(index)，不是可见行号")
 def check_c6(src, zh, en):
     scr = src["scr_grid"]
     hit = body(scr, r"private int orderRowAt\(")
-    if hit is None:
-        return False, "找不到 orderRowAt"
-    if not has(hit, r"visible\.get\(slot\)"):
+    if hit is None or not has(hit, r"visible\.get\(slot\)"):
         return False, "orderRowAt 没有把可见行号换算回权威下标"
-    apply_body = body(scr, r"private void applyAmount\(\)")
-    if apply_body is None or not has(apply_body, r"index, \"\", row\.fluid\(\),")\
-            and not has(apply_body, r"ACTION_SET_AMOUNT, focusIndex"):
-        return False, "applyAmount 没有用权威下标（focusIndex）发请求"
-    step_body = body(scr, r"private void stepAmount\(final int direction\)")
-    if step_body is None or not has(step_body, r"ACTION_SET_AMOUNT, focusIndex"):
-        return False, "stepAmount 没有用权威下标（focusIndex）发请求"
-    return True, "visible → rows 下标，写请求只带权威下标"
+    open_body = body(scr, r"private void openAmountScreen\(final int index\)")
+    if open_body is None or not has(open_body, r"sendSetAmount\(index, value\)"):
+        return False, "数量子界面的确认回调没有带权威下标 index"
+    send_body = body(scr, r"private void sendSetAmount\(final int index, final long amount\)")
+    if send_body is None or not has(send_body, r"ACTION_SET_AMOUNT, index"):
+        return False, "sendSetAmount 没有用权威下标（index）发请求"
+    if not has(send_body, r"row\.key\(\)"):
+        return False, "sendSetAmount 没有带完整资源键做二次确认"
+    return True, "visible → rows 下标；确认回调只带权威下标"
 
 
 # ======================================================================================
 # ⑤ 左侧网格：沿用 RS 网格，点一下 = 按数量加入
 # ======================================================================================
-@check("D1", "左网格仍是 RS 网格（继承 GridScreen），点资源 = 按数量框加入清单")
+@check("D1", "左网格仍是 RS 网格（继承 GridScreen），点资源 = 按默认 1 件加入清单")
 def check_d1(src, zh, en):
     scr = src["scr_grid"]
     if not has(scr, r"public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu>"):
         return False, "网格界面不再继承 RS 的 GridScreen"
     add = body(scr, r"private void sendAdd\(")
     if add is None or not has(add, r"ACTION_ADD, -1")\
-            or not has(add, r"currentAmount\(\), key\)"):
-        return False, "sendAdd 没有带「数量框的值 + 完整资源键」去 ACTION_ADD"
-    if not has(scr, r"currentAmount\(\)"):
-        return False, "没有数量框取值入口 currentAmount()"
-    if not has(scr, r"RsccNumberField\.wire\(amountBox"):
-        return False, "数量框没有走 RsccNumberField.wire（解析口径会分叉）"
-    return True, "GridScreen + 点击 → ACTION_ADD(数量, key)"
+            or not has(add, r"DEFAULT_ORDER_AMOUNT, key\)"):
+        return False, "sendAdd 没有带「默认 1 件 + 完整资源键」去 ACTION_ADD"
+    if not has(scr, r"DEFAULT_ORDER_AMOUNT = 1;"):
+        return False, "没有默认订单数量常量（应固定 1 件，数量改走 RS 子界面）"
+    if has(scr, r"amountBox|currentAmount\("):
+        return False, "数量框 / currentAmount 仍存在（第 132 轮已删）"
+    return True, "GridScreen + 点击 → ACTION_ADD(1, key)"
 
 
 # ======================================================================================
@@ -535,7 +541,7 @@ def check_e1(src, zh, en):
     return True, "两个界面只发请求"
 
 
-@check("E2", "每条「点了可能没反应」的路径都给了消息（目标为空 / 未选中 / 数量非法 / 未连网络）")
+@check("E2", "每条「点了可能没反应」的路径都给了消息（目标为空 / 未连网络 / 数量下标失效）")
 def check_e2(src, zh, en):
     grid = src["scr_grid"]
     problems = []
@@ -544,17 +550,14 @@ def check_e2(src, zh, en):
         problems.append("本网络没有接收器时网格目标按钮没有说明")
     if not has(src["scr_target"], r'Component\.translatable\(LANG \+ "empty"\)'):
         problems.append("目标子界面候选为空时没有说明（一个灰掉的滚轮像坏了）")
-    if not has(grid, r"messageKey = LANG \+ \"msg\.select_first\";"):
-        problems.append("没选中条目就改数量时没提示")
-    if not has(grid, r"messageKey = LANG \+ \"msg\.bad_amount\";"):
-        problems.append("数量非法时没提示")
+    # 第 132 轮：数量改由 RS 子界面确认；下标失效仍要有一句
     if not has(grid, r"messageKey = QLANG \+ \"msg\.order_bad_index\";"):
-        problems.append("右键移除一个不存在的条目时没提示")
+        problems.append("数量 / 删除条目下标失效时没有提示")
     if not has(src["block_q"], r"MSG_PICKER_NO_NETWORK"):
         problems.append("右键打不开网格时没提示（设置界面已删，这条 actionbar 是唯一说明）")
     if problems:
         return False, "；".join(problems)
-    return True, "五条静默路径都有消息"
+    return True, "静默路径都有消息"
 
 
 # ======================================================================================
@@ -586,25 +589,25 @@ def check_f1(src, zh, en):
     return True, "设置面板五件寿衣全无；订单增删改仍在网格里"
 
 
-@check("F2", "「变灰了事」不会回来：工具条按钮恒可点，只有 −/+ 在无选中时禁用且必有提示")
+@check("F2", "「变灰了事」不会回来：不再有手写 ± 控件，数量编辑只走 RS 子界面")
 def check_f2(src, zh, en):
     grid = src["scr_grid"]
-    updater = body(grid, r"private void updateButtons\(\)")
-    if updater is None:
-        return False, "找不到 updateButtons"
-    # 第 131 轮反转：设置面板已删（那段「灰按钮」代码随之消失）。等价纪律搬到网格：
-    # 只有 −/+ 步进允许在「没选中条目」时禁用，其余按钮恒可点；且禁用路径必须有文字说明。
-    disables = re.findall(r"(\w+)\.active = ", updater)
-    unexpected = [name for name in disables
-                  if name not in ("minusButton", "plusButton", "sendButton")]
-    if unexpected:
-        return False, "工具条按钮又按状态变灰了：" + "、".join(unexpected)
-    if not has(updater, r"minusButton\.active = hasSelection") \
-            or not has(updater, r"plusButton\.active = hasSelection"):
-        return False, "−/+ 的禁用条件不是「确实选中了一条」"
-    if not has(grid, r"private boolean renderAmountTooltip\("):
-        return False, "改数量的禁用原因没有 tooltip（灰按钮 = 点了没反应）"
-    return True, "只有 −/+ 按选中态禁用，且原因写进 tooltip"
+    stale = [name for name, pattern in {
+        "数量输入框": r"amountBox",
+        "− 按钮": r"minusButton",
+        "+ 按钮": r"plusButton",
+        "本地步进": r"stepAmount\(",
+        "本地应用": r"applyAmount\(",
+    }.items() if has(grid, pattern)]
+    if stale:
+        return False, "第 132 轮已删的手写数量控件仍在：" + "、".join(stale)
+    if not has(grid, r"private void openAmountScreen\(final int index\)"):
+        return False, "没有打开 RS 数量子界面的入口"
+    # 唯一入口必须在行内数量文字区，行内其它区域仍只选中
+    click = body(grid, r"public boolean mouseClicked\(")
+    if click is None or not has(click, r"isOverAmountText\(mouseX, index\)"):
+        return False, "行点击没有区分「数量文字区」与其它区域"
+    return True, "手写 ± 控件零残留，数量编辑只走 RS 子界面"
 
 
 # ======================================================================================
@@ -646,14 +649,13 @@ def check_g2(src, zh, en):
 # ======================================================================================
 # ⑨ tooltip：新控件都有 hover 说明（MC 不会替我们调）
 # ======================================================================================
-@check("H1", "网格界面每个新控件都有手动 tooltip（工具条 / 行 / 数量 / 搜索框）")
+@check("H1", "网格界面每个新控件都有手动 tooltip（工具条 / 行 / 搜索框）")
 def check_h1(src, zh, en):
     scr = src["scr_grid"]
     needed = {
         "统一出口": r"private void renderHoverTooltips\(",
         "工具条 tooltip": r"private boolean renderToolbarTooltip\(",
         "行 tooltip": r"private boolean renderRowTooltip\(",
-        "数量 tooltip": r"private boolean renderAmountTooltip\(",
         "搜索 tooltip": r"private boolean renderFilterTooltip\(",
         "真的被调用": r"renderHoverTooltips\(guiGraphics, mouseX, mouseY\);",
     }
@@ -666,7 +668,7 @@ def check_h1(src, zh, en):
         return False, "render() 没有真的调用 tooltip（画不出来）"
     if has(render, r"hasShiftDown\(\)"):
         return False, "tooltip 被 Shift 条件包住（工程硬规则：常显）"
-    return True, "四类 tooltip + 原版槽位 tooltip 都在 render() 里"
+    return True, "工具条 / 行 / 搜索框 tooltip + 数量编辑提示都在 render() 里"
 
 
 # ======================================================================================
@@ -784,25 +786,23 @@ MUTATIONS = [
      "清单搜索改成过滤网络资源（不是已加入条目）"),
     ("C4", "scr_grid", [(r"button == 1 \|\| isOverDelete\(mouseX\)", "false /* mutated */")],
      "行上点击不再删除"),
-    ("C5", "scr_grid", [(r"button -> stepAmount\(-1\)", "button -> { } /* mutated */")],
-     "− 按钮不再调 stepAmount（改了数量却没发请求）"),
-    ("C6", "scr_grid", [(r"visible\.get\(slot\)", "slot /* mutated: 用可见行号当权威下标 */")],
-     "过滤态下用可见行号当权威下标（会删错条目）"),
+    ("C5", "scr_grid", [(r"new OrderAmountScreen\(this, initial, max, value -> sendSetAmount\(index, value\)\)",
+                          "null /* mutated: 数量文字不再打开 RS 子界面 */")],
+     "数量文字不再打开 RS 子界面（改不了数量）"),
+    ("C6", "scr_grid", [(r"sendSetAmount\(index, value\)", "sendSetAmount(0, value) /* mutated */")],
+     "数量确认回调丢了权威下标（过滤态改错条目）"),
     ("D1", "scr_grid", [(r"ACTION_ADD, -1", "ACTION_REMOVE, -1 /* mutated */")],
      "点网格资源变成删除"),
-    ("E2", "scr_grid", [(r'messageKey = LANG \+ "msg\.select_first";',
-                         '/* mutated: 静默 */'),
-                        (r'messageKey = LANG \+ "msg\.select_first";',
-                         '/* mutated: 静默 */')],
-     "没选中就改数量时不再提示（两处入口都静默）"),
+    ("E2", "scr_grid", [(r'Component\.translatable\(QLANG \+ "target\.known\.none"\)',
+                          'Component.empty() /* mutated: 静默 */')],
+     "本网络没有接收器时目标按钮不再说明（点了像坏了）"),
     ("F1", "scr_grid", [(r"    private void renderToolbarText\(",
                          "    private Component summaryLine() { return null; }\n\n"
                          "    private void renderToolbarText(")],
      "设置面板的摘要行在网格里复活（寿衣回来了）"),
-    ("F2", "scr_grid", [(r"minusButton\.active = hasSelection",
-                         "targetButton.active = !rows.isEmpty(); // mutated\n"
-                         "        minusButton.active = hasSelection")],
-     "工具条按钮又按状态变灰（点了没反应）"),
+    ("F2", "scr_grid", [(r"private EditBox filterBox;",
+                          "private EditBox amountBox; // mutated: 手写数量框复活")],
+     "手写数量输入框复活（绕过 RS 子界面）"),
     ("G1", "pkt_sync", [(r"ByteBufCodecs\.VAR_LONG\.encode\(buf, packet\.pacingBatch\(\)\);", "// mutated")],
      "快照不再编码单批量（工具条显示 0）"),
     ("G2", "menu_grid", [(r"final java\.util\.OptionalInt opened = player\.openMenu[\(]",

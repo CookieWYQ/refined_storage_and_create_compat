@@ -494,6 +494,12 @@ MANUAL_SLOT_TOTALS = {
         "构造器是 if (keeper != null) {...} else {...} 二选一，两条分支各 addSlot 7 次"
         "（1 标记槽 + 6 升级槽），静态求和会把两条分支都算上（=14）；人工核对实际只走一条分支："
         "7 机器槽 + 36 玩家槽 = 43，quickMoveStack 区间 (7,43) / (0,7) 正好铺满 [0,43)。"),
+    "NetworkResourceReceiverMenu": (
+        42,
+        "第 132 轮改成 RS 的 AbstractGridContainerMenu：玩家背包 36 槽由 super.resized() 追加，"
+        "6 个升级槽由本菜单覆写的 resized() 在同一处追加；槽位顺序恒为 [0,36) 玩家 + [36,42) 升级。"
+        "静态解析看不到 resized() 里的 addSlot（构造器外），故人工核对 42 槽；"
+        "quickMoveStack 区间 (0,36) / (36,42) 正好铺满 [0,42)。"),
 }
 
 # 槽数随数据动态变化、静态给不出具体数字的菜单：必须写清楚「为什么安全」的可核对依据。

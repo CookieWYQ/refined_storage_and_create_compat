@@ -880,9 +880,20 @@ def apply_mutation(src, rel_key, replacements):
     return text
 
 
+# 第 132 轮：接收器界面改成 RS 的 GridScreen（搜索 / 排序 / 滚动 / 数量角标 / tooltip 全由 RS 提供）。
+# 本脚本 A1/A2/B1-B5 是「第 131 轮手写 9×7 网格」的判据，已由 selfcheck_round132_receiver.py 全量接管；
+# 其余请求器 / 通用行为判据继续生效。
+SUPERSEDED_BY_ROUND132 = {"A1", "A2", "B1", "B2", "B3", "B4", "B5"}
+
+
 def run_all(src, zh, en):
     results = []
+    superseded = "extends GridScreen" in (src.get("scr_r") or "")
     for cid, desc, fn in CHECKS:
+        if superseded and cid in SUPERSEDED_BY_ROUND132:
+            results.append((cid, desc + "（第 132 轮已由 round132 接管）", True,
+                            "superseded"))
+            continue
         try:
             ok, detail = fn(src, zh, en)
         except Exception as exc:  # 断言函数自身出错也算判负（不能静默跳过）
@@ -945,7 +956,10 @@ def main():
     # ==================== 反例自证 ====================
     proof_failures = []
     checks_by_id = {cid for cid, _desc, _fn in CHECKS}
-    for target, rel_key, replacements, label in MUTATIONS:
+    superseded = "extends GridScreen" in (src.get("scr_r") or "")
+    active_mutations = [m for m in MUTATIONS
+                        if not (superseded and m[0] in SUPERSEDED_BY_ROUND132)]
+    for target, rel_key, replacements, label in active_mutations:
         if target not in checks_by_id:
             proof_failures.append("%s：断言 id 不存在" % target)
             continue
@@ -967,7 +981,7 @@ def main():
         if not target_result or target_result[0]:
             proof_failures.append("%s：回退「%s」后断言仍然通过（假绿）" % (target, label))
 
-    for target, _rel_key, _replacements, label in MUTATIONS:
+    for target, _rel_key, _replacements, label in active_mutations:
         if target not in [failure.split("：")[0] for failure in proof_failures]:
             print("PASS 反例 %s：回退「%s」⇒ 判负" % (target, label))
     if proof_failures:
@@ -977,10 +991,10 @@ def main():
         print("[result] 自检失败：反例自证 %d 项未抓住" % len(proof_failures))
         return 1
 
-    total = len(results) + len(MUTATIONS)
+    total = len(results) + len(active_mutations)
     print("=" * 78)
     print("[result] 自检通过：%d 项断言（%d 条正向 + %d 条反例自证）"
-          % (total, len(results), len(MUTATIONS)))
+          % (total, len(results), len(active_mutations)))
     return 0
 
 

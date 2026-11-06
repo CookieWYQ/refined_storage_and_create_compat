@@ -227,9 +227,9 @@ def check_screens_client_only():
           os.path.isfile(receiver_scr))
     if os.path.isfile(receiver_scr):
         text = read(receiver_scr)
-        check("③c NetworkResourceReceiverScreen 声明了 client.screen 包且继承 AbstractContainerScreen",
+        check("③c NetworkResourceReceiverScreen 声明了 client.screen 包且继承 RS GridScreen（第 132 轮）",
               text.startswith("package cretae.cookiewyq.rs_create_compat.client.screen;")
-              and "extends AbstractContainerScreen" in text)
+              and "extends GridScreen<NetworkResourceReceiverMenu>" in text)
     # 反向门禁：请求器界面必须真的删了（不是「读不到就跳过」）
     check("③c' 请求器设置界面文件必须不存在（第 131 轮整页删除）",
           not os.path.isfile(os.path.join(JAVA, "client", "screen",

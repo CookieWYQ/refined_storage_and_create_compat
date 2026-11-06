@@ -26,7 +26,7 @@
   ③ **payload 注册不引用客户端类**（源码级）：8 个新包文件里没有任何
      `net.minecraft.client.*` / `com.mojang.blaze3d.*`；S2C 的处理体只走 `ClientPayloadHooks`；
      `RS_Create_Compat.registerPayloads` 里 8 个包全部注册（C2S 一律 `ctx.enqueueWork`）。
-  ④ **条目上限 16**、**数量用 `RsccNumberField.wire`**、**白名单仍是两大类**、
+  ④ **条目上限 16**、**数量用 RS 原生数量子界面（第 132 轮起；旧 RsccNumberField.wire 输入框已删）**、**白名单仍是两大类**、
      **同步只在变更时发**（界面的 `renderLabels` 里没有 `sendToServer` / 网络存储扫描）。
   ⑤ **反例自证**：把「客户端直接改 NBT」「无服务端校验」「S2C 里直接 new 客户端 Screen」
      三种修前写法喂给**同一批判据**，必须判负；再证明真实源码通过（判据不是恒真）。
@@ -618,7 +618,7 @@ def section_registration_and_dist():
 # ======================================================================================
 
 def section_limits_and_inputs():
-    section("④ 条目上限 16 / RsccNumberField.wire / 两类白名单 / 只在变更时同步")
+    section("④ 条目上限 16 / RS 数量子界面 / 两类白名单 / 只在变更时同步")
     requester_be = strip_comments(read(REQUESTER_BE))
     requester_menu = strip_comments(read(REQUESTER_MENU))
     receiver_menu = strip_comments(read(RECEIVER_MENU))
@@ -633,8 +633,12 @@ def section_limits_and_inputs():
           "MAX_ORDER_ENTRIES" not in requester_menu and "TOO_MANY" not in requester_menu)
     check("④-3 方块实体的 setOrders 不再按条数丢弃条目",
           "merged.size() >=" not in requester_be and "MAX_ORDERS" not in requester_be)
-    check("④-4 数量输入复用 RsccNumberField.wire（全工程唯一解析口径）",
-          "RsccNumberField.wire(" in picker_screen)
+    # 第 132 轮：手写数量输入框删除 ⇒ 数量编辑走 RS 原生子界面 + ACTION_SET_AMOUNT
+    check("④-4 数量编辑走 RS 原生数量子界面（不再手写 RsccNumberField.wire 输入框）",
+          "new OrderAmountScreen(" in picker_screen
+          and "openAmountScreen(" in picker_screen
+          and "RequesterOrderPacket.ACTION_SET_AMOUNT" in picker_screen
+          and "amountBox" not in picker_screen)
     check("④-5 流体数量显示按桶换算（bucketHint），物品按个数（grouped）",
           "RsccNumberField.bucketHint(" in (picker_screen + requester_screen)
           and "RsccNumberField.grouped(" in (picker_screen + requester_screen))
@@ -1227,8 +1231,9 @@ def judge_picker_screen(text):
     # 面板里必须能：累积多选、设数量、直接发送（用户要求全部在网格里完成）
     if "TriggerRequesterPacket" not in text:
         errors.append("网格里没有发送入口（用户要求「发送也在网格里完成」）")
-    if "RsccNumberField.wire(" not in text:
-        errors.append("数量输入没有复用 RsccNumberField（全工程唯一解析口径）")
+    # 第 132 轮：数量编辑从「面板内输入框」改成「行内数量文字 → RS 原生数量子界面」
+    if "openAmountScreen(" not in text or "new OrderAmountScreen(" not in text:
+        errors.append("数量编辑没有打开 RS 原生数量子界面（第 132 轮已删手写输入框）")
     if "ACTION_SET_AMOUNT" not in text or "ACTION_REMOVE" not in text:
         errors.append("不能改数量 / 移除已选项（只能加不能编辑）")
 

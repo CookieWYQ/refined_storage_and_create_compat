@@ -399,19 +399,22 @@ def check_b3(src, zh, en):
 
 @check("B4", "客户端 / 服务端槽位数一致（槽位注册不按端分叉）")
 def check_b4(src, zh, en):
-    # 第 131 轮：请求器菜单已没有升级槽 ⇒ 槽位一致性只剩接收器一台（请求器侧另有一条「不许有 addSlot」）
-    for key, menu_text in (("menu_rcv", src["menu_rcv"]),):
-        ctor = body_of(menu_text, r"public NetworkResource(?:Requester|Receiver)Menu\(final int id,\s*final Inventory inventory,\s*@Nullable final NetworkResource\w+BlockEntity \w+\)")
-        if ctor is None:
-            return False, "%s 找不到三参构造器" % key
-        # 升级槽循环必须在「服务端 / 客户端容器选择」的三元表达式之后，且不被 if 包起来
-        if not has(ctor, r"\(\)\s*->\s*false\);\s*\n\s*for \(int i = 0; i < UPGRADE_COUNT; i\+\+\)\s*\{\s*\n\s*addSlot\(new UpgradeSlot\("):
-            return False, "%s 的升级槽循环可能被 if(...) 包住 ⇒ 两端槽位数会不一致（历史断线根因）" % key
-        if len(re.findall(r"addSlot\(", ctor)) != 3:
-            return False, "%s 的 addSlot 调用点不是 3 处（升级 / 背包 / 快捷栏）" % key
-        if missing(ctor, r"for \(int row = 0; row < 3; row\+\+\)") or \
-                missing(ctor, r"for \(int col = 0; col < 9; col\+\+\)"):
-            return False, "%s 的背包 / 快捷栏循环尺寸变了（槽位总数与屏幕几何会分叉）" % key
+    # 第 132 轮：接收器菜单改成 RS 的 AbstractGridContainerMenu。
+    # 玩家背包由 RS 的 resized() 加；6 个升级槽由本菜单覆写的 resized() 在**同一处**追加，
+    # 服务端构造器与客户端构造器都只调一次 resized(0,0,0)，因此两端槽位顺序恒为
+    # [0,36) 玩家 + [36,42) 升级。
+    menu_text = src["menu_rcv"]
+    if "extends AbstractGridContainerMenu" not in menu_text:
+        return False, "menu_rcv 不再继承 RS 的 AbstractGridContainerMenu"
+    if len(re.findall(r"resized\(0, 0, 0\);", menu_text)) != 2:
+        return False, "服务端 / 客户端构造器没有各调一次 resized(0,0,0)"
+    resized = body_of(menu_text, r"public void resized\(final int playerInventoryY,")
+    if resized is None:
+        return False, "menu_rcv 没有覆写 resized(...)"
+    if "super.resized(" not in resized or "addSlot(new UpgradeSlot(" not in resized:
+        return False, "resized 没有「先 super（玩家背包）再追加升级槽」"
+    if not has(resized, r"for \(int i = 0; i < UPGRADE_COUNT; i\+\+\)"):
+        return False, "升级槽循环没有用 UPGRADE_COUNT"
     # 请求器菜单第 131 轮起没有任何槽位（设置界面删了、插件槽删了）⇒ 反向门禁
     if has(src["menu_req"], r"addSlot\(new UpgradeSlot\("):
         return False, "请求器菜单又注册了 UpgradeSlot（第 131 轮起插件槽已删）"
@@ -419,7 +422,7 @@ def check_b4(src, zh, en):
     for key in ("scr_rcv",):
         if has(src[key], r"\baddSlot\("):
             return False, "%s 自己在界面上 addSlot（客户端 / 服务端槽位数会分叉）" % key
-    return True, "两台机器的菜单构造器两端同一条路径；屏幕不加槽"
+    return True, "两端共用同一条 resized 路径（玩家 36 + 升级 6）；屏幕不加槽"
 
 
 @check("B5", "语言键：引用键中英齐全，机制说明键仍有引用（不产生孤儿键）")
@@ -503,9 +506,9 @@ MUTATIONS = [
      [(r"SenderDelivery\.FIXED_BATCHES_PER_TICK", "16 /* mutated: 节拍又变成写死的旋钮 */")],
      "节拍不再来自 SenderDelivery 常量（与终端实现分叉）"),
     ("B4", "menu_rcv",
-     [(r"\(\)\s*->\s*false\);\s*\n\s*for \(int i = 0; i < UPGRADE_COUNT; i\+\+\)",
-       "() -> false);\n        if (receiver != null) {\n        for (int i = 0; i < UPGRADE_COUNT; i++")],
-     "升级槽只在服务端注册（客户端槽位少 6 格 ⇒ 点一下就断线）"),
+     [(r"for \(int i = 0; i < UPGRADE_COUNT; i\+\+\)",
+       "for (int i = 0; i < 0; i++)")],
+     "升级槽循环上限写错（客户端 / 服务端只加 0 个升级槽 ⇒ 槽位账分叉）"),
     ("B5", "scr_rcv",
      [(r'LANG \+ "cache\.slot\.hint"', 'LANG + "cache.slot.hint_typo"')],
      "接收器界面的语言键写错（界面会显示原始 key）"),

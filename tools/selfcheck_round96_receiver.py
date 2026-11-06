@@ -791,9 +791,22 @@ def apply_mutation(src, rel_key, replacements):
     return text
 
 
+# 第 132 轮：接收器界面改成 RS 的 GridScreen。以下判据是「第 131 轮手写网格 / 分页快照 /
+# 自定义取物包」的旧实现，已由 selfcheck_round132_receiver.py 全量接管；A 组（外部推入）与
+# E2/E4（dist 安全 / Jade）继续生效。
+SUPERSEDED_BY_ROUND132 = {
+    "B6", "B1", "B2", "B3", "B4", "B5",
+    "C1", "C2", "D1", "D2", "D3", "E1", "E3",
+}
+
+
 def run_all(src, zh, en):
     results = []
+    superseded = "extends GridScreen" in (src.get("scr_r") or "")
     for cid, desc, fn in CHECKS:
+        if superseded and cid in SUPERSEDED_BY_ROUND132:
+            results.append((cid, desc + "（第 132 轮已由 round132 接管）", True, "superseded"))
+            continue
         try:
             ok, detail = fn(src, zh, en)
         except Exception as exc:  # 断言函数自身出错也算判负（不能静默跳过）
@@ -840,7 +853,10 @@ def main():
 
     # ---- 反例自证 ----
     mutation_results = []
-    for cid, rel_key, replacements, why in MUTATIONS:
+    superseded = "extends GridScreen" in (src.get("scr_r") or "")
+    active_mutations = [m for m in MUTATIONS
+                        if not (superseded and m[0] in SUPERSEDED_BY_ROUND132)]
+    for cid, rel_key, replacements, why in active_mutations:
         target = None
         for existing_id, existing_desc, fn in CHECKS:
             if existing_id == cid:

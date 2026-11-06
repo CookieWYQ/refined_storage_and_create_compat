@@ -492,13 +492,19 @@ def _d2_4(tree: Tree):
                 "%dx%d 屏幕上 Tab 越过右边界" % (screen_w, screen_h))
 
 
-@check("§D2.5 发送界面（ResourcePickerScreen）的 Tab 放左侧，且「右侧放会压住订单清单」被算过")
+@check("§D2.5 发送界面（ResourcePickerScreen）的 Tab 放左侧，且避开 RS 侧键 [leftPos-20, leftPos-2]")
 def _d2_5(tree: Tree):
     overlay = tree.code("overlay")
-    require("instanceof cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerScreen" in collapse(overlay),
+    compact = collapse(overlay)
+    require("instanceof cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerScreen" in compact,
             "Tab 排布没有为发送界面（ResourcePickerScreen）单独分支")
-    require("getGuiLeft() - TAB_W - SCREEN_MARGIN" in collapse(overlay),
-            "发送界面的 Tab 没有放到 GUI 左侧（右侧整条被订单清单占满）")
+    # 第 132 轮：RS 侧键 18×18 占 leftPos-20..leftPos-2，发送档 Tab 列必须再左移 18+4。
+    require("AbstractSideButtonWidget.SIZE - 4" in compact,
+            "发送界面的 Tab 没有按 RS 侧键宽度（SIZE+4）让位")
+    require("getGuiLeft() - TAB_W - AbstractSideButtonWidget.SIZE - 4" in compact,
+            "发送界面的 Tab 不是 leftPos - TAB_W - 侧键宽 - 4（仍会压住 RS 侧键）")
+    require("getGuiLeft() - TAB_W - SCREEN_MARGIN" not in compact,
+            "旧的 leftPos - TAB_W - 2 公式仍存在（与 RS 侧键重叠）")
     picker = tree.code("picker_screen")
     grid_w = literal_int(picker, "GRID_IMAGE_W")
     panel_gap = literal_int(picker, "PANEL_GAP")
@@ -518,9 +524,18 @@ def _d2_5(tree: Tree):
             "复算显示「右侧放 Tab」并不会压住订单清单（%d..%d vs 清单 %d..%d）"
             " ⇒ 这个分支的存在理由不成立，需重新评估"
             % (right_side_x, right_side_x + tab_w, panel_left, panel_right))
-    left_side_x = left - tab_w - margin
-    require(left_side_x + tab_w <= left,
-            "左侧放置的 Tab 会压住 GUI 本身（x=%d, leftPos=%d）" % (left_side_x, left))
+    # 侧键：x ∈ [leftPos-20, leftPos-2]；Tab 列 x = leftPos-46，右缘 leftPos-22。
+    side_button_left = left - 18 - 2
+    side_button_right = left - 2
+    left_side_x = left - tab_w - 18 - 4
+    require(left_side_x + tab_w <= side_button_left,
+            "左侧 Tab 列压住 RS 侧键（Tab 右缘 %d > 侧键左缘 %d）"
+            % (left_side_x + tab_w, side_button_left))
+    require(left_side_x + tab_w < side_button_right,
+            "左侧 Tab 列没有和 RS 侧键保持间隙（Tab 右缘 %d，侧键右缘 %d）"
+            % (left_side_x + tab_w, side_button_right))
+    require(left_side_x >= margin,
+            "左侧放置的 Tab 越过屏幕左边界（x=%d）" % left_side_x)
 
 
 # ======================================================================================

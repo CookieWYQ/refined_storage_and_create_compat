@@ -43,11 +43,11 @@ import java.util.Set;
  * <h2>一个界面里做完所有事</h2>
  * <ul>
  *     <li><b>左网格</b>：RS 自己的资源网格（搜索 / 排序 / 视图过滤全在），
- *     左键点资源 = 按「数量框」的值加入订单清单，右键 = 从清单移除；</li>
+ *     左键点资源 = 按默认 1 件加入订单清单，右键 = 从清单移除；</li>
  *     <li><b>右清单</b>：订单清单（图标 + 名称 + 数量 + ×），<b>条目数无上限</b>、
  *     可滚轮滚动、<b>自带搜索框</b>（只过滤已加入的条目，大小写不敏感，匹配名称 / 资源 id）；</li>
- *     <li><b>清单底部</b>：改数量（输入框 + 回车应用 / −/+ 步进并立即应用，
- *     全部走既有 C2S 包与服务端校验）；</li>
+ *     <li><b>数量编辑</b>：左键点订单行里的<b>数量文字</b>打开 RS 原生数量子界面
+ *     （{@link OrderAmountScreen}）—— 不再手写输入框 / ± 按钮；</li>
  *     <li><b>顶部工具栏</b>：目标接收器（点击打开可搜索的子界面挑选）/ 立即发送 / 清空订单 /
  *     节拍文字（固定常量，不再是升级旋钮）。第 131 轮起<b>没有</b>「设置」按钮 ——
  *     用户确认那个设置界面整页删除，网格就是发送器的唯一界面。</li>
@@ -105,7 +105,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     /** 面板左沿相对 {@code leftPos} 的偏移：193 + 4 = 197（> 滚动条列 174、> 搜索框右沿 162）。 */
     public static final int PANEL_X_OFFSET = GRID_IMAGE_W + PANEL_GAP;
     /**
-     * 面板宽（够放「图标 + 名称 + 数量 + ×」，也够放「数量框 + −/+」）。
+     * 面板宽（够放「图标 + 名称 + 数量 + ×」）。
      * <p>刻意压到 118：1280×720 + GUI 缩放 3× 时可用宽度只有 426，GUI 右沿到屏幕右沿只剩 ~113px
      * —— 再宽就会被屏幕边缘裁掉。</p>
      */
@@ -126,8 +126,12 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     public static final int NAME_X = PANEL_PAD + 10;
     /** 行尾「×」（删除）热区的宽度。 */
     public static final int DELETE_W = 11;
-    /** 数量编辑行高（输入框 16）。 */
-    public static final int AMOUNT_ROW_H = 16;
+    /**
+     * 左键点网格资源加入订单时的默认数量。
+     * <p>第 132 轮删掉了手写数量输入框：改数量统一走 RS 原生数量子界面
+     * （{@link OrderAmountScreen}）—— 点订单行里的数量文字打开，不再有第二个数量来源。</p>
+     */
+    public static final int DEFAULT_ORDER_AMOUNT = 1;
     /** 底部提示行高。 */
     public static final int MESSAGE_H = 10;
     /** 控件之间的间距。 */
@@ -148,18 +152,21 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     public static final int CLEAR_W = 46;
 
     // ==================== 颜色 ====================
-    private static final int COLOR_TITLE = 0xFF333333;
-    private static final int COLOR_TEXT = 0xFF404040;
-    private static final int COLOR_HINT = 0xFF1F4E79;
-    private static final int COLOR_WARN = 0xFF9B2020;
-    private static final int COLOR_OK = 0xFF1E6B2E;
+    // 第 132 轮：面板底是原版 recipe_book/overlay_recipe 的深色半透明贴图（见 McGui.panel），
+    // 旧值（深灰）在深底上几乎看不见。这里统一换成浅色，
+    // 并保留语义分区（标题浅金 / 正文近白 / 提示浅蓝 / 警告红 / 成功绿 / 流体蓝）。
+    private static final int COLOR_TITLE = 0xFFFFE08A;
+    private static final int COLOR_TEXT = 0xFFE8E8E8;
+    private static final int COLOR_HINT = 0xFFAFC8E8;
+    private static final int COLOR_WARN = 0xFFFF8A8A;
+    private static final int COLOR_OK = 0xFF8FE08F;
     /** 选中行的高亮底色（半透明蓝）。 */
     private static final int COLOR_ROW_SELECTED = 0x3300A0FF;
     /** 行尾「×」的常色 / 悬停色。 */
-    private static final int COLOR_DELETE = 0xFF7A2020;
+    private static final int COLOR_DELETE = 0xFFFF9A9A;
     private static final int COLOR_DELETE_HOVER = 0x44FF3030;
     /** 流体类型的数量色（与物品区分开）。 */
-    private static final int COLOR_FLUID = 0xFF1F6FB0;
+    private static final int COLOR_FLUID = 0xFF7FC8FF;
     /** 网格里「已在订单清单里」的格子高亮（半透明琥珀底 + 深绿 1px 边框）。 */
     private static final int COLOR_SELECTED_FILL = 0x55FFC107;
     private static final int COLOR_SELECTED_BORDER = 0xFF2E7D32;
@@ -179,11 +186,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     /** 已在订单清单里的资源键（网格高亮用 O(1) 判定）。 */
     private final Set<PlatformResourceKey> selectedKeys = new HashSet<>();
 
-    /** 加入数量 / 改数量的唯一输入框（解析口径：{@link RsccNumberField}）。 */
-    private EditBox amountBox;
-    /** 数量 −/+ 步进按钮（立即应用）。 */
-    private Button minusButton;
-    private Button plusButton;
     /** 订单清单自己的搜索框（只过滤已加入的条目，不触碰网格搜索）。 */
     private EditBox filterBox;
     /** 工具栏：目标接收器循环切换。 */
@@ -195,10 +197,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     /** 当前聚焦的订单条目（{@link #rows} 的下标；-1 = 没有）。 */
     private int focusIndex = -1;
-    /** 已把「哪一条资源」的数量载入数量框（避免每次快照都覆盖玩家正在输入的值）。 */
-    private PlatformResourceKey amountLoadedKey;
-    /** 最近一次解析成功的数量（输入框为空 / 非法时保留上一次的值；新建条目默认 1）。 */
-    private long parsedAmount = 1L;
     /** 本地 / 服务端最近一次操作提示（语言键；空串 = 无）。 */
     private String messageKey = "";
 
@@ -244,33 +242,9 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         super.init();
         layoutPanel();
         layoutToolbar();
-        buildAmountControls();
         buildFilterBox();
         buildToolbar();
-        focusRow(focusIndex, true);
-        updateButtons();
-    }
-
-    /** 清单底部：数量输入框 + −/+（步进后立即应用）。 */
-    private void buildAmountControls() {
-        final int inner = PANEL_W - PANEL_PAD * 2;
-        final int stepW = 22;
-        final int boxW = inner - stepW * 2 - GAP * 2;
-        amountBox = new EditBox(font, panelX + PANEL_PAD, amountY(), boxW, AMOUNT_ROW_H,
-            Component.translatable(LANG + "panel.amount"));
-        amountBox.setTextShadow(false);
-        amountBox.setValue(RsccNumberField.editable(parsedAmount,
-            RsccNumberField.textWindow(boxW)));
-        RsccNumberField.wire(amountBox, value -> parsedAmount = value);
-        addRenderableWidget(amountBox);
-        minusButton = Button.builder(Component.literal("-"), button -> stepAmount(-1))
-            .bounds(panelX + PANEL_PAD + boxW + GAP, amountY(), stepW, AMOUNT_ROW_H)
-            .build();
-        addRenderableWidget(minusButton);
-        plusButton = Button.builder(Component.literal("+"), button -> stepAmount(1))
-            .bounds(panelX + PANEL_PAD + boxW + GAP + stepW + GAP, amountY(), stepW, AMOUNT_ROW_H)
-            .build();
-        addRenderableWidget(plusButton);
+        focusRow(focusIndex);
     }
 
     /** 清单自己的搜索框（只过滤已加入的订单条目）。 */
@@ -284,7 +258,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         filterBox.setResponder(text -> {
             rebuildVisible();
             clampFocus();
-            updateButtons();
         });
         addRenderableWidget(filterBox);
     }
@@ -313,9 +286,8 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         panelX = Math.min(preferred, Math.max(leftPos + GRID_IMAGE_W, width - PANEL_W - 2));
         panelY = topPos + PANEL_TOP;
         final int available = Math.max(ROW_H * 2, height - panelY - 2);
-        // 固定控件总高：标题 + 搜索框 + 数量行 + 提示行 + 间距 + 上下内边距
-        final int fixed = HEADER_H + FILTER_H + GAP + AMOUNT_ROW_H + GAP + MESSAGE_H + GAP
-            + PANEL_PAD * 2;
+        // 固定控件总高：标题 + 搜索框 + 提示行 + 间距 + 上下内边距（第 132 轮：数量行已删）
+        final int fixed = HEADER_H + FILTER_H + GAP + MESSAGE_H + GAP + PANEL_PAD * 2;
         panelCapacity = Math.max(1, (available - fixed) / ROW_H);
     }
 
@@ -356,14 +328,9 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         return filterY() + FILTER_H + GAP;
     }
 
-    /** 数量编辑行的 y。 */
-    private int amountY() {
-        return rowsTop() + panelCapacity * ROW_H + GAP;
-    }
-
     /** 底部提示行的 y。 */
     private int messageY() {
-        return amountY() + AMOUNT_ROW_H + GAP;
+        return rowsTop() + panelCapacity * ROW_H + GAP;
     }
 
     /** 面板总高（容量固定 ⇒ 加 / 删条目时控件不跳动）。 */
@@ -402,10 +369,10 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         rebuildVisible();
         clampFocus();
         if (packet.focusOrder() >= 0 && packet.focusOrder() < rows.size()) {
-            focusRow(packet.focusOrder(), true);
+            focusRow(packet.focusOrder());
         } else if (focusIndex >= 0) {
-            // 条目的下标可能因为删除而移动：焦点跟着「当前这一条」重新对齐数量
-            focusRow(focusIndex, true);
+            // 条目的下标可能因为删除而移动：焦点跟着「当前这一条」重新对齐
+            focusRow(focusIndex);
         }
         refreshToolbarLabels();
     }
@@ -502,7 +469,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     /**
      * 点击：<b>订单行</b> = 选中（行尾「×」= 删除，右键也删除）；<b>网格区域</b> = 悬停资源左键加入、
-     * 右键移除，空格子也吞掉；其余区域（工具栏 / 搜索框 / 数量框 / 玩家背包）走原生控件行为。
+     * 右键移除，空格子也吞掉；其余区域（工具栏 / 搜索框 / 玩家背包）走原生控件行为。
      *
      * <p><b>为什么网格区域要无条件 {@code return true}</b>：RS 的
      * {@code AbstractGridScreen#mouseClicked} 有一条<b>不需要悬停资源</b>的放入分支
@@ -516,11 +483,12 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             if (button == 1 || isOverDelete(mouseX)) {
                 sendRemove(index);
             } else {
-                // 点行 = 把这一条的数量重新载入数量框（即使它就是上一次聚焦的那一条）
-                amountLoadedKey = null;
-                focusRow(index, true);
+                // 行 = 选中；行内「数量文字」= 打开 RS 原生数量子界面（第 132 轮，替换手写输入框）
+                focusRow(index);
+                if (button == 0 && isOverAmountText(mouseX, index)) {
+                    openAmountScreen(index);
+                }
             }
-            updateButtons();
             return true;
         }
         if (isOverStorageArea(mouseX, mouseY)) {
@@ -594,16 +562,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         return slot >= 0 && slot < visible.size() ? visible.get(slot) : -1;
     }
 
-    /** 回车（数量框聚焦时）= 把数量应用给当前选中的那一条。 */
-    @Override
-    public boolean keyPressed(final int keyCode, final int scanCode, final int modifiers) {
-        if ((keyCode == 257 || keyCode == 335) && amountBox != null && amountBox.isFocused()) {
-            applyAmount();
-            return true;
-        }
-        return super.keyPressed(keyCode, scanCode, modifiers);
-    }
-
     @Override
     protected void containerTick() {
         super.containerTick();
@@ -621,7 +579,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             net.minecraft.client.Minecraft.getInstance().setScreen(
                 new SenderCraftPromptScreen(this, prompt));
         }
-        updateButtons();
     }
 
     // ==================== 工具栏动作（全部只发请求，不写本地配置） ====================
@@ -660,7 +617,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     // ==================== 订单清单编辑（全部只发请求） ====================
 
-    /** 左键点网格资源：把它按数量框的当前值加入订单清单（同资源自动合并，无条数上限）。 */
+    /** 左键点网格资源：按默认 1 件加入订单清单（同资源自动合并，无条数上限；数量之后走 RS 子界面改）。 */
     private void sendAdd(final PlatformResourceKey key) {
         if (key == null) {
             return;
@@ -668,7 +625,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         messageKey = "";
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
             new RequesterOrderPacket(getMenu().containerId, RequesterOrderPacket.ACTION_ADD, -1,
-                "", false, currentAmount(), key));
+                "", false, DEFAULT_ORDER_AMOUNT, key));
     }
 
     /** 右键点网格里已在清单里的资源：按它的下标移除。 */
@@ -695,83 +652,83 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
                 index, "", rows.get(index).fluid(), 0, rows.get(index).key()));
     }
 
-    /** 把数量框的值写回当前选中的那一条（回车 / 「应用」语义）。 */
-    private void applyAmount() {
-        if (focusIndex < 0 || focusIndex >= rows.size()) {
-            // 点了必须给一句：先选中一条
-            messageKey = LANG + "msg.select_first";
+    /**
+     * 第 132 轮：打开 <b>RS 原生数量子界面</b>（不再自己写输入框 / ± 按钮）。
+     *
+     * <p>入口只有「订单行内的数量文字区」：行内其它位置左键仍只选中，避免误触。
+     * 上限取「网络里该资源的可用量 / 当前订单量」中的较大值；两者都拿不到时退回
+     * {@link Integer#MAX_VALUE}（服务端仍会按 int 上限夹取，绝不回绕成负数）。</p>
+     */
+    private void openAmountScreen(final int index) {
+        if (index < 0 || index >= rows.size()) {
+            messageKey = QLANG + "msg.order_bad_index";
             return;
         }
-        final RsccNumberField.Parsed parsed = parseAmount();
-        if (!parsed.ok() || parsed.value() <= 0L) {
-            messageKey = LANG + "msg.bad_amount";
-            return;
-        }
+        final Row row = rows.get(index);
+        final long initial = Math.max(1L, row.amount());
+        final long max = availableMax(row);
         messageKey = "";
-        final Row row = rows.get(focusIndex);
-        net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-            new RequesterOrderPacket(getMenu().containerId,
-                RequesterOrderPacket.ACTION_SET_AMOUNT, focusIndex, "", row.fluid(),
-                RsccNumberField.clampToInt(parsed.value()), row.key()));
+        net.minecraft.client.Minecraft.getInstance().setScreen(
+            new OrderAmountScreen(this, initial, max, value -> sendSetAmount(index, value)));
     }
 
     /**
-     * −/+ 步进并<b>立即应用</b>到当前选中的那一条。
-     * <p>步长：物品 1 件；流体 1 桶（1000 mB）—— 按住 Shift 再乘 10。
-     * 结果夹在 [1, int 上限]，绝不发一个 0 / 负数（服务端也会拒）。</p>
+     * 把 RS 数量子界面确认的值写回第 {@code index} 条（{@code ACTION_SET_AMOUNT}）。
+     * <p>服务端只收 {@code int}：这里先夹到 {@code [1, Integer.MAX_VALUE]}，
+     * 超过 int 的 long 也只会变成 int 上限，绝不静默截断成负数 / 0。</p>
      */
-    private void stepAmount(final int direction) {
-        if (focusIndex < 0 || focusIndex >= rows.size()) {
-            messageKey = LANG + "msg.select_first";
+    private void sendSetAmount(final int index, final long amount) {
+        if (index < 0 || index >= rows.size()) {
+            messageKey = QLANG + "msg.order_bad_index";
             return;
         }
-        final Row row = rows.get(focusIndex);
-        final long step = (row.fluid() ? 1000L : 1L) * (hasShiftDown() ? 10L : 1L);
-        final long current = row.amount();
-        final long next = Math.max(1L, Math.min(Integer.MAX_VALUE, current + step * direction));
         messageKey = "";
+        final Row row = rows.get(index);
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
             new RequesterOrderPacket(getMenu().containerId,
-                RequesterOrderPacket.ACTION_SET_AMOUNT, focusIndex, "", row.fluid(),
-                (int) next, row.key()));
+                RequesterOrderPacket.ACTION_SET_AMOUNT, index, "", row.fluid(),
+                RsccNumberField.clampToInt(Math.max(1L, amount)), row.key()));
     }
 
-    /** 数量框当前值（解析失败 / ≤0 ⇒ 1；解析口径仍走 {@link RsccNumberField#parse}）。 */
-    private int currentAmount() {
-        final RsccNumberField.Parsed parsed = parseAmount();
-        if (parsed.ok() && parsed.value() > 0L) {
-            return RsccNumberField.clampToInt(parsed.value());
+    /**
+     * 数量子界面上限：优先网络里该资源的可用量（RS 网格仓储的权威值），
+     * 其次当前订单量（保证不会把已有数量当成「越界」而无法确认）；
+     * 都没有 / 为 0 时退回 {@link Integer#MAX_VALUE}。
+     */
+    private long availableMax(final Row row) {
+        long max = Math.max(1L, row.amount());
+        for (final GridResource resource : getMenu().getRepository().getViewList()) {
+            final PlatformResourceKey key = resource.getResourceForRecipeMods();
+            if (key != null && key.equals(row.key())) {
+                max = Math.max(max, resource.getAmount(getMenu().getRepository()));
+                break;
+            }
         }
-        return parsedAmount > 0L ? RsccNumberField.clampToInt(parsedAmount) : 1;
+        return Math.min(Integer.MAX_VALUE, Math.max(1L, max));
     }
 
-    /** 数量框的解析结果（唯一口径）。 */
-    private RsccNumberField.Parsed parseAmount() {
-        return RsccNumberField.parse(amountBox == null ? "" : amountBox.getValue());
+    /** 鼠标是否落在某一行的「数量文字区域」（左键打开 RS 数量子界面；行尾 × 除外）。 */
+    private boolean isOverAmountText(final double mouseX, final int index) {
+        if (index < 0 || index >= rows.size()) {
+            return false;
+        }
+        final int amountX = amountX(rows.get(index));
+        return mouseX >= amountX && mouseX < deleteX() - 2;
     }
 
-    /** 选中某一行：高亮它、（可选）把它的数量载入数量框。 */
-    private void focusRow(final int index, final boolean loadAmount) {
+    /** 行内数量文字的 x（右对齐到行尾「×」左侧，与 {@link #renderOrderRow} 同一口径）。 */
+    private int amountX(final Row row) {
+        final String amount = row.amountText();
+        final int x = panelX + PANEL_PAD;
+        return Math.max(x + NAME_X, deleteX() - 2 - font.width(amount));
+    }
+
+    /** 选中某一行（只高亮；数量编辑走 {@link #openAmountScreen(int)}）。 */
+    private void focusRow(final int index) {
         if (index < 0 || index >= rows.size()) {
             return;
         }
         focusIndex = index;
-        // 只在「聚焦的资源真的换了」时重载数量，绝不覆盖玩家正在输入的值
-        if (loadAmount && !rows.get(index).key().equals(amountLoadedKey)) {
-            loadAmount(index);
-        }
-    }
-
-    /** 把某一条的数量载入数量框。 */
-    private void loadAmount(final int index) {
-        if (index < 0 || index >= rows.size() || amountBox == null) {
-            return;
-        }
-        amountLoadedKey = rows.get(index).key();
-        final long amount = rows.get(index).amount();
-        parsedAmount = amount > 0L ? amount : 1L;
-        amountBox.setValue(RsccNumberField.editable(parsedAmount,
-            RsccNumberField.textWindow(amountBox.getWidth())));
     }
 
     /** 修正越界的焦点 / 滚动偏移；焦点若被搜索词过滤掉就清掉（绝不改一条看不见的条目）。 */
@@ -781,7 +738,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
         }
         if (focusIndex >= 0 && !isVisible(focusIndex)) {
             focusIndex = -1;
-            amountLoadedKey = null;
         }
         clampScroll();
         if (focusIndex >= 0) {
@@ -808,17 +764,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
 
     private void clampScroll() {
         panelScroll = Math.max(0, Math.min(panelScroll, maxScroll()));
-    }
-
-    /** −/+ 只在「确实选中了一条」时可点（其余按钮永远可点：点了必有一句提示）。 */
-    private void updateButtons() {
-        final boolean hasSelection = focusIndex >= 0 && focusIndex < rows.size();
-        if (minusButton != null) {
-            minusButton.active = hasSelection;
-        }
-        if (plusButton != null) {
-            plusButton.active = hasSelection;
-        }
     }
 
     /** 工具栏文案随快照刷新（目标名字 / 连接状态）。 */
@@ -902,7 +847,7 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
     }
 
     /**
-     * 右侧订单清单面板的背景（<b>必须在控件之前画</b>：否则会盖住面板里的搜索框 / 数量框 / 按钮）。
+     * 右侧订单清单面板的背景（<b>必须在控件之前画</b>：否则会盖住面板里的搜索框）。
      * <p>方法名沿用本工程既定的一对契约名 {@code renderSelectedPanelBackground} /
      * {@code renderSelectedPanel}（{@code selfcheck_round86} ⑦-2 按这一对名字核对
      * 「背景在前、内容在后」的渲染顺序）；语义上它画的就是「当前已选订单清单」的面板。</p>
@@ -1009,6 +954,13 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             panelX + NAME_X, y + 2, nameMax, COLOR_TEXT);
         RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(amount), amountX, y + 2,
             Math.max(10, deleteX() - 2 - amountX), row.fluid() ? COLOR_FLUID : COLOR_TEXT);
+        // 数量文字是本轮唯一的手写「可点」热区：悬停时画 1px 下划线，让玩家知道点这里开 RS 数量子界面
+        // （不新增 tooltip 文案；行 tooltip 已经给出数量与删除说明）。
+        if (mouseX >= amountX && mouseX < deleteX() - 2
+            && mouseY >= y && mouseY < y + ROW_H - 1) {
+            final int underlineEnd = Math.min(amountX + font.width(amount), deleteX() - 2);
+            guiGraphics.fill(amountX, y + ROW_H - 2, underlineEnd, y + ROW_H - 1, COLOR_HINT);
+        }
         // ④ 行尾「×」（鼠标在这个热区上时给个红底，明确它是删除）
         final int delX = deleteX();
         if (mouseX >= delX && mouseX < delX + DELETE_W
@@ -1064,9 +1016,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             return;
         }
         if (renderRowTooltip(guiGraphics, mouseX, mouseY)) {
-            return;
-        }
-        if (renderAmountTooltip(guiGraphics, mouseX, mouseY)) {
             return;
         }
         renderFilterTooltip(guiGraphics, mouseX, mouseY);
@@ -1129,25 +1078,6 @@ public class ResourcePickerScreen extends GridScreen<ResourcePickerMenu> {
             lines.add(Component.translatable(LANG + "order.delete.hint", row.name()));
         }
         guiGraphics.renderTooltip(font, lines, java.util.Optional.empty(), mouseX, mouseY);
-        return true;
-    }
-
-    /** 数量框 / −/+ 的用法（回车应用、步长口径）。 */
-    private boolean renderAmountTooltip(final GuiGraphics guiGraphics, final int mouseX,
-                                        final int mouseY) {
-        final boolean overBox = amountBox != null && amountBox.isMouseOver(mouseX, mouseY);
-        final boolean overStep = (minusButton != null && minusButton.isMouseOver(mouseX, mouseY))
-            || (plusButton != null && plusButton.isMouseOver(mouseX, mouseY));
-        if (!overBox && !overStep) {
-            return false;
-        }
-        final boolean fluid = focusIndex >= 0 && focusIndex < rows.size()
-            && rows.get(focusIndex).fluid();
-        guiGraphics.renderTooltip(font, List.of(
-                Component.translatable(LANG + "order.amount.hint",
-                    Component.translatable(LANG + (fluid ? "order.amount.step.fluid"
-                        : "order.amount.step.item"), hasShiftDown() ? 10 : 1).getString())),
-            java.util.Optional.empty(), mouseX, mouseY);
         return true;
     }
 

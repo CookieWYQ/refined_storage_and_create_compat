@@ -1,5 +1,6 @@
 package cretae.cookiewyq.rs_create_compat.client;
 
+import com.refinedmods.refinedstorage.common.support.widget.AbstractSideButtonWidget;
 import com.refinedmods.refinedstorage.common.api.support.slotreference.SlotReference;
 import com.refinedmods.refinedstorage.common.content.Blocks;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
@@ -172,19 +173,22 @@ public final class TerminalModeTabOverlay {
         // 然后整体夹进屏幕矩形 —— 面板比屏幕高时（序列样板终端固定 324px）旧写法会把最下面两颗 Tab
         // 画到屏幕外：看得到一半、点不到，用户体感就是「按钮跑到别的地方去了」。
         //
-        // 【第 131 轮：第 8 档「发送」的界面右侧没有空位】发送模式打开的是 ResourcePickerScreen，
-        // 它是「193 宽的网格 + 右侧 118 宽的订单清单」（清单左沿 = leftPos + 197，右沿 = leftPos + 315）。
-        // 若仍按「面板右沿 + 2」放，8 颗 Tab 会整排压在订单清单上 —— 那等于把清单点不动。
-        // 因此这一档改放 GUI <b>左侧</b>（发送界面左半边是空的），其它模式的分支一个字节都不变。
+        // 【第 132 轮：发送档的 Tab 列再左移，避开 RS 侧键】RS 的侧键由 AbstractBaseScreen 画在
+        // x ∈ [leftPos - AbstractSideButtonWidget.SIZE - 2, leftPos - 2]（18×18，从 topPos+6 每 20px 向下）。
+        // 旧写法 x = leftPos - TAB_W - 2 的右缘 = leftPos - 2 ⇒ 正好压在侧键上（用户截图：页签和侧键重叠）。
+        // 新公式：x = leftPos - TAB_W - AbstractSideButtonWidget.SIZE - 4（= leftPos-46），
+        // 页签右缘 = leftPos-22，与侧键左缘 leftPos-20 留 2px；x<2（窄屏 / 小缩放）时退回 2。
+        // 纵向仍贴 GUI 底部向上排列（columnTop 的计算不动）。
         final boolean sendMode =
             containerScreen instanceof cretae.cookiewyq.rs_create_compat.client.grid.ResourcePickerScreen;
         final int screenW = Minecraft.getInstance().getWindow().getGuiScaledWidth();
         final int screenH = Minecraft.getInstance().getWindow().getGuiScaledHeight();
         final int columnH = TAB_H * count;
-        // 两条分支都各自夹进屏幕矩形（x 的两个来源分别夹，绝不出现「顺手少夹一次」的写法）：
+        // 两条分支分别处理：发送档按「RS 侧键左侧」公式并夹到屏幕左边 ≥2；其它模式保持原样
+        // （右侧 + 屏幕矩形夹取），一个字节都不改。
         final int x = sendMode
-            ? clamp(containerScreen.getGuiLeft() - TAB_W - SCREEN_MARGIN,
-                SCREEN_MARGIN, screenW - TAB_W - SCREEN_MARGIN)
+            ? Math.max(SCREEN_MARGIN,
+                containerScreen.getGuiLeft() - TAB_W - AbstractSideButtonWidget.SIZE - 4)
             : clamp(containerScreen.getGuiLeft() + guiW + SCREEN_MARGIN,
                 SCREEN_MARGIN, screenW - TAB_W - SCREEN_MARGIN);
         final int columnTop = clamp(containerScreen.getGuiTop() + guiH - columnH,
