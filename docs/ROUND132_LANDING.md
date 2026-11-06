@@ -2,7 +2,7 @@
 
 > 配套契约：`docs/ROUND132_CONTRACT.md`。本文是**实现完成后的事实记录**：改了什么、为什么这么改、验证证据、还剩什么。
 > 版本：`1.2.0-beta.33`（`gradle.properties:48`）。
-> jar：`build/libs/rs_create_compat-1.2.0-beta.33.jar`，2,951,568 B，sha256 `05f6f25db377a99b77cb9120099ad12c82d2caf10ec9d0df5379c6ff537cb675`。
+> jar：`build/libs/rs_create_compat-1.2.0-beta.33.jar`，2,951,913 B，sha256 `1ce88a236fa7730e12bd3739538881b3ff57e9a9454267b1eb2de3f3a757d0f5`（最终源码树 `109e44b` 上重编，指纹行 `[rscc-build] revision=109e44b dirty=true`）。
 
 ---
 
@@ -55,12 +55,12 @@
 
 | 项目 | 结果 |
 | --- | --- |
-| `python tools/_run_all_selfchecks.py`（用**自带 runtime Python**，见下方注意） | `selfcheck 总数 200，失败 0` |
-| `powershell -File tools/_lead_compile.ps1` | `LEAD_COMPILE_OK sources=526` |
-| `gradlew build --offline` | `BUILD SUCCESSFUL in 46s` |
-| jar 三方部署（`deploy_rscc.py --apply` + `deploy_rscc_local.py --apply`） | `/mods`、`/client_files/mods`、本地实例三处同 sha256 |
+| `python tools/_run_all_selfchecks.py`（用**自带 runtime Python**，见下方注意） | `selfcheck 总数 200，失败 0`（在最终源码上复跑） |
+| `powershell -File tools/_lead_compile.ps1` | `LEAD_COMPILE_OK sources=526`（最终源码） |
+| `gradlew build --offline` | `BUILD SUCCESSFUL`（最终源码重编 15s；首次 46s） |
+| jar 三方部署（`deploy_rscc.py --apply` + `deploy_rscc_local.py --apply`） | `/mods`、`/client_files/mods`、本地实例三处同 sha256 `1ce88a23…` |
 | `python tools/_verify_deploy_round132.py` | `DEPLOY_VERIFY_OK`（build/libs + 本地 + 两处 SFTP 四处一致） |
-| `tools/verify_dedicated_server.ps1` 专服启动 | `PASS`，日志 `Done (1.580s)!`，无 Mixin/dist 致命标记，`run/` 前后只读自证 OK |
+| `tools/verify_dedicated_server.ps1` 专服启动 | `PASS`，日志 `Done (1.111s)!`，无 Mixin/dist 致命标记，`run/` 前后只读自证 OK |
 
 > **注意（环境坑）**：`python`（系统 Python 3.12）没有 `numpy`/`Pillow`，直接跑全量自检会有 2 个脚本因 `ModuleNotFoundError` 失败（`selfcheck_gui_slot_alignment.py`、`selfcheck_advancements.py`），那是**解释器缺包，不是代码红**。跑法：
 > `C:\Users\70432\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe tools\_run_all_selfchecks.py`。
@@ -76,6 +76,8 @@
 - lang：`en_us/zh_cn` 各新增 `gui.rs_create_compat.resource_picker.order.amount`（Order amount / 订单数量），`...order.amount.hint` 文案改为「点条目上的数量打开数量子界面」；`audit_lang_keys.py` 0 缺键 0 孤儿。
 
 ## 5. 本轮已知限制 / 下一轮候选
+
+0. **过程备注**：接收器改造的子代理在交付前异常结束（没有收尾报告），它最后的改动落在源码树里；Lead 在其后把**全量自检（200/0）、独立编译、gradle 构建、三方部署校验、专服启动**全部重跑了一遍才发布，所以「最后写进去的那几笔」也有证据，不是盲发。
 
 1. **反馈 6（去掉物品栏）未做**，原因见 §0.6。
 2. 订单面板「字色」是按深色底设计的浅色字；如果以后面板背景改浅色，这套常量要一起翻。
