@@ -1124,7 +1124,7 @@ check("⑦-5 源码：订单 80 而网络不够时明确提示数量（short_sto
 check("⑦-6 源码：续投用记下的目标坐标取接收器（不重新枚举网络）",
       ("pendingReceiver(network)"
        in (method_body(req_code2, "private void continuePendingDelivery()") or ""))
-      and ("level.getBlockEntity(lastResolvedTargetPos)" in
+      and ("SafeChunkRead.blockEntityNow(level, lastResolvedTargetPos)" in
            (method_body(req_code2,
                         "private NetworkResourceReceiverBlockEntity pendingReceiver(") or "")))
 check("⑦-7 源码：「成功」= 投出过（或已排进待投计划）且没有缺口（订单 80 只投 50 不得报成功）",

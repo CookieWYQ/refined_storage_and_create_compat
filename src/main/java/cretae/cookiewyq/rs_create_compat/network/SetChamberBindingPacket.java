@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.network;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.SequenceExecutionChamberBlockEntity;
@@ -58,10 +59,9 @@ public record SetChamberBindingPacket(BlockPos pos, String recipeType, String na
         // ② 回退：按包内坐标解析（兼容非界面路径）
         if (chamber == null) {
             final ServerLevel level = player.serverLevel();
-            if (!level.isLoaded(packet.pos())) {
-                return;
-            }
-            if (!(level.getBlockEntity(packet.pos()) instanceof SequenceExecutionChamberBlockEntity byPos)) {
+            // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+            if (!(SafeChunkRead.blockEntityNow(level, packet.pos())
+                instanceof SequenceExecutionChamberBlockEntity byPos)) {
                 return; // 该位置不是序列执行仓
             }
             // 距离校验（与菜单 stillValid 一致）：防止远程修改他人机器

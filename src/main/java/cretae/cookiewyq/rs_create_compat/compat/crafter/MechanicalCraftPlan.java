@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.compat.crafter;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import com.refinedmods.refinedstorage.api.autocrafting.Pattern;
 import com.refinedmods.refinedstorage.api.resource.ResourceAmount;
@@ -221,10 +222,9 @@ public final class MechanicalCraftPlan {
 
     @Nullable
     private MechanicalCrafterBlockEntity crafterAt(final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return null;
-        }
-        return level.getBlockEntity(pos) instanceof MechanicalCrafterBlockEntity crafter ? crafter : null;
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        return SafeChunkRead.blockEntityNow(level, pos) instanceof MechanicalCrafterBlockEntity crafter
+            ? crafter : null;
     }
 
     // ------------------------------------------------------------------

@@ -309,16 +309,18 @@ has(flush_station, "final boolean transitionPiece = isTransitionItem(item);",
 has(flush_station, "if (ordered) {",
     "C1-⑥b 过渡件：其配方还有活跃订单时寸步不让（只收已无订单的残留）")
 
-clear_body = body(chamber, "private int clearDeadStationPieceAt(final Level level, final BlockPos station) {",
+clear_body = body(chamber, "private int clearDeadStationPieceAt(final Level level, final BlockPos pos,",
                   "/** 只读：本仓登记了几件在制件")
 has(clear_body, "if (!isTransitionOfMyRecipes(item)) {",
     "C1-⑦ 非过渡件：只放行「本仓登记过的同物品」起步原料 / 步骤投入物残留")
-has(clear_body, "registered == null || registered.item() != item",
-    "C1-⑦b 登记表同物品命中才收（玩家手工放的 / 别的仓推的一律不碰）")
+has(clear_body, "registeredUnit == null || registeredUnit.item() != item",
+    "C1-⑦b 登记表同物品命中才收（玩家手工放的 / 别的仓推的一律不碰）"
+    "（round133 起变量名 registeredUnit：registered 现在指登记键坐标，二者不能同名）")
 has(clear_body, "if (transitionRecipeOrdered(item)) {",
     "C1-⑦c 过渡件：只有配方仍有活跃订单时才当「正常件」；取消 / 完成后继续收回（本轮修正）")
-has(clear_body, "inFlightUnits.remove(station);",
-    "C1-⑦d 收回成功后删除该工位登记（凭据用完即废，空工位不会永久占名额）")
+has(clear_body, "inFlightUnits.remove(registered);",
+    "C1-⑦d 收回成功后删除该工位登记（凭据用完即废，空工位不会永久占名额）"
+    "（round133 起按登记键 registered 撤销：实际扫描坐标可能是同工位的置物台）")
 has(clear_body, "flushResidualInputs();",
     "C1-⑦e 收进本仓后立即走同一套任务结束回流（写回网络，不是只挪到仓里）")
 has(chamber, "public void rscc$retainResidualUnits() {",

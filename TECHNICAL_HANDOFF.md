@@ -16,7 +16,7 @@
 | MC 版本         | 1.21.1                                               |
 | NeoForge 版本   | 21.1.248                                             |
 | Gradle 守护 JVM | `D:/java21`（必须 Java 21，本机 `JAVA_HOME` 是 Java 8 不可用）  |
-| 模组版本          | `1.2.0-beta.29`（唯一权威来源是 `gradle.properties` 的 `mod_version`） |
+| 模组版本          | `1.2.0-beta.39`（唯一权威来源是 `gradle.properties` 的 `mod_version`） |
 | 作者            | CallMeACookieWYQ                                     |
 
 ### 前置依赖版本（见 `gradle.properties`）
@@ -2271,3 +2271,198 @@ PASS 且未动：序列执行仓、单元样板管理舱（仅 1 格旧档抢救
   动 `Area` 数据契约，必须先确认）。
 - 汇总窗口：`pollCounter` 改游戏时间；方案 B 强化版（协议层回执）消除高延迟残余窗口。
 - 保持器三项产品口径、`/rs_create_compat diag` 权限口径、`tools/simplify_lang_texts.py` 过时文案。
+
+---
+
+## 27. 第 133 轮（1.2.0-beta.34）：序列装配「多发一块金板且不回去」——收尾/清扫改按整工位判定 + diag 能拍到现场
+
+> 基线：用户实机跑的是 `1.2.0-beta.33`（第 132 轮，`revision=109e44b`，`built=2026-11-06T22:38:12+0800`，`sources=526`）。
+> 本轮是**用户实机报障**后的一轮；132 轮的开头是「项目差不多可以收尾了」，这条是收尾前的最后一个瑕疵。
+> 逐条细节见 `docs/ROUND133_LANDING.md`（事实记录）与 `docs/ROUND133_CONTRACT.md`（开工规格）。
+
+### 27.1 用户原话与观察
+
+> 「那个序列装配大抵是没有问题了，但是我刚刚下单的时候，他多发了一个金板。……就我下单 20 个然后他给我做完之后多发了一个金板，然后这个金板完成了一次装配然后就没有回去。这个就是一个小瑕疵。我已经保存了 diag，自己去服务器上面查看」
+
+- 服务器 `/rscc_diag/20261107-225228/snapshot.json`（51,625 B）：`chambers=[] buses=[] tasks=[] counters={}`，`machines=60` 全是出生点附近试炼密室方块，玩家 `CallMeACookieWYQ @ overworld 421,100,105`。
+- 服务器 latest.log（5,273,693 B）里 `[rscc-assembly] devLogs=on/off (source=command)` 与 `[rscc-diag] BEGIN/END` 全部挤在 **22:52:28.524–.563（约 40 ms）** ⇒ 没有任何装配 trace。
+- 服务器 `[rscc-collect]`（每 100 tick）位置 `x=390..421,y=65..107` ⇒ 基地确实加载着；10-24 的旧 diag 与本份结构一模一样 ⇒ diag 从来拍不到基地。
+
+### 27.2 根因（四步，全部 file:line 可查）
+
+1. **登记键 = 推料目标**：`rscc$noteUnitPushed`（`SequenceExecutionChamberBlockEntity.java:3353-3365`）以 `busSupplyTargets()` 里的目标为键写 `inFlightUnits`；目标常常是"对着置物台的机械手/机械臂"，而装配产出落在**置物台**（`stationKey` = `operatingPosOf(...)`，`:9387`）。
+2. **结束边沿删凭据**：`stationHoldsPipelineResidue`（旧 `:3442`）只扫**登记坐标那一个容器**；结束那一刻"机器已吃进原料、成品还没吐回置物台"是常规时序 ⇒ 判"无残留" ⇒ `hasRetainableUnitRegistrations()` 为假 ⇒ `rscc$clearAllUnits()` 删掉登记（`:12115-12118`）。
+3. **三条清扫路径都只遍历 `inFlightUnits`**：`clearDeadStationPieces()`（`:3759`）、`reclaimRuntimeStationResidue()`（`:4027`）、`flushStationStartIngredients()`（`:13812`）⇒ 登记一删，之后落回置物台的过渡件**再也无人看见**。
+4. **diag 看不到现场**：`RsccDiag.blockEntities()`（`:898-911`）只遍历 `AssemblyWatchdog.LOADED_CHUNKS`，而那份表只含出生点区块。
+
+> 为什么"多出 1 个"：精度配方 p=0.8 ⇒ `startCapacityForRecipe`（`:8314`）取 `allowed=ceil(remaining/p)`，下单 20 时在制上限 25。
+> **【2026-11-08 更正，第 134 轮】当时把「25」写成"设计行为"是错的**：用户随后明确驳回这个设计（原话见 §28.1），
+> 要求「先只按订单量开工，失败一件才补发一件」。第 134 轮已删掉 `ceil(R/p)` 放大，改为 `capacity = max(0, R − inFlight)`，
+> 与 p 无关；见 §28 与 `docs/ROUND134_ON_DEMAND_SPEC.md`。本轮（133）修的"收不回来"仍然有效且必要。
+
+### 27.3 六处改动
+
+| # | 位置 | 改法 |
+| - | --- | --- |
+| 1 | `SequenceExecutionChamberBlockEntity#stationGroupPositions`（新，`:9488`） | 只读；`LinkedHashSet` 保序 = 登记坐标 → `stationKeyCached`（置物台）→ `stationSiblings`；javadoc 记下"登记键可能是机械手、产出落置物台" |
+| 2 | `stationHoldsPipelineResidue`（`:3442`） | 按整工位坐标组判定：任一坐标未加载 ⇒ true（保守保留）；`itemHandlerAt` 为 null 的坐标 continue；任一格有登记那件或本仓过渡件 ⇒ true |
+| 3 | `clearDeadStationPieces`（`:3766`） | 先主扫登记坐标（`allowStartIngredient=true`），未搬动再扫同工位其它坐标（`allowStartIngredient=false`），命中即 break；仍限速每 `DEAD_STATION_CLEAR_INTERVAL_TICKS` 一件 |
+| 4 | `clearDeadStationPieceAt(Level, BlockPos pos, BlockPos registered, boolean allowStartIngredient)`（`:3835`） | 容器扫 `pos`、登记表读 `inFlightUnits.get(registered)`；**非登记坐标只允许收过渡件**（`if (!allowStartIngredient) continue;` 在"同物品命中"之前），绝不碰玩家手放/别的仓推的起步原料；过渡件两道闸保留（`recipeOrdered` / `busTargetAccepts(pos)||busTargetAccepts(registered)` → `transitionRecipeOrdered`）；失败原样还回；成功按 `registered` 清表 + `flushResidualInputs()` |
+| 5 | `rscc$diagReport()`（`:18184-18190`） | 新增 `inFlightUnits[]`：每行 `{station,item,recipe,step,age,group}`（`group` = 整工位坐标串） |
+| 6 | `support/RsccDiag#blockEntities`（`:898-931`）+ `packChunk`（`:933`） | 区块来源 = `AssemblyWatchdog.rscc$loadedChunks` ∪ 同维度每名玩家 `chunkPosition()` 周边 `max(2,min(16,viewDistance))` 区块（只用 `getChunkNow`，绝不主动加载） |
+
+**明确不做**：不改概率在制上限；不改登记键语义（推料目标仍作键）；不扩大 `reclaimRuntimeStationResidue`（只治运行期）；不从日志反推。
+
+### 27.4 自检与验收（Lead 串行执行）
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=526`**（+ `LEAD_COMPILE_VERSION_SUMMARY rs=refinedstorage-neoforge=2.0.9, refinedstorage-quartz-arsenal-neoforge=1.0.6`）。
+2. 全量自检 `D:\Python313\python.exe tools/_run_all_selfchecks.py` → **201 个脚本 / 0 失败**（`build\round133_selfcheck_all.log`）。
+   - 新增 `tools/selfcheck_round133_station_group_residue.py`：**44 断言 / 0 失败**（源码锚点 16 / 安全锚点 8 / diag 锚点 15 / 反例自证 4）。
+   - 更新锚点（实现形态变了，判据未放宽）：`selfcheck_round62_no_permanent_stop.py`（A5c `remove(registered)`；A7f `busTargetAccepts(pos, item) || busTargetAccepts(registered, item)`）、`selfcheck_round85_request_selfheal_cancel_reclaim.py`（`clearDeadStationPieceAt` 4 参新签名；C1-⑦b `registeredUnit`；C1-⑦d `inFlightUnits.remove(registered)`）。
+3. 专服探针 `tools/verify_dedicated_server.ps1` → **PASS**（`build\dedicated_server_probe.log` 442,130 B，`Done (1.270s)!`，无 Mixin / dist 致命标记，`run/` 前后清单一致）。
+4. `gradlew.bat build --no-daemon` → **BUILD SUCCESSFUL in 6m 43s**，`rs_create_compat-1.2.0-beta.34.jar`（**2,953,273 B**，sha256 `4dc50931b4d2618f4cff5e2dcbe8d054cf224efe51f7d8b4a7d433913542dcc1`）。
+5. 部署：`D:\Python313\python.exe tools/deploy_rscc.py --apply`（SFTP `/mods` + `/client_files/mods`，beta.33 就地 `.disabled`）+ `deploy_rscc_local.py --apply`（本地实例）；`tools/_verify_deploy_round133.py` → **`DEPLOY_VERIFY_OK`**（build/libs / 本地实例 / SFTP 两处四处 sha256 全等）。
+
+### 27.5 未验证 / 已知限制（诚实清单）
+
+1. **没有实机复现过原场景**：判据 = 服务器日志 + diag + 源码时序推演 + 自检锚点。验收动作：站基地 `/rs_create_compat devlogs on` → 下单 20 件精密构件 → 做完看置物台是否留件，再做 `/rs_create_compat diag run` 看 `chambers[].inFlightUnits[]` 与 `group`。
+2. **`inFlightUnits` 落盘：已在第 121 轮 F4 落地，本文件 2026-11-08 更正**（原表述"仍不落盘"有误）。`saveAdditional` → `writeInFlightUnits`（`:17603` / `:17701`）、`loadAdditional` → `readInFlightUnits`（`:17614` / `:17756`），键 `TAG_IN_FLIGHT_UNITS = "InFlightUnits"`（`:3113`），5 字段 `Station/Recipe/Step/Item/Since`，非法条目淘汰、空表不写键、读侧上限 64（`:3122`）；`tools/selfcheck_round121_inflight_persist.py` 48 断言 / 15 反例 / 0 失败。**仍欠实机验证**：停服重启 → 读档 → 三条回收路径收回残留，没有跑过。
+3. **清扫速度有界**：`DEAD_STATION_CLEAR_INTERVAL_TICKS=40`、每轮 1 件 ⇒ 最坏约 4 件/分钟；有意为之（宁可慢，不可乱搬）。
+4. **diag 玩家半径上限 16 区块**：导出时离基地超过 16 区块仍拍不到；正确姿势是站在基地里导。
+5. **本次 devLogs 只开约 40 ms**（22:52:28.524→.563），服务器日志无装配 trace；下次复现必须先 `devlogs on`。
+
+### 27.6 下一轮候选
+
+- **用户对 beta.34 的实机反馈（最高优先）**：置物台残留是否真的消失、diag 是否终于能拍到执行仓。
+- **残留账已清（2026-11-08 核对代码后更正）**：本节原先列为"下一轮"的 **F4**（`inFlightUnits` 落盘）、**F2 真修法**（执行仓 9 格物品 + 1 罐流体上游缓冲）、`SetChamberBindingPacket.name` 按 `MAX_IMPORT_STRING_LENGTH` 码点收口、C-4（`AREA_LIST_SLOT_MAX = 64`）、C-7（`AreaScanHook#entityQueryAreas` 按簇拆盒）、汇总窗口 `pollCounter` 改 `getGameTime()`、`/rs_create_compat diag` 无权限 + 10 秒冷却、`simplify_lang_texts.py` 文案改 54 格 —— **全部已于第 121 轮落地**（各自有 `tools/selfcheck_round121_*.py` 守着）。仍未做过的是这些改动的**实机验证**（尤其 F4 的"停服重启后回收"与 F2 的"RS 输入不再丢"）。
+- 本轮顺带留下的观察点：`claim` 的 `busSupplyTargets()` 在任务结束后仍可枚举（不需要活跃订单），所以清扫不依赖订单；若将来有人把 `supplyTargets` 加订单前置，会重新打断清扫。
+
+---
+
+## 28. 第 134 轮：概率配方改「按需补发」（1.2.0-beta.35）
+
+> 规格 = `docs/ROUND134_ON_DEMAND_SPEC.md`；落地记录 = `docs/ROUND134_LANDING.md`。
+> 一句话：**在制名额不再按"期望轮次"预开，只按"订单还没完成的件数"开工，失败一件才补一件。**
+
+### 28.1 用户原话与驳回
+
+> 「但有个问题你没有想过，虽然说你的那个设计类型为好像说的很好，就是这个 20 除以 0.8 等于 25，但是你没有想过我的真正目的就只是做 20 件。但是你现在却多搞了一个。打个比方来说，我现在这个资源很紧张，你给我多搞了一个，那岂不是坏了我的事。所以说最关键的就是说**多的是针对于**（如果）我**现在 20 个金板没有完成你再多发**，而不是说不管怎么样都发。」
+
+- 被驳回的是第 133 轮以及更早的辩护：p=0.8 时 `allowed = ceil(R/p)`（下单 20 ⇒ 在制上限 25）被称为"数学期望，不是 bug"（见本文件 §27.2 更正段、`docs/ROUND133_CONTRACT.md:60` 的删除线条目）。
+- 用户的判据很硬：**资源紧张时，多占一份起步原料就是损失**；允许的"多"只有一种 —— 已经有件失败了、订单还差，才补发。
+
+### 28.2 新契约（形式化）
+
+| 量 | 旧（beta.34 及更早） | 新（beta.35） |
+| - | - | - |
+| `allowed` | 必得 `R`；非必得 `ceil(R/p)` | `R`（订单剩余件数） |
+| `capacity` | `allowed − inFlight` | `max(0, allowed − inFlight)` |
+| 与 p 的关系 | 直接决定开局在制上限 | **无关**（p 只进诊断） |
+| 开局（R=20, p=0.8） | 25 件起步原料 | **20 件** |
+| 失败一件后 | 名额不变（本来就有余量） | `inFlight` 减 1 ⇒ 名额回到 1 ⇒ 补发 1 件 |
+
+- `R` = `remainingOrderUnits()`（`:7984` → `computeRemainingOrderUnits()` `:8001`；`ordered = max(1, status.info().amount())`，`delivered = AssemblyWatchdog.deliveredAmount(status)`）。
+- `inFlight` = `inFlightUnitsForRecipe()`（`:8522`）= 四分量之和再夹 `BUS_ITEM_TARGET_MAX`（`:8524`）；四分量定义见 `inFlightBreakdownForRecipe()`（`:8543`）的 javadoc：①登记表且 `registrationCounts(station)` 为真且工位/机械手真的占着、②仓内存储、③网络共享缓存池、④未交付成品。
+- 边界：`remaining < 0`（判不出来）⇒ `capacity = inFlight <= 0L ? 1L : 0L;`（`:8389`）—— 只保底 1 件探路，绝不放量。`NO_ORDER_READABLE = -2L`（`:8917`）。
+
+### 28.3 闭环 / 终止性 / 代价
+
+- **闭环**：失败件离开工位后，四个分量都不再计它（①要求工位真被占着；②③④都只数"真的还在"的件）⇒ `inFlight` 减 1。`R` 只在成品被认领时减 ⇒ 每失败一件，`R − inFlight` 当 tick 回到 1 ⇒ 补开一件。不会出现"名额 0 且没有件在制"的僵局。
+- **终止性**：总开工数 = 订单件数 + 失败数（有限期望 `R/p`）；任何时刻 `inFlight ≤ remaining ≤ R`（`remaining` 单调不增）。
+- **代价（明说）**：p 越小，补发轮次越多（期望 `R/p` 次串行开工）；换来的是**任何时刻都不占超过"未完成件数"的起步原料**。用户明确选后者。
+
+### 28.4 代码改动（`block/entity/SequenceExecutionChamberBlockEntity.java`）
+
+| # | 位置 | 改法 |
+| - | --- | --- |
+| 1 | `startCapacityForRecipe(String)` `:8393-8399` | 删除 `if (!guaranteedResult(recipeId)) { … Math.ceil(remaining / (double) p) … }`；改为 `final long allowed = remaining;`（`:8393`）→ `budgetForLog = allowed;`（`:8394`）→ `capacity = allowed - inFlight;`（`:8397`）→ `final long result = Math.max(0L, capacity);`（`:8399`） |
+| 2 | 诊断 `:8409`/`:8417`/`:8423` | `mainResultChance(` 全文件只剩 `:8409`（`RsccAssemblyDebug.isEnabled()` 之后）与定义 `:8248`；trace 行尾增 `";P=" + pLog`，机器行增 `" p=" + pLog + (guaranteedResult(recipeId) ? " guaranteed" : "")` |
+| 3 | javadoc `:8318`/`:8324`/`:8330` | 新标题「② 非必得（p < 100%）配方：不预开，按实际损失补发」；写清「按需补发」「与 p 无关」「不参与任何名额判定」；`:8330` 保留「为什么不再用 ceil(R/p)（被用户驳回的旧设计）」历史说明 |
+| 4 | 6 处旧口径注释 `:7274`/`:7278`/`:8395-8396`/`:9102-9103`/`:10123-10124`/`:10147`/`:11045` | 全部改为「名额 = R − 在制件数、与 p 无关」，**Java 语句 0 改动** |
+
+- 全文件 `Math.ceil(remaining` / `(double) p)` / `if (!guaranteedResult(recipeId)) {` 均为 0 处（自检负锚点钉住）。
+- `guaranteedResult(String)`（`:8234`）与 `mainResultChance(String)`（`:8248`）**保留**，只服务诊断；`guaranteedResult` 的「判不出来」段已改为「2026-11-08 起本方法不再参与名额判定」。
+- **不改**：必得配方语义（p=1.0 仍严格 `allowed = R`）、`inFlight` 四分量口径、登记键语义、进度条/交付判定。
+
+### 28.5 自检
+
+1. 新增 `tools/selfcheck_round134_on_demand_replenish.py`（598 行）：**61 断言 / 8 条反例自证 / 0 失败 / `ALL_PASS`**。
+   - ①源码锚点 24 条（含负锚点：无 `Math.ceil(remaining`、无 `(double) p)`、无 `if (!guaranteedResult(recipeId)) {`、去注释后无 `ceil`；`mainResultChance` 只在 debug 之后；javadoc 关键词）。
+   - ②`capacity=max(0,R−I)` 对 p∈{1.0,0.8,0.5,0.25,0.1} × R∈{0,1,5,20,64} × I∈{0,1,3,20,25} 全扫描结果集合恒为 1（对照：旧 ceil 口径随 p 变化，证明断言非永真）。
+   - ③用户场景：(20,5,0.8)→**15**（旧 20）；(20,0,0.8)→**20**（旧 25，即"多占 5 份"）。
+   - ④固定种子（LCG 134）补发模拟：t=0 只开 20；任意时刻 `inFlight ≤ remaining ≤ 20`；**每 tick 补发数 = 本 tick 失败数**；终局 `delivered=20`；重跑逐位一致；同一事件流下旧口径 t=0 开 25 且违反不变量。
+   - ⑤反例 A–H：(20,0,.8) 25≠20、(20,5,.8) 20≠15、capacity(0,0)=0、capacity(5,7)=0、订单不可读⇒0、p=1.0 新旧一致、p=0.5 旧口径开 40、误写 `R−I·p` 被抓（16≠15）。
+2. 5 条旧自检改守新口径（**不是删断言**）：`selfcheck_round13_feedback.py` `SELFCHECK OK (75 checks)`、`selfcheck_round23_machine_queue.py` `63 checks`、`selfcheck_round26_delivered_authority.py` `42 checks`、`selfcheck_round27_parked_product_capacity.py` `41 checks`、`selfcheck_round29_refill_machine_mode.py` `73 checks`。每条新增 `has("final long allowed = remaining;")`、`has("capacity = allowed - inFlight;")`、负锚点检测、`capacity = max(0, R - inFlight)` 模型、p 不变性、失败才补；旧期望值按新语义重算（round13 ⑧c 2→1、⑧d 80→64；round26/27 反例⑥ 13→10、推演② 80→64、③ 2→1；round29 ④b 上界 80→64）。
+
+### 28.6 本轮验收（Lead 串行执行）
+
+1. `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=526`**（`LEAD_COMPILE_VERSION_SUMMARY rs=refinedstorage-neoforge=2.0.9, refinedstorage-quartz-arsenal-neoforge=1.0.6`）。
+2. 全量自检 → **202 个脚本 / 0 失败**（`build\round134_selfcheck_all.log`；上一轮 201）。
+3. 专服探针 `tools/verify_dedicated_server.ps1` → **PASS**（`build\dedicated_server_probe.log` 442,097 B，`Done (1.489s)!`，无 Mixin / dist 致命标记，`run/` 前后清单一致只读）。
+4. `gradlew.bat build --no-daemon` → **`BUILD SUCCESSFUL in 6m 56s`**，`rs_create_compat-1.2.0-beta.35.jar`（**2,953,437 B**，sha256 `8234b79e82e1fa6e63e7117fe205ee4f854c87b2aa48f777e6fdac9188af2ec8`）。
+5. 部署：`tools/deploy_rscc.py --apply`（SFTP `/mods` + `/client_files/mods`，beta.34 就地 `.disabled`）+ `tools/deploy_rscc_local.py --apply`（本地实例）；`tools/_verify_deploy_round134.py` → **`DEPLOY_VERIFY_OK`**（四处 sha256 全等：build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）。
+
+### 28.7 未验证 / 风险（诚实清单）
+
+1. **没有实机跑过新口径**：证据只到源码锚点 + 模型/模拟 + 编译/自检/探针。验收动作见 `docs/ROUND134_LANDING.md` §5（下单 20 件精密构件 → 开局观察在制料是否只有 20 份 → 故意让几次失败 → 看是否"失败一件补一件" → 最终交付恰好 20 件、置物台无残留）。
+2. **p 极小时工期变长**：这是新口径的固有代价（期望开工轮次 `R/p`）。若用户觉得太慢，可调的是"补发节奏"而不是"预开额度"—— 但任何"预开"都会重新触碰本次驳回的红线，需先问用户。
+3. **订单剩余不可读时的保底 1 件**：`remaining < 0` ⇒ `capacity = inFlight <= 0 ? 1 : 0`，只探路不放量；若该配方在有网络但读完 amount 之前就开始推料，本 tick 只开 1 件（比旧口径保守，不会多占）。
+4. beta.34 遗留的实机验证项（置物台残留、diag 拍到执行仓、停服重启读回凭据）**仍然欠着**，与本轮无关但同样未验证。
+
+
+
+## 29. 第 138 轮（1.2.0-beta.39）：区块安全读全工程收口 + 充电器分片扫描 + 保持器 M3
+
+> 落地记录 = `docs/ROUND138_LANDING.md`（含逐文件收口表 / 取舍 / 未做清单）。
+> 第 135–137 轮的落地记录分别是 `docs/ROUND135_LANDING.md`、`docs/ROUND136_LANDING.md`、
+> `docs/ROUND137_LANDING.md`（第 137 轮是服务端看门狗判死那次崩溃）。
+
+### 29.1 背景
+
+第 137 轮查清：1.21.1 的 `Level#isLoaded` 只判「chunk holder 存在」，**在加载流水线里、还没到 FULL
+的区块也返回 true**；紧随其后的 `getBlockState / getBlockEntity / getChunkAt / getChunk` 全是阻塞读，
+会在主线程同步等区块生成 → 玩家登录/传送时 tick 被拖到几百 ms，持续到看门狗判死。
+第 137 轮只修了崩溃栈上的能量立方集群；第 138 轮把同一机制**全工程收口**。
+
+### 29.2 实现要点
+
+1. **`support/SafeChunkRead`（唯一安全读）**：`chunkNow` = `getChunk(x, z, ChunkStatus.FULL, false)`
+   + `instanceof LevelChunk`（只返回已 FULL 区块，不加载 / 不加票据 / 不阻塞）；
+   `blockStateNow` / `blockEntityNow`（`CHECK`，绝不创建）；`hasChunkHolder` 区分「没加载」与「加载中」。
+2. **收口 20+ 处**：机器集群（存活校验 / BFS / 卸块移交）、范围充电器、执行仓 12 处 `getChunkAt`、
+   缓存仓 `fluidSourceIdAt`（第 119 轮 `isLoaded` 闸门升级）、能量立方 / 分解发电机 / 请求器邻块读、
+   线缆搜索、工位探针、分隔框架、套壳链、伪装附件、扳手切缝、总线失效、自动合成仓链、3 个 C2S 包、
+   装配样板重绑、远程终端绑定解析；**全工程 `getChunkAt(` 调用清零**（自检 ④-1 守着）。
+   机器集群新增 `partial`：邻块「加载中」时本轮先当看不见，下一 tick 必重算（区块就绪后自动补上），
+   同一 tick 多成员只重算一次（`lastAttemptTick`），起点区块未 FULL 时**绝不清空旧缓存**。
+3. **范围充电器分片（B）**：`MAX_FINITE_SCAN_CHUNKS_PER_TICK=128` / `MAX_INFINITE_SCAN_CHUNKS_PER_TICK=256`
+   + 跨 tick `blockScanCursor`。默认 50/100 格范围与旧行为逐 tick 等价；无限范围（创造升级）从
+   「每 tick 每玩家 1089 区块」降到 256/台，代价是单目标 FE/t ≈ 原来的 1/5。候选池只在
+   「一轮完整轮转开始（`start == 0`）」时清空 + 登记自身。
+4. **保持器 M3（C）**：`claimedResources()` 逐槽判 `KeeperTarget.isMarked(target)`
+   （基础版判 `targetAmount`），未标记的保持器**不再认领**资源 —— 修「同一资源两台保持器时，
+   未标记但坐标更靠前的那台让真正生效的那台永远让位、功能静默失效」。
+
+### 29.3 验证（2026-11-20 22:47–23:05）
+
+1. 独立 javac `tools/_lead_compile.ps1` → **`LEAD_COMPILE_OK sources=527`**（新增 SafeChunkRead 后 526 → 527）。
+2. 新增 `tools/selfcheck_round138_safe_chunk_read.py` → **22 断言 / 0 失败**（含 4 组旧写法反例自证）。
+3. 全量自检 → **206 脚本 / 0 失败**（`build/round138_selfchecks.log`）；11 个既有自检的旧字面量锚点
+   按新形状同步（判据未放松；`round119` 还把「旧 isLoaded 写法」列为反例）。
+4. 专服探针 → **PASS**（`Done (9.279s)!`，`[rscc-build] version=1.2.0-beta.39 … sources=527`）。
+5. 客户端探针（第 137 轮新增）→ **PASS**（`mods - versions {1.2.0-beta.39}` + `Backend library: LWJGL` +
+   探针目录无 crash-report + `run/` 前后清单一致）。
+6. `gradlew.bat build` → `BUILD SUCCESSFUL`，`rs_create_compat-1.2.0-beta.39.jar`（**2,962,217 B**，
+   sha256 `08f57caf7845b03ad48ad58b0ec2e5cd9a419558d83c7a9a6f0bf2a2460c3694`）。
+7. 部署：`tools/_deploy_round138.py` → 四处 sha256 全等（build/libs / 本地实例 / SFTP `/mods` /
+   SFTP `/client_files/mods`），beta.38 在三处 `.disabled`。
+
+### 29.4 未做 / 风险（诚实清单）
+
+1. **没有实机存档复现**：A 的结论来自源码语义 + 第 137 轮崩溃数字；B 来自源码成本模型。
+   beta.39 起若再出现慢 tick，先看日志有没有 `能量立方集群重算耗时 … ms`（第 137 轮新增的证据行）。
+2. 保持器其余项（L2 无电仍迁移 / L3 带组件流体 drain-fill 不对称 / H2 镜像虚高 / M1 目标上限 /
+   M2 默认值）与 `ROUND114/115` L1（>288 条静默截断）、`ROUND117` M1（库无体积限）、
+   `ROUND120` F2 边界、48 格窗口 JEI 拖入问题，按用户「挑影响大的」口径留到后续。
+3. 「高级远程多功能终端偶尔消失的『选择』按钮」继续挂起（需要一张截图或界面名才能定位）。
+4. 无限范围充电的 FE/t 取舍见 §29.2-3；若不可接受，可把预算调到 512 或改「核心区每 tick + 外围轮转」。

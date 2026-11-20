@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.item;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import com.refinedmods.refinedstorage.api.network.energy.EnergyStorage;
 import com.refinedmods.refinedstorage.api.network.impl.energy.EnergyStorageImpl;
@@ -705,10 +706,12 @@ public class AdvancedRemoteTerminalItem extends AbstractNetworkEnergyItem {
             return Optional.empty();
         }
         final net.minecraft.server.level.ServerLevel boundLevel = server.getLevel(location.dimension());
-        if (boundLevel == null || !boundLevel.isLoaded(location.pos())) {
-            return Optional.empty(); // 绑定位置未加载
+        if (boundLevel == null) {
+            return Optional.empty();
         }
-        final net.minecraft.world.level.block.entity.BlockEntity boundBe = boundLevel.getBlockEntity(location.pos());
+        // 第 138 轮：安全读（只读已 FULL 区块）—— 绑定位置未加载 ⇒ 视为没有网络
+        final net.minecraft.world.level.block.entity.BlockEntity boundBe =
+            SafeChunkRead.blockEntityNow(boundLevel, location.pos());
         if (!(boundBe instanceof com.refinedmods.refinedstorage.common.api.support.network.item.NetworkItemTargetBlockEntity target)) {
             return Optional.empty(); // 绑定位置不是网络节点方块
         }

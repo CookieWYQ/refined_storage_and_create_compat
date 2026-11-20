@@ -332,7 +332,7 @@ def pred_bound_resolution(terminal_src, power_src):
     single_impl = terminal.count("getNetworkForItem()") == 1
     return (all(needle in body for needle in (
         "getNetworkLocation()",
-        "isLoaded(location.pos())",
+        "SafeChunkRead.blockEntityNow(",
         "NetworkItemTargetBlockEntity",
         "Optional.ofNullable(target.getNetworkForItem())",
         "location.dimension()",
@@ -576,7 +576,7 @@ def main():
           and "new TerminalPowerPacket(0L, 0L, true, false)" in power)
     check("④-c 判据类里不出现任何「终端物品自身电量」API（用户：终端本身有电也不行）",
           pred_no_item_energy(read(POWER_SERVER)))
-    check("④-d 绑定解析唯一实现 resolveBoundNetwork（含跨维度 dimension + isLoaded），判据复用它",
+    check("④-d 绑定解析唯一实现 resolveBoundNetwork（含跨维度 dimension + SafeChunkRead 安全读），判据复用它",
           pred_bound_resolution(read(TERMINAL_ITEM), read(POWER_SERVER)))
     check("④-e 行为模型：bound 且 stored=0 ⇒ 没电；未绑定 ⇒ 没电；关闭耗能配置 ⇒ 有电",
           mirror_powered(0, True, True, "correct") is False

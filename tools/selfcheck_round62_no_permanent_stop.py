@@ -182,8 +182,9 @@ push_ok = method_body(chamber, "public void rscc$notePushSucceeded(")
 has(push_ok, "abandonedInFlightAt.remove(target.immutable())",
     "A5b 死件自愈的关键一步：该格重新收下我们的推送 ⇒ 撤掉死件标记")
 clear_dead = method_body(chamber, "private int clearDeadStationPieceAt(")
-has(clear_dead, "abandonedInFlightAt.remove(station);",
-    "A5c 机器清理成功后同步撤掉该格死件标记与拒收证据")
+has(clear_dead, "abandonedInFlightAt.remove(registered);",
+    "A5c 机器清理成功后同步撤掉该格死件标记与拒收证据"
+    "（round133 起撤销用登记键 registered，因为实际扫描坐标可能是同工位的置物台）")
 
 # A6：名额计数处必须跳过死件（登记表自愈只治账；这一步保证治的是「名额」）。
 busy = method_body(chamber, "private long registeredBusyStations(")
@@ -214,8 +215,9 @@ check("A7d2 调用点在门控节流块（busScheduleCooldown）**之外**（缩
       "indent=%d" % (len(call_line) - len(call_line.lstrip())))
 has(clear_dead, "if (assembly != null && recipeOrdered(assembly.id().toString())) {",
     "A7e 逐件判据：该配方还有活跃订单的过渡件一律不碰（绝不放宽既有语义）")
-has(clear_dead, "if (busTargetAccepts(station, item)) {",
-    "A7f 逐件判据：输出总线仍会把它推给它自己那一格 ⇒ 是正常件，不碰")
+has(clear_dead, "if (busTargetAccepts(pos, item) || busTargetAccepts(registered, item)) {",
+    "A7f 逐件判据：输出总线仍会把它推给它自己那一格 ⇒ 是正常件，不碰"
+    "（round133 起同时判实际扫描坐标 pos 与登记坐标 registered：两格任一仍会推它就说明它是正常待加工件）")
 has(clear_dead, "if (!isTransitionOfMyRecipes(item)) {",
     "A7g 逐件判据：只碰本仓这条产线的过渡件（别的配方 / 别的模组不碰）")
 interval = long_const(chamber, "DEAD_STATION_CLEAR_INTERVAL_TICKS")

@@ -5,7 +5,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.LevelChunk;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.BlockEvent;
@@ -53,18 +52,19 @@ public final class RsccBusLinkInvalidation {
         final BlockPos changed = event.getPos();
         for (final Direction direction : event.getNotifiedSides()) {
             final BlockPos neighbor = changed.relative(direction);
-            if (!level.isLoaded(neighbor)) {
+            // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+            // 先按方块状态确认「是输出总线 / 输入总线方块」再取方块实体（CHECK：只取已存在的）
+            final BlockState state = SafeChunkRead.blockStateNow(level, neighbor);
+            if (state == null) {
                 continue;
             }
-            // 先按方块状态确认「是输出总线 / 输入总线方块」再取方块实体（CHECK：只取已存在的）
-            final BlockState state = level.getBlockState(neighbor);
             final boolean exporterBus = RsccWireBlocks.isExporterBus(state);
             final boolean importerBus = RsccWireBlocks.isImporterBus(state);
             if (!exporterBus && !importerBus) {
                 continue;
             }
-            final BlockEntity blockEntity = level.getChunkAt(neighbor)
-                .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
+            // 第 138 轮：只取「已存在」的方块实体，且绝不加载区块（isLoaded 挡不住未 FULL 区块）
+            final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, neighbor);
             // 输出总线（延长型输出）与输入总线（延长型输入）共用同一条「邻块失效」信号：
             // 两者都靠「缓存 + 邻块事件驱动失效」避免每 tick BFS（见 RsccWireLinkSearch）。
             if (exporterBus && blockEntity instanceof RsccExporterExecutorMode exporter) {

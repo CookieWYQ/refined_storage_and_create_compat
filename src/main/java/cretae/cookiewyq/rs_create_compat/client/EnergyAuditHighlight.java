@@ -29,8 +29,11 @@ import org.jetbrains.annotations.Nullable;
  * 处理完全同构（同一个渲染器、同一套生命周期），不新写任何渲染事件。</p>
  *
  * <h2>TTL 与「取消选中」</h2>
- * <p>快照每秒一条，每条都会把 TTL 续到 {@code Config.energyAuditHighlightTtlTicks}（默认 60 tick = 3 秒）
- * ⇒ 数据流一断（关界面 / 掉线 / 服务端停止推送），框最多 3 秒就自己消失，不会在世界里留下永久残影。
+ * <p>快照每秒一条，每条都会把 TTL 续到 {@code Config.energyAuditHighlightTtlTicks}（默认 60 tick = 3 秒）。
+ * <b>关界面 / 返回终端时不再直接撤框</b>（第 135 轮）：能耗页是整屏 GUI，界面开着看不到世界，
+ * 旧行为「选中 → 关界面 → 立刻 clear()」等于高亮永远用不上；现在关界面调 {@link #linger()}，
+ * 把到期时刻续到 {@code Config.energyAuditHighlightLingerTicks}（默认 1200 tick = 60 秒），
+ * 玩家可以走出去实地看是哪台方块，到期自动灭（掉线 / 换维度同样由 TTL 收尾）。
  * 玩家点「清除高亮」时服务端把回显的选中置空 ⇒ 下一份快照 {@link #clear()} ⇒ 框<b>立刻</b>消失
  * （不靠 TTL 自己灭）。</p>
  */
@@ -76,6 +79,31 @@ public final class EnergyAuditHighlight {
         pos = null;
         expiresAt = 0L;
         AreaOutline.remove(SLOT);
+    }
+
+    /**
+     * 关界面 / 返回终端时调用：<b>不撤框</b>，只把寿命续到「现在 + 关界面残留时长」。
+     *
+     * <h2>为什么必须这样（第 135 轮，用户原话）</h2>
+     * <p>「<i>你想着我打开这个高亮之后，我是不是关掉这个界面，那关掉界面之后高亮是不是也就关了。
+     * 所以说你这完全就用不了。</i>」—— 能耗页是整屏 GUI，界面开着的时候<b>根本看不到世界</b>，
+     * 所以「选中 → 立刻关界面 → 撤框」这条旧链路等于永远看不到高亮。</p>
+     * <p>现在选中回显照旧每份快照续期；关界面只做一次「续命」，玩家可以走出去实地看是哪台方块，
+     * 到期（{@link Config#energyAuditHighlightLingerTicks}，默认 60 秒）自动灭，不留永久残影。
+     * 要立刻撤掉就重开监视页点「清除高亮」。</p>
+     */
+    public static void linger() {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        final ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            clear();
+            return;
+        }
+        final long until = level.getGameTime()
+            + Math.max(100, Config.energyAuditHighlightLingerTicks);
+        expiresAt = Math.max(expiresAt, until);
     }
 
     /** 当前是否正在高亮（诊断 / 自检用）。 */

@@ -155,13 +155,13 @@ resolve_body = java_body(
     item_code_b1,
     "public static Optional<com.refinedmods.refinedstorage.api.network.Network> resolveBoundNetwork(")
 bind_body_b1 = java_body(item_code_b1, "private static boolean bindNetworkToVirtualBe(")
-is_loaded_in_resolve = ".isLoaded(" in resolve_body
+safe_read_in_resolve = "SafeChunkRead.blockEntityNow(" in resolve_body
 bind_delegates = "resolveBoundNetwork(player, stack)" in bind_body_b1
-check(is_loaded_files == ["item"] and is_loaded_in_resolve and bind_delegates,
-      "B1 整个打开链路里 `.isLoaded(` **只**出现在解析 helper resolveBoundNetwork（决定「绑真网络还是空网络」），"
+check(is_loaded_files == [] and safe_read_in_resolve and bind_delegates,
+      "B1 整个打开链路里没有任何 `.isLoaded(`（第 138 轮改为 SafeChunkRead 安全读）；解析 helper resolveBoundNetwork 用安全读决定「绑真网络还是空网络」，"
       "不参与「能不能打开」；bindNetworkToVirtualBe 复用同一套解析",
-      "出现文件=%s；位于 resolveBoundNetwork=%s；bindNetworkToVirtualBe 复用=%s"
-      % (is_loaded_files, is_loaded_in_resolve, bind_delegates))
+      "出现文件=%s；resolveBoundNetwork 用安全读=%s；bindNetworkToVirtualBe 复用=%s"
+      % (is_loaded_files, safe_read_in_resolve, bind_delegates))
 
 # B2：四个模式都必须「绑不到就绑空网络」——即区块未加载 / 未绑定时**照常开界面**（灰色空状态）
 item_code = code_only(read("item"))

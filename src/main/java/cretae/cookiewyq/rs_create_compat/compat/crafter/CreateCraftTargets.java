@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.compat.crafter;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import com.refinedmods.refinedstorage.common.autocrafting.autocrafter.AutocrafterBlockEntity;
 import com.refinedmods.refinedstorage.common.support.AbstractDirectionalBlock;
@@ -42,10 +43,7 @@ public final class CreateCraftTargets {
                 return current;
             }
             final BlockPos nextPos = current.getBlockPos().relative(direction);
-            if (!level.isLoaded(nextPos)) {
-                return current;
-            }
-            final BlockEntity next = level.getBlockEntity(nextPos);
+            final BlockEntity next = SafeChunkRead.blockEntityNow(level, nextPos);
             if (!(next instanceof AutocrafterBlockEntity nextAutocrafter)) {
                 return current;
             }
@@ -62,10 +60,7 @@ public final class CreateCraftTargets {
             return null;
         }
         final BlockPos targetPos = root.getBlockPos().relative(direction);
-        if (!level.isLoaded(targetPos)) {
-            return null;
-        }
-        return level.getBlockEntity(targetPos);
+        return SafeChunkRead.blockEntityNow(level, targetPos);
     }
 
     /**

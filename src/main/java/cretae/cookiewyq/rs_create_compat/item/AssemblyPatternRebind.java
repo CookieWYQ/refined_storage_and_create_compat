@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.item;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import com.refinedmods.refinedstorage.api.network.Network;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
@@ -17,6 +18,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -160,12 +162,12 @@ public final class AssemblyPatternRebind {
             for (int dy = -NEARBY_RADIUS; dy <= NEARBY_RADIUS; dy++) {
                 for (int dz = -NEARBY_RADIUS; dz <= NEARBY_RADIUS; dz++) {
                     final BlockPos pos = center.offset(dx, dy, dz);
-                    if (!level.isLoaded(pos)
-                        || !(level.getBlockState(pos).getBlock()
-                            instanceof SequenceExecutionChamberBlock)) {
-                        continue; // 未加载 / 不是执行舱：一律跳过（绝不因取网络而加载区块）
+                    // 第 138 轮：安全读（只读已 FULL 区块）—— 未加载 / 不是执行舱：一律跳过
+                    final BlockState posState = SafeChunkRead.blockStateNow(level, pos);
+                    if (posState == null || !(posState.getBlock() instanceof SequenceExecutionChamberBlock)) {
+                        continue;
                     }
-                    if (level.getBlockEntity(pos) instanceof SequenceExecutionChamberBlockEntity chamber) {
+                    if (SafeChunkRead.blockEntityNow(level, pos) instanceof SequenceExecutionChamberBlockEntity chamber) {
                         found.add(chamber);
                     }
                 }

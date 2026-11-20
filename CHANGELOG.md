@@ -8,6 +8,82 @@
 
 ## [Unreleased]
 
+### 修复（1.2.0-beta.39，第 138 轮：区块安全读全工程收口 + 充电器分片扫描 + 保持器 M3）
+
+用户原话（2026-11-20 22:07）：「A肯定要先修。然后B的话呢肯定也要修。然后C的话呢，挑那些影响玩法比较大的。比如说像是你说的保持器的那一条，这个就是一个问题了。」落地记录 = `docs/ROUND138_LANDING.md`。
+
+- **A：把第 137 轮崩溃的同一机制在全工程收口**。机制：1.21.1 的 `Level#isLoaded` 只判「chunk holder 存在」，**在加载流水线里、还没到 FULL 的区块也返回 true**；紧随其后的 `getBlockState / getBlockEntity / getChunkAt / getChunk` 全是阻塞读，会在主线程同步等区块生成（玩家登录/传送/跨维度时把 tick 拖到几百 ms，持续到看门狗判死）。
+  - 新增 `support/SafeChunkRead`：`chunkNow` = `getChunk(x, z, ChunkStatus.FULL, false)` + `instanceof LevelChunk`（只返回已 FULL 区块，不加载 / 不加票据 / 不阻塞）、`blockStateNow`、`blockEntityNow`（`CHECK`，绝不创建）、`hasChunkHolder`（非阻塞区分「没加载」与「加载中」）。
+  - 收口 20+ 处：机器集群（`RsccMachineCluster` 的存活校验 / BFS / 卸块移交）、范围充电器、执行仓 12 处 `getChunkAt`、缓存仓 `fluidSourceIdAt`（第 119 轮 `isLoaded` 闸门升级）、FE 能量立方 / 分解发电机 / 请求器的邻块读、线缆搜索、工位探针、分隔框架、套壳链、伪装附件、扳手切缝、总线失效、自动合成仓链、3 个 C2S 包、装配样板重绑、远程终端绑定解析；**全工程 `getChunkAt(` 调用清零**（自检 ④-1 守着）。
+  - 语义：拿不到 FULL 区块时「这一 tick 先当看不见」。机器集群记 `partial` ⇒ 下一 tick 必重算（区块就绪后自动补上），同一 tick 多成员只重算一次（`lastAttemptTick`），起点区块未 FULL 时**绝不清空旧缓存**。
+- **B：范围充电器不再每 tick 全量遍历范围区块**。新增每 tick 区块预算 + 跨 tick 轮转游标：普通范围 `MAX_FINITE_SCAN_CHUNKS_PER_TICK = 128`（默认 50/100 格 = 16/64 区块 ⇒ 与旧行为逐 tick 等价，只有叠满范围升级才分片）；无限范围（创造升级）`MAX_INFINITE_SCAN_CHUNKS_PER_TICK = 256`（1 人 1089 区块约 5 tick 一轮，10 人约 43 tick 一轮，替代旧「每 tick 1 万区块」）。提前因目标数/电量退出时游标仍前移整个窗口（否则后面的区块会被饿死）；过滤界面候选池改为「一轮完整轮转开始时（`start == 0`）清空 + 登记自身」，分片不会把界面刷成碎片。代价：无限档单目标 FE/t 约为原来的 1/5（创造模式专用，非生存物品）。
+- **C：保持器 M3 —— 目标 0（未标记）不再认领资源**。同一网络两台保持器守同一资源时，仲裁按坐标全序选唯一权威、输者让位；旧 `claimedResources()` 只看「有没有资源键」不看目标量 ⇒ **未标记但坐标更靠前的那台会让真正生效的那台永远让位**，功能静默失效。修法：`claimedResources()` 逐槽判 `KeeperTarget.isMarked(target)`（与维持/销毁/补合成同一判据），只影响仲裁认领，不改任何既有语义。
+- **验证**：独立 javac `LEAD_COMPILE_OK sources=527`；新增 `tools/selfcheck_round138_safe_chunk_read.py`（22 断言，含 4 组旧写法反例自证）；11 个既有自检的旧字面量锚点按新形状同步（判据未放松，`round119` 还把「旧 isLoaded 写法」列为反例）；全量自检 **206 脚本 / 0 失败**；专用服务端真启动 PASS（`Done (9.279s)!`，`[rscc-build] version=1.2.0-beta.39 sources=527`）；客户端真启动 PASS（`mods - versions {1.2.0-beta.39}` + `Backend library: LWJGL` + 无 crash-report）；四处部署 sha256 全等 `08f57caf…0c3694`。
+- **未做（如实写明）**：保持器其余项（L2 无电仍迁移 / L3 带组件流体 drain-fill 不对称 / H2 镜像虚高 / M1 目标上限 / M2 默认值）与 `ROUND114/115` L1（>288 条静默截断）、`ROUND117` M1（库无体积限）、`ROUND120` F2 边界、48 格窗口 JEI 拖入问题，按用户「挑影响大的」口径留到后续；「选择」按钮问题继续挂起。
+
+### 修复（1.2.0-beta.38，第 137 轮：能量立方集群「区块安全读」—— 修服务端看门狗判死 / 持续慢 tick）
+
+触发：用户远程服务端崩溃 `crash-2026-11-14_22.43.50-server.txt`，栈尖是 `EnergyCubeCluster.collect(:299)`，网上流传的分析把它判成「死循环」。落地记录 = `docs/ROUND137_LANDING.md`。
+
+- **不是死循环**：BFS 由 `found.size() < MAX_MEMBERS(64)` 与 `visited` 双重约束，单次重算 ≤ 64 成员 / ≤ 385 次出队，转不了 60 秒。看门狗判的是「`nextTickTimeNanos` 落后 ≥ 60 秒」而非单 tick 耗时；本次崩溃数字 = 重置后 **70.04 秒只推进 10.03 秒调度时间（≈200 tick ≈ 350 ms/tick）**，且 60 秒窗口内 `22:42:53 / 22:43:07 / 22:43:30` 都有 Server thread 日志 ⇒ 是**持续慢 tick**，不是一次卡死。
+- **根因（我们的锅）**：1.21.1 的 `Level#isLoaded` 对「在加载流水线里、但还没 FULL」的区块同样返回 `true`，而 `Level#getBlockState` 内部走 `getChunk(cx, cz, FULL)`（require = true）**会在主线程同步等区块生成**（还会加 `UNKNOWN` 票据）。旧 `isCubeBlock` 正是「先 `isLoaded` 再 `getBlockState`」，闸门拦不住。玩家登录 / 传送后区块加载窗口里，`create_simple_generator` 的发电机每 tick 查一次立方体能力 ⇒ 集群 BFS 逐个同步等待区块 ⇒ tick 被拉到 ~350 ms，持续到看门狗判死。
+- **修法**（`support/EnergyCubeCluster.java`）：① 世界读取一律 `getChunkSource().getChunkNow(...)`（只返回 FULL 区块，不加载 / 不加票据 / 不阻塞），文件内不再出现 `level.isLoaded(` / `level.getBlockState(` / `level.getBlockEntity(`；② 取方块实体改 `LevelChunk#getBlockEntity(pos, CHECK)`（不创建）；③ 扫到未就绪区块记 `partial`，该快照永不视为 fresh ⇒ 区块就绪后自动重算补上；④ `MAX_REBUILDS_PER_TICK=8` 硬预算，超出退化「上次快照 / 只报自己」，读路径永远拖不死 tick；⑤ 单次重算 ≥ 20 ms 记 WARN（origin / members，5 分钟冷却），给实机留证据。
+- **语义不变**：电量各存自己、拆块零迁移、取电按字典序跨成员扣；慢路径退化只影响「这一次读到的数」，不写坏任何状态。
+- **自检**：新增 `tools/selfcheck_round137_energy_cluster_safe_read.py`（18 断言：安全读锚点 / 有界性 / 预算与 partial / 崩溃调用链 / 旧写法与无预算写法反例自证）。
+- **客户端真启动测试（新增 `tools/verify_client_boot.ps1` + `tools/client_probe.init.gradle`）第一次运行就抓到真问题**：`AssertionError: Missing config translation: config.jade.plugin_rs_create_compat.proxy`（Jade `JadeClient.onGui`）。第 108 轮的容器代理器两条 Jade provider（`proxy` / `proxy_data`）只加了代码、没加语言键；Gradle JavaExec 默认开断言（`-ea`）⇒ 开发环境客户端在标题界面初始化时崩溃，正式环境则是 Jade 配置界面显示原始 key。修法：`en_us.json` / `zh_cn.json` 各补两条语言键；新增 `tools/selfcheck_jade_lang_keys.py`（19 断言：从 jade 源码解析所有真实注册 UID（含常量引用）并逐个校验两个语言文件，反例自证删键判负）。
+- **验证**：独立 javac `LEAD_COMPILE_OK sources=526`；专用服务端真启动 PASS（`Done (2.499s)!`，`[rscc-build] version=1.2.0-beta.38`）；客户端真启动修复后重跑（见落地记录 §7）；全量自检 205 脚本 / 0 失败；四处部署 sha256 全等 `ae3119eb…b2bafb38`。
+- **未做（如实写明）**：本机无该存档实机复现，「350 ms/tick 来自区块同步等待」是源码语义 + 崩溃数字 + 日志时间线推断；`RsccMachineCluster` 与第 119 轮 `fluidSourceIdAt` 的 `isLoaded` 闸门属同一类「拦不住未 FULL 区块」的写法，不在本次栈上，留待单独一轮 + 审计清单。
+
+### 修复（1.2.0-beta.37，第 136 轮：超龄裸在制件自愈回收 —— 修「精密构件永久卡住」）
+
+用户原话（2026-11-13 22:43）：「你定位到就直接改就行了……你改了之后我还是得重启服务器、再重启客户端才可以应用，所以说就算上传了也不会影响到我现在这个存档。」落地记录 = `docs/ROUND136_LANDING.md`。
+
+- **现象与现场**：远程 `create_enjoy` 快照 `rscc_diag/20261113-211858/snapshot.json` 里任务 `create:precision_mechanism` ×5 只交付 3；执行舱在制登记两条 `step=-1` 的金板 `(419,100,102)` / `(420,100,102)`，age 9,409,580 / 9,409,805 tick（≈5.4 天，开服当天推进去，从未进入第一个工序）⇒ `capacity = remaining 2 − inFlight 2 = 0` ⇒ 不再补料。
+- **根因是「判据自身的死锁」**：既有三条回收路径全都到不了它 —— ①`reclaimRuntimeStationResidue` 的两类卡死判据都要求该格 `machine_full` 计数 > 0，而名额为 0 时本仓**根本不再尝试推送**，旁证永远不成立；②「结果池物品」分支要求台上是结果池物品，金板是**起步原料**；③判据 ④「登记物品 == 台上物品 ⇒ 合法等待，绝不碰」**没有时间上限**。
+- **修法 A（守恒回收，`reclaimStationResidueAt` 新增 `stale_bare_registration` 分支）**：Create 在一步真正开始时就会把台上那件替换成带 `sequenced_assembly` 进度组件的过渡件，因此「台上仍是裸件 + 就是本仓登记的那一件 + 自上次成功推送满 **60 秒**」= 这 60 秒没有任何机器接手 ⇒ 可证死。动作仍走既有守恒通道：SIMULATE 夹量 → 精确抽 1 件 → 优先进网络 → 装不下才收本仓 → 两侧都装不下原样还回；**先搬后撤登记**，逐笔记 `flowLedger.fromMachine/toNetwork`。收回的那一份会被同一条总线重新作为起步原料推回 ⇒ 不多占料、不多开件。只处理 `step < 0` 的起步原料 / 步骤专用投入物，过渡件一律不在这条分支动。
+- **修法 B（孤儿登记清理，`dropOrphanBareRegistration`）**：同样的超龄条件下，若整工位已经找不到本仓登记的那一件、也找不到本产线过渡件（`stationHoldsPipelineResidue` 为假），说明东西早已不在 ⇒ **只删本模组账本、一个字节都不动**，名额随之自愈；判不出来（未加载 / 抛异常）一律不动。
+- **有界性**：超龄回收仍是每 2 秒一轮、每轮至多 1 件、只遍历在制登记表（≤16 格/轮）；同一工位另加 **5 分钟**冷却（`STALE_BARE_RECOVER_COOLDOWN_TICKS`），真正坏掉的机器只留低频、物品守恒的重试，不会变成每秒推收往返。
+- **自检**：新增 `tools/selfcheck_round136_stale_bare_unit.py`（44 断言：判据四条 / 旧「无条件 return 0」反例自证 / 先搬后撤顺序 / 孤儿不搬物品 / 时间闸门边界 1199-1200 镜像复算 / 现场数字锚点）；全量 **203 脚本 / 0 失败**。
+- **未修（如实写明）**：「高级远程多功能终端偶尔消失的『选择』按钮」本轮仍未定位 —— 用户答复「整块都没有了、点不到、不稳定出现」，但 `总样板` 那一行所在的 `SequencePatternTerminalScreen` 在该区域只有一个每帧无条件创建的按钮（生成样板），无法解释「整块消失」；需要下次复现时的一张截图或界面名才能定位。
+
+### 修复（1.2.0-beta.36，第 135 轮：能耗监视叠字 / 关界面高亮 / 延长型六个面与串线）
+
+用户原话（2026-11-13 21:19-21:59）：①「圈起来的这个数字和这个黑色的数字贴在一起」「没有英文译名你也不能强行加中文译名，但不要存在重叠」；②「你想着我打开这个高亮之后，我是不是关掉这个界面，那关掉界面之后高亮是不是也就关了。所以说你这完全就用不了」；③「终端的那个选择的按键偶尔会不可用 / 突然消失」；④「精密构件还是有一个配件卡在那里无法继续组装」；⑤「箭头朝上……尾部也就是底部是会串线的，那个肯定判定是未确定」。落地记录 = `docs/ROUND135_LANDING.md`。
+
+- **能耗监视右列不再叠字**（`EnergyAuditScreen#renderTypeRow` / `renderNodeRow`）：删掉写死的 `COUNT_RIGHT = ROW_RIGHT − 78`（用量串常宽过 78px ⇒ 台数与用量压在同一段像素列）；改为按实测文本宽度**从右往左**排（`usageX → countX → 名字宽度`），放不下时先撤台数、再撤用量（两者仍在行 tooltip 里）；缩到 `MIN_SCALE` 仍放不下的第三方超长名改走「整行只画名字」模式，绝不压右列。**没有**加中文译名、没有截断省略。
+- **关界面后高亮不再立刻消失**（`EnergyAuditHighlight#linger` + `Config.energyAuditHighlightLingerTicks`，默认 1200 tick = 60 秒）：`removed()` / `returnToTerminal()` 由 `clear()` 改 `linger()`。根因是能耗页整屏 GUI —— 界面开着看不到世界，旧行为等于「高亮永远看不见」。到期自动灭；重开界面点「清除高亮」立刻撤。
+- **延长型总线「六个面」归属 + 串线**（`RsccWireLinkSearch`）：执行舱 `FACING` = 模型箭头面。箭头面 / 4 侧面接出去的线缆计入可达；**箭头背面（尾部）不算延长段**；同一台舱两侧都被本簇碰到 ⇒ `crossTalk` ⇒ `ambiguous()` 为真 ⇒ 判「归属未确定」（与「≥2 条链」同一出口）。`LinkWalk` 增加 `crossTalk` 分量；执行舱邻格改为在 `visited` 去重**之前**分类（否则串线永远发现不了）。
+- **精密构件卡住（证据已定位，本轮不改代码）**：远程 `create_enjoy` 的 `rscc_diag/20261113-211858/snapshot.json` 显示任务 `create:precision_mechanism` ×5 只交付 3，执行舱在制登记里两片 **step=-1 的金板** age 9.41M tick（≈5.4 天）⇒ 第 134 轮名额公式下 `remaining 2 − inFlight 2 = 0` ⇒ 永久不再补料。只解除占额会多发两片金板（第 134 轮刚驳回的口径），正确修法是「先把台上那件原样收回网络再撤登记」，留到下一轮单独做并配守恒自检。
+- **自检**：202 脚本 / 0 失败；round34 ⑪ / round60 ③ 改守新口径（`ambiguous()` 含 `crossTalk`、仍不含 `exhaustive`），并为 `selfcheck_gui_slot_alignment.py` 补装 `numpy`。
+
+### 修复（1.2.0-beta.35，第 134 轮：序列装配「按需补发」——概率配方不再预开 `ceil(R/p)`，下单 20 件就只开 20 件）
+
+用户原话（2026-11-08 01:14）：「……我的真正目的就只是做 20 件。但是你现在却多搞了一个……如果说我现在 20 个金板没有完成，你再多发，而不是说不管怎么样都发。」落地记录 = `docs/ROUND134_LANDING.md`，规格 = `docs/ROUND134_ON_DEMAND_SPEC.md`。
+
+- **被推翻的旧口径**：上一轮把「下单 20 件、精度配方 p=0.8 ⇒ 在制上限 `ceil(20/0.8)=25`」当成设计行为（"数学期望，不是 bug"，见下面 beta.34 条目的"不做"）。用户驳回：资源紧张时凭空多占 5 份起步原料就是坏事 —— 而且 beta.34 修的"多出的件收不回来"也不能靠它兜底。
+- **新契约**：`startCapacityForRecipe` 的 `allowed = remaining`（订单还差几件，不是"期望轮次"），`capacity = max(0, allowed − inFlight)`（inFlight = 跨舱在制件数，四分量口径不变）；**与 p 无关**。开局恰好只开 20 件；一件失败离开工位 ⇒ `inFlight` 减 1 ⇒ 名额当 tick 回到 1 ⇒ 只补发那**一件**。
+- **代码**（`SequenceExecutionChamberBlockEntity#startCapacityForRecipe`）：删除 `if (!guaranteedResult(recipeId)) { final float p = mainResultChance(recipeId); … Math.ceil(remaining / (double) p) … }` 整段放大逻辑，改为 `final long allowed = remaining; … capacity = allowed - inFlight;`（`:8393`/`:8394`/`:8397`）。`guaranteedResult` / `mainResultChance` **保留但只进诊断**：diag 行新增 `P=` / `p=` / `guaranteed`，证明 p 不再参与任何名额判定。
+- **闭环与终止性**（完整推导见规格文档）：失败件从工位消失后不再计入 `inFlightBreakdownForRecipe` 的任何一个分量（登记表命中还要求 `registrationCounts` 为真且工位真被占着；仓内 / 网络池 / 未交付成品同样只算"真的还在"的件）⇒ 名额自愈；`R` 只在成品被认领时减 ⇒ 每失败一件补开一件，总开工数 = 订单件数 + 失败数，任何时刻 `inFlight ≤ remaining`。
+- **代价（明说）**：p 越小，总开工次数越接近 `R/p` —— 但那只是**串行发生**的补发，不是开局一次性占料；每多一件起步原料都是真产量不够时才追加的。
+- **自检**：新增 `tools/selfcheck_round134_on_demand_replenish.py`（**61 断言 / 8 条反例自证 / 0 失败 / ALL_PASS**；含固定种子补发模拟：t=0 只开 20、任一时刻 `inFlight ≤ remaining ≤ 20`、每 tick 补发数恰等于本 tick 失败数、终局 `delivered=20`；反例含旧口径 25≠20、20≠15、误写 `R − I·p` 被抓）。round13 / 23 / 26 / 27 / 29 的 `ceil(R/p)` 锚点**改守新口径而非删断言**（旧期望按新语义重算：2→1、80→64、13→10），并各新增「p 不变性」与「失败才补」两条判据。
+- **不做**：不改必得配方语义（p=1.0 仍严格 `allowed = R`）；不动 `inFlight` 四分量口径；不改登记键语义；不改进度条 / 交付判定。
+
+**本轮验收**：`LEAD_COMPILE_OK sources=526`；全量自检 **202 个脚本 / 0 失败**（新增 round134 一项；`build\round134_selfcheck_all.log`）；专服探针 **PASS**（`Done (1.489s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）；`BUILD SUCCESSFUL in 6m 56s`，`rs_create_compat-1.2.0-beta.35.jar`（**2,953,437 B**，sha256 `8234b79e82e1fa6e63e7117fe205ee4f854c87b2aa48f777e6fdac9188af2ec8`）部署四处并回读一致（build/libs / 本地客户端实例 / SFTP `/mods` / SFTP `/client_files/mods`），beta.34 就地 `.disabled`。
+**未实机验证**：本轮只有源码/自检级证据，没有跑过真实订单；验收动作见 `docs/ROUND134_LANDING.md` §6。
+
+### 修复（1.2.0-beta.34，第 133 轮：序列装配「多发一块金板且不回去」——收尾/清扫改按整工位判定 + diag 终于能拍到现场）
+
+用户原话（2026-11-07）：「那个序列装配大抵是没有问题了，但是我刚刚下单的时候，他多发了一个金板……就我下单 20 个然后他给我做完之后多发了一个金板，然后这个金板完成了一次装配然后就没有回去。这个就是一个小瑕疵。我已经保存了 diag，自己去服务器上面查看」。落地记录 = `docs/ROUND133_LANDING.md`，规格 = `docs/ROUND133_CONTRACT.md`。
+
+- **根因（不是"多做一件"）**：精度配方 p=0.8 ⇒ 下单 20 在制上限 `ceil(20/0.8)=25` 是设计行为（`startCapacityForRecipe`）**【2026-11-08 第 134 轮已推翻：用户驳回，改为按需补发，见上条 beta.35】**；订单提前交付满后，多出来的在制件本就该由任务结束收尾收回。真正的 bug 是：`inFlightUnits` 的登记键是**推料目标**（常常是对着置物台的机械手），而过渡件落在**置物台**；旧 `stationHoldsPipelineResidue` / `clearDeadStationPieceAt` 都只扫登记坐标那一个容器 ⇒ 结束边沿那一刻工位"恰好空"（机器已吃进原料、成品未吐回）就判定"无残留"并把登记删掉，之后机器吐回的过渡件再无任何路径能看见它，永久留在台上（用户看到的"完成一次装配后没回去"）。
+- **修法 1：收尾保留判定改按整工位** —— 新增只读 `stationGroupPositions(level, registered)`（登记坐标 → 置物台 `stationKeyCached` → `stationSiblings`）；`stationHoldsPipelineResidue` 遍历整组，任一格有"登记那件"或"本仓过渡件"即保留凭据；任一格未加载仍按旧行为保留（保守）。
+- **修法 2：清扫主扫 + 整工位补扫** —— `clearDeadStationPieces` 先扫登记坐标，未命中再扫同工位其它容器（置物台）；`clearDeadStationPieceAt` 新增 `allowStartIngredient` 参数，**非登记坐标只允许收过渡件**（绝不碰玩家手放/别的仓推的起步原料），同物品命中、`unitInFlightAt`、`inputMaterialWantedNow` 等既有判据一处未放宽；成功路径按登记键清表并 `flushResidualInputs()`。
+- **修法 3：diag 拍到现场** —— `rscc$diagReport()` 新增 `inFlightUnits[]`（每行 `station/item/recipe/step/age/group`）；`RsccDiag.blockEntities()` 的区块来源从"只看 `AssemblyWatchdog.LOADED_CHUNKS`"改为并集"看门狗 + 同维度每名玩家 `chunkPosition()` 周边 `min(16, viewDistance)` 区块"，且只用 `getChunkNow`（绝不主动加载）。此前两份 diag（10-24 / 11-07）`chambers=[]` 是因为看门狗的表只含出生点区块，基地（x 360~421）从未被枚举。
+- **不做**：~~不改概率配方的在制上限（数学期望，不是 bug）~~ ←【2026-11-08 更正，第 134 轮】用户驳回了这条：多占起步原料不是"数学期望"，是资源浪费，已在 beta.35 改为按需补发（见上面 beta.35 条目）；不改登记键语义（推料目标仍作键）；不扩大 `reclaimRuntimeStationResidue`（它只管运行期）；不从日志反推（本次 devLogs 只开了约 40ms，无 trace）。
+
+**本轮验收**：`LEAD_COMPILE_OK sources=526`；全量自检 **201 个脚本 / 0 失败**（新增 `selfcheck_round133_station_group_residue.py`：**44 项 / 0 失败**，含 4 条反例自证；round62 两条、round85 三条锚点随签名演进更新，语义未放宽）；专服探针 **PASS**（`Done (1.270s)`，无 Mixin / dist 致命标记，`run/` 只读自证 OK）；`BUILD SUCCESSFUL in 6m 43s`，`rs_create_compat-1.2.0-beta.34.jar`（**2,953,273 B**，sha256 `4dc50931b4d2618f4cff5e2dcbe8d054cf224efe51f7d8b4a7d433913542dcc1`）部署四处并回读一致（build/libs / 本地客户端实例 / SFTP `/mods` / SFTP `/client_files/mods`），beta.33 就地 `.disabled`。
+**未实机验证**：仍没复现过原场景；验收动作见落地说明 §6（`devlogs on` → 下单 20 件精密构件 → 看置物台是否留件 + 重导 diag 看 `inFlightUnits[]`）。**已知限制（2026-11-08 更正）**：`inFlightUnits` **自第 121 轮 F4 起已按条目落盘**（键 `InFlightUnits`，`writeInFlightUnits` / `readInFlightUnits`，条目非法即淘汰、空表不写键、读侧上限 64 条），本条 beta 说明此前写的"仍不落盘"是错的；但"停服重启后凭据仍在 ⇒ 三条回收路径真能把工位残留收回来"这一条**仍未实机验证过**（需要一次真实的停服/重启）。
+
 ### 变更（1.2.0-beta.31，第 130 轮：高级归流缓存仓 · 区域条去掉「标记网格」，改在匹配区里编辑 + 搜索 / 删除确认 / 看清边框）
 
 用户原话（2026-11-01 11:24）：「保留当前这一个选择列表，当然同时增加一个搜索功能，可以搜索坐标，也可以搜索名字之类的。这个改名字按钮和这个删除按钮保留，同时确保删除按钮有删除前确认。然后让这一个编辑的时候**在匹配区中编辑**……然而（现在）我在匹配器中匹配就应该是可以直接拖进去，而不是说在这一个界面中单独出现一个标记什么的东西，把那一部分删除。而且你现在显示边框……还是不行，还是没用。而且你有一些字很小，而且有些没必要的废话。还有这玩意（区域选定器）的数据应该是存在这个物品里面，而不是存在这个缓存仓里面，因为这玩意是跟着物品走的。」落地记录 = `docs/ROUND130_AREA_STRIP_REWORK_LANDING.md`，规格 = `docs/ROUND130_AREA_STRIP_REWORK.md`。

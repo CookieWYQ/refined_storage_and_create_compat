@@ -1,0 +1,50 @@
+// 客户端启动探针：Gradle init script（**不改 build.gradle、不动 run/**）
+//
+// 为什么需要这个文件
+// -----------------
+// 与服务端探针（tools/server_probe.init.gradle）对称：`gradlew runClient` 的默认
+// gameDirectory 是工程根的 `run/`，那是共享开发目录（另一个 agent / 玩家实例在用），
+// 本探针把它视为**只读**，改为独立的 `build/client_probe/game`。
+// 客户端同样有「编译期全绿、运行期客户端专属类 / Mixin 应用失败」的风险，
+// 唯一能证伪的办法是真的启动一次客户端并看到渲染初始化完成。
+//
+// 用法（由 tools/verify_client_boot.ps1 自动调用）：
+//   gradlew.bat runClient --init-script tools\client_probe.init.gradle \
+//       --no-configuration-cache --console=plain -PrsccClientProbeGameDir=<绝对路径>
+
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+
+    def probeDir = {
+        def prop = root.findProperty('rsccClientProbeGameDir')
+        return prop ? new File(prop.toString())
+                    : new File(root.projectDir, 'build/client_probe/game')
+    }
+
+    // ① 直接改 moddev 的 client run 配置（与服务端探针同一教训：只改 workingDir 不管用）。
+    def neoForgeExt = root.extensions.findByName('neoForge')
+    if (neoForgeExt == null) {
+        logger.lifecycle("[rscc-client-probe] [警告] 找不到 neoForge 扩展，无法改 gameDirectory")
+    } else {
+        try {
+            neoForgeExt.runs.named('client') { run ->
+                run.gameDirectory.set(probeDir())
+            }
+            logger.lifecycle("[rscc-client-probe] neoForge.runs.client.gameDirectory -> " + probeDir())
+        } catch (Exception exc) {
+            logger.lifecycle("[rscc-client-probe] [警告] 设置 gameDirectory 失败：" + exc)
+        }
+    }
+
+    // ② 兜底：执行前再确认一次 workingDir。
+    root.tasks.matching { it.name == 'runClient' }.configureEach { t ->
+        t.doFirst {
+            def dir = probeDir()
+            dir.mkdirs()
+            if (t.workingDir != dir) {
+                t.workingDir = dir
+            }
+            logger.lifecycle("[rscc-client-probe] runClient workingDir -> " + t.workingDir)
+        }
+    }
+}

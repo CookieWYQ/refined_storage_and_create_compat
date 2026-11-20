@@ -265,11 +265,12 @@ public final class SeparationFrameGuard {
      */
     public static boolean blocksConnection(final Level level, final BlockPos self, final Direction towardOther) {
         final BlockPos other = self.relative(towardOther);
-        if (!level.isLoaded(self) || !level.isLoaded(other)) {
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockState selfState = SafeChunkRead.blockStateNow(level, self);
+        final BlockState otherState = SafeChunkRead.blockStateNow(level, other);
+        if (selfState == null || otherState == null) {
             return false;
         }
-        final BlockState selfState = level.getBlockState(self);
-        final BlockState otherState = level.getBlockState(other);
         if (!RsccWireBlocks.isWire(selfState) || !RsccWireBlocks.isWire(otherState)) {
             return false;
         }
@@ -307,10 +308,12 @@ public final class SeparationFrameGuard {
      */
     public static boolean blocksFluidPipeConnection(final BlockState selfState, final Level level,
                                                     final BlockPos self, final BlockPos other) {
-        if (!level.isLoaded(self) || !level.isLoaded(other)) {
+        // 第 138 轮：安全读（只读已 FULL 区块）
+        final BlockState otherState = SafeChunkRead.blockStateNow(level, other);
+        if (otherState == null) {
             return false;
         }
-        if (!isFluidPipe(selfState) || !isFluidPipe(level.getBlockState(other))) {
+        if (!isFluidPipe(selfState) || !isFluidPipe(otherState)) {
             return false;
         }
         final Direction towardOther = directionToward(self, other);
@@ -346,11 +349,12 @@ public final class SeparationFrameGuard {
      */
     public static boolean isSeamConnected(final Level level, final BlockPos self, final Direction towardOther) {
         final BlockPos other = self.relative(towardOther);
-        if (!level.isLoaded(self) || !level.isLoaded(other)) {
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockState selfState = SafeChunkRead.blockStateNow(level, self);
+        final BlockState otherState = SafeChunkRead.blockStateNow(level, other);
+        if (selfState == null || otherState == null) {
             return false;
         }
-        final BlockState selfState = level.getBlockState(self);
-        final BlockState otherState = level.getBlockState(other);
         final boolean sameFamily = (RsccWireBlocks.isWire(selfState) && RsccWireBlocks.isWire(otherState))
             || (isFluidPipe(selfState) && isFluidPipe(otherState));
         if (!sameFamily) {
@@ -442,10 +446,11 @@ public final class SeparationFrameGuard {
      * </ol>
      */
     private static void refreshOne(final ServerLevel level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
+        // 第 138 轮：安全读（只读已 FULL 区块）
+        final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+        if (state == null) {
             return;
         }
-        final BlockState state = level.getBlockState(pos);
         if (isFluidPipe(state)) {
             recomputePipeFaces(level, pos, state);
             level.scheduleTick(pos, state.getBlock(), 1, TickPriority.HIGH);

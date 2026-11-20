@@ -101,10 +101,10 @@ EPOCH = rel_read(os.path.join("support", "RsccStructureEpoch.java"))
 MOD = rel_read("RS_Create_Compat.java")
 
 supply_target = method_body(BE, "private static BlockPos supplyTargetOf(")
-check("① 供料目标解析 = 「朝向 relative」+「getChunkAt().getBlockEntity(CHECK)」，O(1)、无 BFS",
+check("① 供料目标解析 = 「朝向 relative」+「SafeChunkRead.blockEntityNow（只读已 FULL 区块）」，O(1)、无 BFS",
       supply_target is not None
-      and "level.getChunkAt(exporterPos).getBlockEntity(exporterPos, LevelChunk.EntityCreationType.CHECK)"
-          in supply_target
+      and "SafeChunkRead.blockEntityNow(level, exporterPos)" in supply_target
+      and "level.getChunkAt(" not in supply_target
       and "rscc$supplyTargetPos()" in supply_target
       and "BFS" not in supply_target,
       "供料目标解析的实现变了 ⇒ 复杂度结论必须重查")

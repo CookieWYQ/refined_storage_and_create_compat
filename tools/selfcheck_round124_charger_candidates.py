@@ -233,21 +233,26 @@ def deny_list_only_in_display_path(be_raw):
 
 
 def self_registered_outside_scan(be_raw):
-    """自身登记：在 `doCharging` 清空候选池之后单独做，且两条扫描里都没有登记自身。"""
+    """自身登记：只在一轮完整轮转开始（`start == 0`）时、清空候选池之后登记；充电循环仍跳过自身。
+
+    第 138 轮 B：分片扫描后不能每 tick 清空 / 登记（否则界面只剩本 tick 的碎片），
+    因此登记从 doCharging 移进两条扫描的 `if (start == 0)` 里。判据：
+    定义 1 处 + 两条扫描各 1 处调用（共 3 处），「清空 → 登记」顺序成立，且不允许塞回充电循环。
+    """
     code = strip_comments(be_raw)
-    charging = method_body(code, "private void doCharging(")
-    if charging is None:
-        return False
-    clear = charging.find("seenBlocks.clear();")
-    reg = charging.find("recordSeenSelf(level);")
-    if clear < 0 or reg < 0 or not (clear < reg):
-        return False
-    if code.count("recordSeenSelf(") != 2:   # 定义 1 + doCharging 调用 1
+    if code.count("recordSeenSelf(") != 3:   # 定义 1 + 两条扫描各 1
         return False
     for hint in ("private int scanBlocks(", "private int scanBlocksInfinite("):
         body = method_body(code, hint)
-        if body is None or "recordSeenSelf(" in body:
+        if body is None or "if (start == 0)" not in body:
             return False
+        clear = body.find("seenBlocks.clear();")
+        reg = body.find("recordSeenSelf(level);")
+        if clear < 0 or reg < 0 or not (clear < reg):
+            return False
+        loop_at = body.find("if (pos.equals(worldPosition)) {")
+        if loop_at >= 0 and body.rfind("recordSeenSelf(level);") > loop_at:
+            return False          # 不许塞回充电循环（登记与「跳过自身」必须分离）
         if "pos.equals(worldPosition)" not in body:
             return False          # 「跳过自身充电」必须保留
         if "chargeBlock(level, pos, entry.getValue())" not in body:
@@ -298,14 +303,26 @@ def simulate_after_pure_budget(be_raw):
 
 
 def pool_reset_gated(be_raw):
-    """候选池每 tick 重建仍受「方块充电总闸」约束（展示层不额外发电 / 不刷包）。"""
+    """候选池重建仍受「方块充电总闸」约束（展示层不额外发电 / 不刷包）。
+
+    第 138 轮 B：清空动作在两条扫描的 `start == 0` 分支里（一轮完整轮转开始），
+    而扫描本身只在 `Config.rangeChargerChargeBlocks` 打开时由 doCharging 调用。
+    """
     code = strip_comments(be_raw)
     body = method_body(code, "private void doCharging(")
     if body is None:
         return False
-    return ("if (Config.rangeChargerChargeBlocks) {" in body
-            and "seenBlocks.clear();" in body
-            and body.find("if (Config.rangeChargerChargeBlocks) {") < body.find("seenBlocks.clear();"))
+    # 有限范围这一档必须「整块在总闸里」——不能用无限档的同名守卫冒充
+    gated = ("if (Config.rangeChargerChargeBlocks) {\n"
+             "            lastChargedTargets += scanBlocks(level);\n"
+             "        }") in body
+    if not gated:
+        return False
+    for hint in ("private int scanBlocks(", "private int scanBlocksInfinite("):
+        scan = method_body(code, hint)
+        if scan is None or "if (start == 0)" not in scan or "seenBlocks.clear();" not in scan:
+            return False
+    return True
 
 
 def pool_bounded(be_raw):
@@ -477,7 +494,7 @@ def group_anchors():
           candidate_deny_rule(be_raw))
     check("A-6 黑名单只影响展示：chargeBlock（真充电路径）里没有 isCandidateDenied",
           deny_list_only_in_display_path(be_raw))
-    check("A-7 自身登记在 doCharging（清空之后、扫描之前）；两条扫描只跳过自身、不登记自身",
+    check("A-7 自身登记在一轮完整轮转开始（start == 0）时、清空之后；充电循环只跳过自身、不登记自身",
           self_registered_outside_scan(be_raw))
     check("A-8 自身登记也走 recordSeenCandidate（同判据 + 同黑名单）",
           self_registration_uses_criterion(be_raw))
@@ -485,7 +502,7 @@ def group_anchors():
           full_check_uses_simulate(be_raw))
     check("A-10 R-1：先 transferBudget()（纯函数）再判满；预算为 0 提前退出；真收仍在最后",
           simulate_after_pure_budget(be_raw))
-    check("A-11 候选池仍受方块充电总闸闸门（doCharging 里 clear 在 if(Config.rangeChargerChargeBlocks) 内）",
+    check("A-11 候选池重建仍受方块充电总闸闸门（只在总闸打开时调扫描；扫描在 start == 0 时才清空）",
           pool_reset_gated(be_raw))
     check("A-12 候选池仍有界：addBounded + MAX_BLOCK_ENTRIES（上限/语义都没被绕过）",
           pool_bounded(be_raw)
@@ -609,17 +626,17 @@ def group_counterexamples():
 
     # A-7：把「自身登记」删掉（退回 3-3 的旧行为）⇒ 判负
     broken = be_raw.replace("            recordSeenSelf(level);\n", "", 1)
-    counterexample("C-3 删掉 doCharging 里的 recordSeenSelf ⇒ A-7 判负（自家方块又进不了候选池）",
+    counterexample("C-3 删掉扫描里的 recordSeenSelf ⇒ A-7 判负（自家方块又进不了候选池）",
                    broken != be_raw and not self_registered_outside_scan(broken))
 
     # A-7：把登记塞回扫描循环里（登记与「跳过自身」重新耦合）⇒ 判负
     broken = be_raw.replace(
         "            recordSeenSelf(level);\n", "", 1).replace(
-        "                    if (pos.equals(worldPosition)) {\n"
-        "                        // 跳过自身：绝不给自己充电。",
-        "                    if (pos.equals(worldPosition)) {\n"
-        "                        recordSeenSelf(level);\n"
-        "                        // 跳过自身：绝不给自己充电。", 1)
+        "                if (pos.equals(worldPosition)) {\n"
+        "                    // 跳过自身：绝不给自己充电。",
+        "                if (pos.equals(worldPosition)) {\n"
+        "                    recordSeenSelf(level);\n"
+        "                    // 跳过自身：绝不给自己充电。", 1)
     counterexample("C-4 把自身登记塞回扫描循环（登记与跳过耦合）⇒ A-7 判负",
                    broken != be_raw and not self_registered_outside_scan(broken))
 
@@ -650,11 +667,13 @@ def group_counterexamples():
     counterexample("C-8 删掉方块页「空图标不放行」防御 ⇒ A-14 判负（没有方块物品的方块会画错/画空）",
                    broken != screen_raw and not screen_icon_defense(broken))
 
-    # A-11：候选池重建不再受总闸约束（每 tick 无条件 clear）⇒ 判负
+    # A-11：把方块扫描从总闸里拿出去（每 tick 无条件调 scanBlocks）⇒ 判负
     broken = be_raw.replace(
-        "        if (Config.rangeChargerChargeBlocks) {\n            seenBlocks.clear();",
-        "        seenBlocks.clear();\n        if (Config.rangeChargerChargeBlocks) {", 1)
-    counterexample("C-9 候选池重建不再受方块充电总闸约束 ⇒ A-11 判负",
+        "        if (Config.rangeChargerChargeBlocks) {\n"
+        "            lastChargedTargets += scanBlocks(level);\n"
+        "        }",
+        "        lastChargedTargets += scanBlocks(level);", 1)
+    counterexample("C-9 方块扫描不再受方块充电总闸约束（每 tick 无条件调）⇒ A-11 判负",
                    broken != be_raw and not pool_reset_gated(broken))
 
     # ---- 模型反例 ----

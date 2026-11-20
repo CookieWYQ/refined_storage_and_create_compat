@@ -8,6 +8,7 @@ import cretae.cookiewyq.rs_create_compat.support.ChargerKnownPlayers;
 import cretae.cookiewyq.rs_create_compat.support.ChargingFilter;
 import cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug;
 import cretae.cookiewyq.rs_create_compat.support.RsccRateLimiter;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -63,6 +64,21 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
     private static final int KIND_CREATIVE_RANGE = 3;
     /** 无限范围（creative）时，扫描覆盖每个在线玩家已加载的区块半径（chunk 数）。 */
     private static final int INFINITE_CHUNK_RADIUS = 16;
+    /**
+     * 方块扫描「每 tick 区块预算」（第 138 轮 B）。
+     * <p>普通范围：单轴最多 250 格（100 + 6×25）⇒ 每轴至多 16 个区块、最多 256 个；预算 128 时
+     * 大范围分两 tick 扫完，默认 50 / 100 格（16 / 64 个区块）与旧行为逐 tick 等价。
+     */
+    private static final int MAX_FINITE_SCAN_CHUNKS_PER_TICK = 128;
+    /**
+     * 无限范围（creative）每 tick 区块预算：总块数 = 在线玩家数 × 33×33。
+     * <p>旧实现每 tick 全量遍历（10 人 ≈ 1 万区块/台/tick）；现在分片轮转，覆盖一轮约需
+     * {@code ceil(总块数 / 256)} tick。该档是<b>创造升级专用</b>（非生存物品），
+     * 牺牲「每 tick 一次」换可控 TPS。
+     */
+    private static final int MAX_INFINITE_SCAN_CHUNKS_PER_TICK = 256;
+    /** 方块扫描轮转游标：记忆「上一 tick 扫到区块列表的哪个下标」，跨 tick 分片覆盖（第 138 轮 B）。 */
+    private int blockScanCursor;
     /**
      * 充电目标高亮的同步节拍（tick）：每 5 tick（0.25 秒）发一次「本 tick 真充了谁」的快照。
      * <p>只在<b>非空</b>时按节拍重发（让客户端续命）；从有到无时补发一条空快照清屏；
@@ -843,19 +859,11 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         }
         // 饰品槽（Curios）这一档按节流周期走一次（背包族仍然每 tick，见 nextCuriosPass 的说明）。
         final boolean curiosPass = nextCuriosPass();
-        // 第 110 轮：方块候选池每 tick 重建（只在方块充电总闸打开时）。
-        // 放在「电量 > 0」的守卫之后：机器没电时本 tick 根本不会扫方块，
-        // 此时清空会把界面上次看到的那批方块也抹掉（玩家会以为「范围内的方块忽然没了」）。
-        if (Config.rangeChargerChargeBlocks) {
-            seenBlocks.clear();
-            // 第 122 轮 3-3：本机自身先登记一次。
-            // <b>为什么必须在扫描之前、单独做</b>：两条扫描都有一个 `pos.equals(worldPosition)`
-            // 的 `continue`（绝不给自己充电），而候选登记原来只发生在 `chargeBlock` 里
-            // ⇒ 自家范围充电器永远进不了「世界中的方块」页（用户原话「我们模组中添加的
-            // 范围充电器嘛，你这里面怎么都没有」）。把「登记」放在「跳过充电」之前，
-            // 两个动作从此分离：自身 = 候选但非目标；别的方块 = 既候选又可能是目标。
-            recordSeenSelf(level);
-        }
+        // 第 110 轮：方块候选池只在方块充电总闸打开时维护。
+        // 第 138 轮 B：清空 + 自身登记已收口到两条方块扫描里 —— 只有在「一轮完整轮转开始」时
+        // 才清空并登记自身（分片扫描不能每 tick 清，否则候选池只剩本 tick 的碎片）。
+        // 放在「电量 > 0」的守卫之后：机器没电时本 tick 根本不会扫方块，此时保留上次内容，
+        // 玩家不会以为「范围内的方块忽然没了」。
         // <b>2026-10-17 修「充电对象只剩 1 个、而且正好是 RS 控制器」</b>：
         // 三档共用同一罐电量，旧顺序是「方块 → 掉落物 → 玩家」。而 RS 控制器这类方块是
         // <b>永远充不满</b>的：它的能量存储就是整张 RS 网络的能量池，而本机节点
@@ -1047,51 +1055,74 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         return targets;
     }
 
-    /** 无限范围：遍历所有在线玩家所在区块（及其四周已加载区块）内的方块实体充电。 */
+    /**
+     * 无限范围：遍历所有在线玩家周围已加载区块内的方块实体充电。
+     *
+     * <p><b>第 138 轮 B（性能 + 安全读）</b>：
+     * <ul>
+     *     <li>区块总数 = 在线玩家数 × 33×33，旧实现<b>每 tick 全量</b>遍历（10 人 ≈ 1 万区块/台/tick）。
+     *     现在按 {@link #MAX_INFINITE_SCAN_CHUNKS_PER_TICK} 的<b>每 tick 区块预算</b>轮转
+     *     （{@link #blockScanCursor} 跨 tick 记忆位置），几 tick 覆盖完整范围；</li>
+     *     <li>读区块改走 {@link SafeChunkRead#chunkNow}：只处理已到 FULL 的区块，
+     *     <b>不加载、不在主线程等区块生成</b>（旧写法 {@code isLoaded + getChunk} 挡不住
+     *     「在流水线里但没到 FULL」的区块，会在登录/区块加载窗口把 tick 拖慢）。</li>
+     * </ul>
+     * <p>代价：单目标的 FE/t 约为「每 tick 一次」的 {@code 1 / ceil(总区块数 / 预算)}。
+     * 这一档是<b>创造升级专用</b>（{@code creative_range_upgrade}，创造模式物品），
+     * 不参与生存经济，取舍可接受。
+     */
     private int scanBlocksInfinite(final Level level) {
         if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)) {
             return 0;
         }
+        final java.util.List<net.minecraft.server.level.ServerPlayer> players = serverLevel.players();
+        if (players.isEmpty()) {
+            return 0;
+        }
+        final int side = INFINITE_CHUNK_RADIUS * 2 + 1;
+        final int perPlayer = side * side;
+        final int total = players.size() * perPlayer;
+        final int budget = Math.min(total, MAX_INFINITE_SCAN_CHUNKS_PER_TICK);
+        final int start = blockScanCursor % total;
+        if (start == 0) {
+            // 一轮完整轮转开始：候选池按「完整一轮」口径重建（分片扫描不能每 tick 清）
+            seenBlocks.clear();
+            recordSeenSelf(level);
+        }
         final java.util.Set<Long> visited = new java.util.HashSet<>();
         int targets = 0;
-        for (final net.minecraft.world.entity.player.Player player : serverLevel.players()) {
-            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                break;
-            }
+        outer:
+        for (int i = 0; i < budget; i++) {
+            final int index = (start + i) % total;
+            final net.minecraft.world.entity.player.Player player = players.get(index / perPlayer);
+            final int offset = index % perPlayer;
             final net.minecraft.core.SectionPos center = net.minecraft.core.SectionPos.of(player.blockPosition());
-            for (int dx = -INFINITE_CHUNK_RADIUS; dx <= INFINITE_CHUNK_RADIUS; dx++) {
-                for (int dz = -INFINITE_CHUNK_RADIUS; dz <= INFINITE_CHUNK_RADIUS; dz++) {
-                    if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                        return targets;
-                    }
-                    final int cx = center.x() + dx;
-                    final int cz = center.z() + dz;
-                    final long key = (long) cx << 32 | (cz & 0xFFFFFFFFL);
-                    if (!visited.add(key)) {
-                        continue;
-                    }
-                    // 仅处理已加载区块，绝不主动加载新区块
-                    if (!serverLevel.isLoaded(new BlockPos(cx * 16, 0, cz * 16))) {
-                        continue;
-                    }
-                    final net.minecraft.world.level.chunk.LevelChunk chunk = serverLevel.getChunk(cx, cz);
-                    for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                        if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                            return targets;
-                        }
-                        final BlockPos pos = entry.getKey();
-                        if (pos.equals(worldPosition)) {
-                            // 绝不给自己充电。自身进候选池是另一件事，已在扫描之前由
-                            // recordSeenSelf 单独登记（第 122 轮 3-3，见 doCharging）。
-                            continue;
-                        }
-                        if (chargeBlock(level, pos, entry.getValue())) {
-                            targets++;
-                        }
-                    }
+            final int cx = center.x() + offset / side - INFINITE_CHUNK_RADIUS;
+            final int cz = center.z() + offset % side - INFINITE_CHUNK_RADIUS;
+            final long key = (long) cx << 32 | (cz & 0xFFFFFFFFL);
+            if (!visited.add(key)) {
+                continue;
+            }
+            final net.minecraft.world.level.chunk.LevelChunk chunk =
+                SafeChunkRead.chunkNow(serverLevel, new BlockPos(cx * 16, 0, cz * 16));
+            if (chunk == null) {
+                continue;
+            }
+            for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                    break outer;
+                }
+                final BlockPos pos = entry.getKey();
+                if (pos.equals(worldPosition)) {
+                    // 绝不给自己充电。自身进候选池是另一件事，已在扫描之前由 recordSeenSelf 单独登记。
+                    continue;
+                }
+                if (chargeBlock(level, pos, entry.getValue())) {
+                    targets++;
                 }
             }
         }
+        blockScanCursor = (start + budget) % total;
         return targets;
     }
 
@@ -1234,8 +1265,17 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
 
     /**
      * 扫描范围内所有已加载方块实体并充电。
-     * 遍历范围内已加载的 chunk（LevelChunk.getBlockEntities() 返回 Map<BlockPos, BlockEntity>），
-     * 每 tick 全量给最多 maxTargets 个目标充电 —— 解决分片扫描导致方块充电过慢的问题。
+     * 遍历范围内已加载的 chunk（LevelChunk.getBlockEntities() 返回 Map&lt;BlockPos, BlockEntity&gt;）。
+     *
+     * <p><b>第 138 轮 B（性能 + 安全读）</b>：
+     * <ul>
+     *     <li>每 tick 最多扫 {@link #MAX_FINITE_SCAN_CHUNKS_PER_TICK} 个区块，超出部分用
+     *     {@link #blockScanCursor} 轮转到下一 tick —— 默认 50 / 100 格范围（16 / 64 个区块）与旧行为
+     *     逐 tick 等价，只有「叠满范围升级」的大范围才会分片；</li>
+     *     <li>读区块改走 {@link SafeChunkRead#chunkNow}：只处理已到 FULL 的区块，
+     *     <b>不加载、不在主线程等区块生成</b>（旧写法 {@code isLoaded + getChunk} 挡不住
+     *     「在流水线里但没到 FULL」的区块）。</li>
+     * </ul>
      */
     private int scanBlocks(final Level level) {
         final int halfX = rangeX / 2;
@@ -1252,40 +1292,57 @@ public class RangeChargerBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         final int maxChunkX = maxX >> 4;
         final int minChunkZ = minZ >> 4;
         final int maxChunkZ = maxZ >> 4;
-
+        final int width = maxChunkX - minChunkX + 1;
+        final int depth = maxChunkZ - minChunkZ + 1;
+        if (width <= 0 || depth <= 0) {
+            return 0;
+        }
+        final int total = width * depth;
+        final int budget = Math.min(total, MAX_FINITE_SCAN_CHUNKS_PER_TICK);
+        final int start = blockScanCursor % total;
+        if (start == 0) {
+            // 一轮完整轮转开始：候选池按「完整一轮」口径重建（分片扫描不能每 tick 清）
+            seenBlocks.clear();
+            recordSeenSelf(level);
+        }
         int targets = 0;
-        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
-            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+        outer:
+        for (int i = 0; i < budget; i++) {
+            if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
+                break;
+            }
+            final int index = (start + i) % total;
+            final int chunkX = minChunkX + index % width;
+            final int chunkZ = minChunkZ + index / width;
+            final net.minecraft.world.level.chunk.LevelChunk chunk =
+                SafeChunkRead.chunkNow(level, new BlockPos(chunkX * 16, worldPosition.getY(), chunkZ * 16));
+            if (chunk == null) {
+                continue;
+            }
+            for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
                 if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                    return targets;
+                    break outer;
                 }
-                // 仅处理已加载的 chunk，避免触发区块加载
-                if (!level.isLoaded(new BlockPos(chunkX * 16, worldPosition.getY(), chunkZ * 16))) {
+                final BlockPos pos = entry.getKey();
+                if (pos.getX() < minX || pos.getX() > maxX
+                    || pos.getY() < minY || pos.getY() > maxY
+                    || pos.getZ() < minZ || pos.getZ() > maxZ) {
                     continue;
                 }
-                final var chunk = level.getChunk(chunkX, chunkZ);
-                for (final java.util.Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                    if (targets >= Config.rangeChargerMaxTargets || energyStorage.getEnergyStored() <= 0) {
-                        return targets;
-                    }
-                    final BlockPos pos = entry.getKey();
-                    if (pos.getX() < minX || pos.getX() > maxX
-                        || pos.getY() < minY || pos.getY() > maxY
-                        || pos.getZ() < minZ || pos.getZ() > maxZ) {
-                        continue;
-                    }
-                    if (pos.equals(worldPosition)) {
-                        // 跳过自身：绝不给自己充电。自身进候选池由 doCharging 里的
-                        // recordSeenSelf 单独登记（第 122 轮 3-3）—— 登记与充电必须分离，
-                        // 否则「先跳过自身」会让自家方块永远进不了「世界中的方块」页。
-                        continue;
-                    }
-                    if (chargeBlock(level, pos, entry.getValue())) {
-                        targets++;
-                    }
+                if (pos.equals(worldPosition)) {
+                    // 跳过自身：绝不给自己充电。自身进候选池由扫描开始时的 recordSeenSelf 单独登记
+                    // （第 122 轮 3-3）—— 登记与充电必须分离，否则「先跳过自身」会让自家方块
+                    // 永远进不了「世界中的方块」页。
+                    continue;
+                }
+                if (chargeBlock(level, pos, entry.getValue())) {
+                    targets++;
                 }
             }
         }
+        // 本 tick 的窗口消费完就前移（即使中途因目标数/电量提前退出，也跳过本窗口剩余区块，
+        // 下一 tick 从窗口末尾继续 —— 否则「每 tick 都在前几个区块达到上限」会把后面的区块饿死）
+        blockScanCursor = (start + budget) % total;
         return targets;
     }
 

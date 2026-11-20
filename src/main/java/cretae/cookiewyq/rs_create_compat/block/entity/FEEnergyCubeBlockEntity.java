@@ -11,6 +11,7 @@ import cretae.cookiewyq.rs_create_compat.block.FEEnergyCubeBlock;
 import cretae.cookiewyq.rs_create_compat.network.FEEnergyCubeNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.EnergyCubeCluster;
 import cretae.cookiewyq.rs_create_compat.support.EnergyCubeNetworkRegistry;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -699,14 +700,16 @@ public class FEEnergyCubeBlockEntity extends AbstractBaseNetworkNodeContainerBlo
         int total = 0;
         for (final Direction direction : Direction.values()) {
             final BlockPos target = worldPosition.relative(direction);
-            if (!level.isLoaded(target)) {
+            // 第 138 轮：只读已 FULL 区块（isLoaded 挡不住加载中的区块，getBlockState 会同步等生成）
+            final BlockState targetState = SafeChunkRead.blockStateNow(level, target);
+            if (targetState == null) {
                 continue;
             }
             // 不推给别的能量立方：集群内部已共享容量，相邻互推只会来回倒电（见方法注释）。
-            if (level.getBlockState(target).getBlock() instanceof FEEnergyCubeBlock) {
+            if (targetState.getBlock() instanceof FEEnergyCubeBlock) {
                 continue;
             }
-            final BlockEntity neighbour = level.getBlockEntity(target);
+            final BlockEntity neighbour = SafeChunkRead.blockEntityNow(level, target);
             if (neighbour == null) {
                 continue;
             }

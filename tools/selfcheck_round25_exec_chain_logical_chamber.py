@@ -212,7 +212,7 @@ check("锚点①: 链成员必然 6 向相邻（链指向就是方块朝向，fa
       " ⇒ 它们必然落在同一个机器集群里",
       "return chamberAt(worldPosition.relative(chainFace()));" in chamber
       and "final BlockPos neighbor = cell.relative(direction);" in cluster
-      and "sameFamily(level.getBlockState(neighbor).getBlock(), originBlock)" in cluster)
+      and "sameFamily(neighborState.getBlock(), originBlock)" in cluster)
 check("锚点②: 集群把「容量叠加 + 内容共享」实现为**同一份存储对象**（全体成员采纳同一份；只有主控落盘）",
       "4) 全部成员采纳同一份共享存储；只有主控承担落盘" in cluster
       and "m.rscc$clusterAdopt(shared);" in cluster

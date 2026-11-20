@@ -314,9 +314,16 @@ def be_problems(src):
         p.append("be-seenblocks-wrong-cap")
     if "BuiltInRegistries.BLOCK" not in rb or ".getKey(" not in rb:
         p.append("be-seenblocks-not-block-registry")
+    # 第 138 轮 B：候选池改为「一轮完整轮转开始时（start == 0）清空 + 登记自身」——
+    # 分片扫描不能每 tick 清，否则界面只剩本 tick 的碎片；扫描本身仍只在方块充电总闸打开时被调用。
     df = body_of(be, "private void doCharging(")
-    if "if (Config.rangeChargerChargeBlocks) {\n            seenBlocks.clear();" not in df:
-        p.append("be-seenblocks-reset-not-gated")
+    if "scanBlocks(level)" not in df or "Config.rangeChargerChargeBlocks" not in df:
+        p.append("be-seenblocks-scan-not-gated")
+    for scan_sig in ("private int scanBlocks(", "private int scanBlocksInfinite("):
+        scan_body = body_of(be, scan_sig)
+        if ("if (start == 0)" not in scan_body or "seenBlocks.clear();" not in scan_body
+                or "recordSeenSelf(level);" not in scan_body):
+            p.append("be-seenblocks-reset-not-at-sweep-start:" + scan_sig)
     # 两类扫描仍真的走 chargeBlock（方块充电功能不许被这轮改动碰掉）
     if "chargeBlock(level, pos, entry.getValue())" not in body_of(be, "private int scanBlocks("):
         p.append("be-scanblocks-lost")

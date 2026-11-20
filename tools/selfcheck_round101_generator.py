@@ -1050,7 +1050,10 @@ def audit_sources(sources: dict[str, str]) -> list[str]:
     push_body = body_after(be, r"private int pushToNeighbours\(\)", 2400)
     expect("D27 六面都推送（Direction.values()）", "Direction.values()" in push_body)
     expect("D28 推送受配置限速", "Config.decompositionGeneratorPushPerTick" in push_body)
-    expect("D29 推送前不加载区块（isLoaded 守卫）", "level.isLoaded(target)" in push_body)
+    expect("D29 推送前不加载区块（第 138 轮：SafeChunkRead 安全读，绝不阻塞）",
+           "SafeChunkRead.blockEntityNow(level, target)" in push_body
+           and "level.isLoaded(target)" not in push_body
+           and "level.getBlockEntity(target)" not in push_body)
     expect("D30 推送先 simulate 再真收（不丢电）",
            "receiveEnergy(offer, true)" in push_body and "receiveEnergy(taken, false)" in push_body)
     expect("D56 每 tick 只推一轮（pushToNeighbours 只被调用一次）",
@@ -1191,8 +1194,9 @@ counterexample("CE09 菜单里按 256 循环 addSlot（历史断线根因）", "
 counterexample("CE10 客户端镜像不再与服务端同判据（shift 点击预测分叉）", "menu",
                "machineHandler = this.clientInventoryMirror;",
                "machineHandler = new ItemStackHandler(DecompositionGeneratorSpec.INVENTORY_SIZE);")
-counterexample("CE11 推送不加载区块守卫（会触发区块加载）", "be",
-               "if (!level.isLoaded(target)) {\n                continue;\n            }", "")
+counterexample("CE11 推送改成阻塞读（会同步等区块生成）", "be",
+               "final BlockEntity neighbour = SafeChunkRead.blockEntityNow(level, target);",
+               "final BlockEntity neighbour = level.getBlockEntity(target);")
 counterexample("CE12 推送不按配置限速", "be",
                "final int limit = Math.max(1, Config.decompositionGeneratorPushPerTick);",
                "final int limit = Integer.MAX_VALUE;")

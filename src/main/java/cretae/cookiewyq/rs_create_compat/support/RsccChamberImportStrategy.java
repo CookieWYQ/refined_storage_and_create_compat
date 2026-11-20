@@ -1575,10 +1575,8 @@ public final class RsccChamberImportStrategy implements ImporterTransferStrategy
      */
     @org.jetbrains.annotations.Nullable
     public static IItemHandler itemHandlerAt(final Level level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return null;
-        }
-        final BlockEntity blockEntity = level.getBlockEntity(pos);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, pos);
         if (blockEntity == null) {
             return null;
         }
@@ -1606,10 +1604,8 @@ public final class RsccChamberImportStrategy implements ImporterTransferStrategy
      */
     @org.jetbrains.annotations.Nullable
     public static IFluidHandler fluidHandlerAt(final Level level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return null;
-        }
-        final BlockEntity blockEntity = level.getBlockEntity(pos);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, pos);
         if (blockEntity == null) {
             return null;
         }

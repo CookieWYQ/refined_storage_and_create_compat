@@ -20,7 +20,8 @@ R2（本轮的改动）：把它扩成**三档**，第三档 MACHINES = 按机�
   ① 三档都在源码里成立（档位 / 指令 / 执行舱请求量 / 语言键 / 诊断）；
   ② **默认档（off）的请求量公式与改动前逐字一致**（对整张取值网格做等价性反例）；
   ③ **MACHINES 档的请求量恒 ≤ 缺口、≤ 机器台数、≤ 在制名额**，因此它不可能让开件数超过名额上限
-     （名额闸门 `startCapacityForRecipe` / `blockedByMachineQueue` 一个字都没改）。
+     （名额闸门 `startCapacityForRecipe` / `blockedByMachineQueue` 的结构与调用点未变；
+     名额公式在 2026-11-08 改成「R − 在制、与 p 无关」，见下方 ④）。
 
 「机器台数」的口径（本脚本同时钉住）：`supplyStations(level).size()` ——
 把相连输出总线朝向的供料目标按**物理工位**归并后的台数（「置物台 + 对着它的机械手」算一台）。
@@ -356,14 +357,16 @@ check("③g 不变量（整张网格）：machines 档的请求量恒 ≤ 缺口
       "≤ max(1, min(台数, 名额)) —— 因此它既不会过料，也不可能顶破名额", not BOUND,
       "violations=%s" % BOUND[:3])
 
-# ============================================================ ④ 名额闸门一字未改
-section("④) 名额 / 共享机器排队闸门：一个字都没改（第三档不可能把它们弄坏）")
+# ============================================================ ④ 名额闸门结构未变
+section("④) 名额 / 共享机器排队闸门：结构未变（第三档不可能把它们弄坏）")
 
 has(chamber, "private long startCapacityForRecipe(final String recipeId) {",
-    "锚点: 开工名额的唯一实现仍在（必得严格 R − 在制；非必得 ceil(R/p) − 在制）")
-has(chamber, "allowed = (long) Math.ceil(remaining / (double) p);",
-    "锚点: 非必得的动态放大一字未改")
-has(chamber, "capacity = allowed - inFlight;", "锚点: 名额 = 允许在制 − 跨舱在制件（口径未换）")
+    "锚点: 开工名额的唯一实现仍在（2026-11-08 起必得 / 非必得同一公式 R − 在制）")
+has(chamber, "final long allowed = remaining;",
+    "锚点: 名额预算 = 订单剩余量 R（不再按期望轮次 ceil(R/p) 预开）")
+check("锚点: 旧口径「按期望轮次预开名额 ceil(R/p)」已从源码彻底移除（反例检测器）",
+      "Math.ceil(remaining" not in chamber)
+has(chamber, "capacity = allowed - inFlight;", "锚点: 名额 = 允许在制 − 跨舱在制件（公式未换）")
 has(chamber, "private boolean blockedByMachineQueue(final BusCategoryInfo info) {",
     "锚点: 共享机器排队的唯一实现仍在")
 check("锚点: 备料侧与推料侧仍然共用同一道排队闸门（调用点各一处）",
@@ -376,14 +379,17 @@ check("锚点: 请求量只被用在两处 ensureTask 上（物品侧 / 流体�
 
 
 def start_capacity(remaining, guaranteed, p, inflight):
-    """复刻 startCapacityForRecipe（第 26/27 轮修正后的源码，逐字对应）。"""
+    """复刻 startCapacityForRecipe（2026-11-08 用户口径改定后，逐字对应）。
+
+    必得 / 非必得**同一个公式**：名额 = R − inflight，**与主产物概率 p 无关**（p 只进诊断）。
+    -2（读得到、但没有需求）⇒ 0；-1（判不出来）⇒ 保守放 1 件。
+    旧的 `ceil(R/p)` 期望值预开已被删除；失败一件 ⇒ inflight 减 1 ⇒ 名额回 1 ⇒ 按需补发。
+    """
     if remaining == -2:
         return 0
     if remaining < 0:
         return 1 if inflight <= 0 else 0
     allowed = remaining
-    if not guaranteed and isinstance(p, float) and 0.0 < p < 1.0:
-        allowed = int(math.ceil(remaining / p))
     return max(0, allowed - inflight)
 
 
@@ -404,12 +410,19 @@ check("④a 下单 1 件（必得配方）+ 3 台机器：第三档只请求 1 �
       "而同一份现场下「按缺口要足」会请求 64 份 —— 这正是用户说的「过料」",
       request_amount(64, False, "machines", 1, 3) == 1
       and request_amount(64, False, "gap", 1, 3) == 64)
-check("④b 第三档请求量 ≤ 在制名额上限（必得配方：≤ R − 在制；非必得：≤ ceil(R/p) − 在制）："
-      "「订单 64 / 5 台 / 缺口 64」⇒ 请求 5，名额上限 80 ⇒ 5 ≤ 80",
+check("④b 第三档请求量 ≤ 在制名额上限（2026-11-08 起名额 = R − 在制，必得 / 非必得同一公式）："
+      "「订单 64 / 5 台 / 缺口 64」⇒ 请求 5，名额上限 64 ⇒ 5 ≤ 64",
       request_amount(64, False, "machines", 64, 5) == 5
-      and start_capacity(64, False, 0.8, 0) == 80)
+      and start_capacity(64, False, 0.8, 0) == 64)
 check("④c 名额读不出来（remaining=-1）时名额仍走原有保守下限（无在制 1 件 / 有在制 0 件）——第三档没有动它",
       start_capacity(-1, True, 1.0, 0) == 1 and start_capacity(-1, True, 1.0, 1) == 0)
+check("④d【2026-11-08 新增】名额与主产物概率无关：p ∈ {1.0, 0.8, 0.5, 0.1} 在 R=20、"
+      "在制 0/19/20 上的结果逐字相同（旧口径按 ceil(R/p) 放大，已被删除）",
+      all(start_capacity(20, p >= 1.0, p, i) == 20 - i
+          for p in (1.0, 0.8, 0.5, 0.1) for i in (0, 19, 20)))
+check("④e【2026-11-08 新增】失败一件才补一件：R=20、在制 20 ⇒ 名额 0；模拟一件失败（在制 19）"
+      "⇒ 名额 1（按需补发，绝不提前预开）",
+      start_capacity(20, False, 0.8, 20) == 0 and start_capacity(20, False, 0.8, 19) == 1)
 
 # ============================================================ ⑤ 默认值未变（旧存档兼容模型）
 section("⑤) 默认值未变的证据：旧存档读进来的档位与它保存那一刻一致（绝不会自己跳成 machines）")

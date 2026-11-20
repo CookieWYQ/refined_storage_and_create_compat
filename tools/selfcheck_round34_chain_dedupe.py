@@ -282,8 +282,10 @@ def main():
     #    2026-10-11（round60）更新：断言改成新判据（只看「≥2 条链」），并按**代码**（去注释）比对 ——
     #    `ambiguous()` 的 javadoc 里刻意保留了旧判据的原文作为历史说明，那不算实现。
     ambiguous_java = strip_comments(body(linksearch, "public boolean ambiguous() {", "}"))
-    check("⑪ Java 判据与模型同源（round60 更新）：ambiguous() = 「≥2 条链」（不再含「未穷尽」这一项）",
-          "return reachable.size() >= 2;" in ambiguous_java
+    # 第 135 轮追加：串线（同一台执行舱的尾部与侧面/箭头面同时接线）也判未确定 ⇒ 判据多了 crossTalk 一项。
+    check("⑪ Java 判据与模型同源（round60 + round135）：ambiguous() = 「≥2 条链」或「串线」",
+          "return reachable.size() >= 2" in ambiguous_java
+          and "crossTalk" in ambiguous_java
           and "exhaustive" not in ambiguous_java)
     check("⑫ 两个 Mixin 仍以 reachableCount() == 1 作为「唯一归属」闸门（去重后 = 恰好一条链）",
           "rscc$linkedPosCache = rscc$forceNormalBus || report.disabled() || report.reachableCount() != 1"

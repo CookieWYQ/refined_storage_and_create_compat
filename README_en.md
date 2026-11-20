@@ -8,7 +8,7 @@
 | NeoForge | 21.1.248 (range `[21,)`) |
 | Create | 6.0.10-280 (range `[6.0,)`) |
 | Refined Storage 2 | 2.0.9 (range `[2.0.0,3.0.0)`) |
-| Mod version | 1.2.0-beta.29 (development build; the latest stable release is `1.1.0`) |
+| Mod version | 1.2.0-beta.39 (development build; the latest stable release is `1.1.0`) |
 | Mod ID | `rs_create_compat` |
 | Author | CallMeACookieWYQ |
 | License | All Rights Reserved |

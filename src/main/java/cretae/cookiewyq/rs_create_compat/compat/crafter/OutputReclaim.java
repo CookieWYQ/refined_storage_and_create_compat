@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.compat.crafter;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import com.refinedmods.refinedstorage.api.network.Network;
 import com.refinedmods.refinedstorage.common.autocrafting.autocrafter.AutocrafterBlockEntity;
@@ -167,10 +168,8 @@ public final class OutputReclaim {
 
     @Nullable
     private static Network networkOf(final ServerLevel level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return null;
-        }
-        final BlockEntity blockEntity = level.getBlockEntity(pos);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, pos);
         return blockEntity == null ? null : BlockContentReleaser.networkOf(blockEntity);
     }
 

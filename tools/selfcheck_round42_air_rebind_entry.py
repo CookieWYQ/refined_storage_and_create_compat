@@ -252,8 +252,10 @@ def main():
     section("T5 没有目标方块后：网络取自「玩家身边最近的、已接入网络的执行舱」")
     nearby = body(rebind, "private static Network nearbyNetwork(final ServerPlayer player) {",
                   "/** 两坐标之间的欧氏距离平方")
-    check("锚点① 只读扫描已加载区块，绝不因取网络而加载区块",
-          "level.isLoaded(pos)" in nearby
+    check("锚点① 只读已 FULL 区块（第 138 轮 SafeChunkRead），绝不因取网络而加载区块",
+          "SafeChunkRead.blockStateNow(level, pos)" in nearby
+          and "SafeChunkRead.blockEntityNow(level, pos)" in nearby
+          and "level.isLoaded(pos)" not in nearby
           and "player.serverLevel()" in nearby
           and "private static final int NEARBY_RADIUS = 8;" in rebind)
     check("锚点② 结果确定：先按距离平方、再按坐标字典序排序",

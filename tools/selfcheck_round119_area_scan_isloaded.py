@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""第 119 轮自检：区域扫描的流体探测先判「区块已加载」（审计 C-6）。
+"""第 119 轮自检（第 138 轮升级）：区域扫描的流体探测「绝不加载区块」。
 
 背景
 ----
 高级归流缓存仓的「区域」来源每 tick 会扫描区域内的坐标：
 `AdvancedCollectionCacheBlockEntity.AreaCursor.scanFluidWindow` → `isSource.test(pos)`
-→ `CollectionCacheBlockEntity#fluidSourceIdAt(level, pos)` → **第一行就是 `level.getBlockState(pos)`**。
+→ `CollectionCacheBlockEntity#fluidSourceIdAt(level, pos)`。
 
-而 `Level#getBlockState` 对**未加载**区块会触发**同步区块加载**（本工程
-`support/SeparationFrameGuard` 里早有同样的注释警告）。玩家离开基地、区块被卸载后，
-只要机器还在跑（区块加载器 / 玩家偶尔靠近 / 传送门），每 tick 上千次查询就会反复拉区块，
-表现为服务器 tick 时间上升、偶发卡顿 —— 没有异常、没有日志，最容易被误判成「模组有性能问题」。
-
-修法：`fluidSourceIdAt` 开头先 `if (!level.isLoaded(pos)) return null;`。
-「未加载」⇒ 当作「这里没有流体」是安全的：区块重新加载后下一轮扫描会正常看到它，
-不丢任何资源（该函数是**只读探测**，不写世界）。
+- **第 119 轮**：第一行是 `level.getBlockState(pos)` ⇒ 对未加载区块会**同步加载**区块。
+  当时的修法是 `if (!level.isLoaded(pos)) return null;` 先挡一道。
+- **第 138 轮升级**：`isLoaded` 判断的是「chunk holder 存在」，对**正在加载流水线里、但还没到 FULL**
+  的区块同样返回 `true`，紧跟其后的 `getBlockState` 仍会在主线程同步等区块生成。
+  因此改成 `SafeChunkRead.blockStateNow(level, pos)`：**只读已到 FULL 的区块**，
+  不加载、不加票据、不阻塞；未就绪返回 `null`（当作「这里没有流体」，只读探测，不丢资源）。
 
 本脚本三条腿
 ------------
-① 源码锚点：`isLoaded` 判断在 `getBlockState` **之前**（顺序断言，不是「文件里出现过就算」）；
+① 源码锚点：`fluidSourceIdAt` 用 `SafeChunkRead.blockStateNow`，且**不再**出现
+   `level.isLoaded` / `level.getBlockState` / `getChunkAt`；`null` 分支在安全读之后（顺序断言）；
 ② 范围锚点：区域扫描的调用链（`AreaCursor` → `isSource`）确实走这个函数，
-   且该方法本身是只读的（不 setBlock / 不抽取 —— 证明「未加载返回 null」不会丢资源）；
-③ 反例自证：把旧的「直接 getBlockState」写法拼回去，断言判据真的判负。
+   且该方法本身是只读的（不 setBlock / 不抽取 —— 证明「未就绪返回 null」不会丢资源）；
+③ 反例自证：①旧的「直接 getBlockState」写法、②**第 119 轮的 isLoaded 闸门写法**（本轮起也不合格）、
+   ③安全读但没判 null —— 三种都必须判负（第②条正是本轮升级的理由）。
 
 用法：python tools/selfcheck_round119_area_scan_isloaded.py
 退出码：0 = 全部通过。
@@ -47,6 +47,8 @@ ADV_FILE = os.path.join(PKG, "block", "entity", "AdvancedCollectionCacheBlockEnt
 _passed = 0
 _failed = 0
 _failures = []
+
+UNSAFE = ("level.isLoaded(pos)", "level.getBlockState(pos)", "level.getChunkAt(")
 
 
 def check(name, ok, detail=""):
@@ -87,8 +89,25 @@ def method_body(text, signature):
     return ""
 
 
+def safe_guard(body):
+    """判据（正例 / 反例共用）：安全读 → null 判定 → return null；且不含任何阻塞读。
+
+    这是第 138 轮升级后的判据；第 119 轮那种 `isLoaded + getBlockState` 组合**不再算合格**。
+    """
+    safe_at = body.find("SafeChunkRead.blockStateNow(level, pos)")
+    if safe_at < 0:
+        return False
+    null_at = body.find("state == null", safe_at)
+    if null_at < 0:
+        return False
+    return_at = body.find("return null;", null_at)
+    if return_at < 0:
+        return False
+    return not any(unsafe in body for unsafe in UNSAFE)
+
+
 def group_anchors():
-    print("\n=== ① 源码锚点：isLoaded 必须在 getBlockState 之前 ===")
+    print("\n=== ① 源码锚点：只读已 FULL 区块（不加载 / 不阻塞） ===")
     check("①-1 CollectionCacheBlockEntity.java 存在", os.path.isfile(CACHE_FILE))
     if not os.path.isfile(CACHE_FILE):
         return
@@ -97,16 +116,15 @@ def group_anchors():
     check("①-2 能定位到 fluidSourceIdAt 方法体", bool(body))
     if not body:
         return
-    guard_at = body.find("!level.isLoaded(pos)")
-    state_at = body.find("level.getBlockState(pos)")
-    check("①-3 方法体里有 isLoaded 闸门", guard_at >= 0)
-    check("①-4 方法体里有 getBlockState", state_at >= 0)
-    check("①-5 闸门在 getBlockState **之前**（顺序断言；只要顺序反了就等于没修）",
-          0 <= guard_at < state_at, "guard_at=%d state_at=%d" % (guard_at, state_at))
-    check("①-6 未加载时返回 null（当作「没有流体」，不抛异常、不写世界）",
-          "return null;" in body[guard_at:state_at] if guard_at >= 0 and state_at >= 0 else False)
-    check("①-7 注释写清「getBlockState 会同步加载区块」这个机制（防止后人又删掉闸门）",
-          "同步加载" in body or "同步区块加载" in body)
+    check("①-3 方法体里有 SafeChunkRead.blockStateNow（安全读）",
+          "SafeChunkRead.blockStateNow(level, pos)" in body)
+    check("①-4 方法体里没有 level.isLoaded / level.getBlockState / getChunkAt（阻塞读）",
+          not any(unsafe in body for unsafe in UNSAFE),
+          "仍出现：%s" % [u for u in UNSAFE if u in body])
+    check("①-5 判据成立：安全读 → state == null → return null（顺序断言）", safe_guard(body))
+    check("①-6 注释写清「isLoaded 挡不住未 FULL 区块 / getBlockState 会同步等生成」的机制"
+          "（防止后人又换回旧写法）",
+          ("未 FULL" in body or "同步" in body or "不加载" in body))
 
     print("\n=== ② 范围锚点：区域扫描确实走这个函数，且该函数只读 ===")
     adv = read(ADV_FILE) if os.path.isfile(ADV_FILE) else ""
@@ -122,39 +140,40 @@ def group_anchors():
 
 
 def group_counterexample():
-    print("\n=== ③ 反例自证：旧写法必须判负 ===")
+    print("\n=== ③ 反例自证：三种旧写法都必须判负 ===")
     src = read(CACHE_FILE)
     body = method_body(src, "protected static ResourceLocation fluidSourceIdAt(")
     if not body:
-        check("③ 旧写法反例（无法定位方法体）", False)
+        check("③ 无法定位方法体", False)
         return
 
-    def has_guard(text):
-        guard_at = text.find("!level.isLoaded(pos)")
-        state_at = text.find("level.getBlockState(pos)")
-        return 0 <= guard_at < state_at
+    # ① 第 118 轮之前：直接 getBlockState
+    direct = (
+        "final BlockState state = level.getBlockState(pos);\n"
+        "        if (state.getProperties().size() != 1) {\n            return null;\n        }\n"
+    )
+    check("③-1 直接 getBlockState（旧写法）⇒ 判负", not safe_guard(direct))
 
-    old_body = (
-        body.replace("if (!level.isLoaded(pos)) {\n            return null;\n        }\n        ", "", 1)
+    # ② 第 119 轮的 isLoaded 闸门写法：对「加载中但未 FULL」区块仍然会阻塞 ⇒ 本轮起判负
+    old_guard = (
+        "if (!level.isLoaded(pos)) {\n            return null;\n        }\n"
+        "        final BlockState state = level.getBlockState(pos);\n"
     )
-    check("③-1 把闸门删掉的旧写法会被判负（判据不是摆设）", not has_guard(old_body))
-    check("③-2 当前写法被判正", has_guard(body))
-    # 顺序反例：把闸门挪到 getBlockState **语句之后**（从「已经删掉闸门」的副本出发，
-    # 否则原始闸门还在前面，反例会被原始闸门「救」成正例 —— 这一步自己就踩过一次）。
-    statement = "final BlockState state = level.getBlockState(pos);"
-    statement_at = old_body.find(statement)
-    moved = (
-        old_body[:statement_at + len(statement)]
-        + "\n        if (!level.isLoaded(pos)) { return null; }"
-        + old_body[statement_at + len(statement):]
+    check("③-2 第 119 轮的 isLoaded + getBlockState 写法 ⇒ 判负（这正是第 138 轮升级的理由）",
+          not safe_guard(old_guard))
+
+    # ③ 安全读但没判 null（未就绪时 NPE / 空指针风险）
+    no_null_check = (
+        "final BlockState state = SafeChunkRead.blockStateNow(level, pos);\n"
+        "        if (state.getProperties().size() != 1) {\n            return null;\n        }\n"
     )
-    check("③-3 闸门放在 getBlockState 语句之后会被判负（顺序判据有效）", not has_guard(moved),
-          "moved 的 guard/state 位置：guard=%d state=%d" % (
-              moved.find("!level.isLoaded(pos)"), moved.find("level.getBlockState(pos)")))
+    check("③-3 安全读但不判 null ⇒ 判负", not safe_guard(no_null_check))
+
+    check("③-4 当前写法被判正", safe_guard(body))
 
 
 def main():
-    print("第 119 轮自检：区域扫描流体探测的 isLoaded 闸门（审计 C-6）")
+    print("第 119 轮自检（第 138 轮升级）：区域扫描流体探测「绝不加载区块」")
     print("仓库：%s" % ROOT)
     group_anchors()
     group_counterexample()

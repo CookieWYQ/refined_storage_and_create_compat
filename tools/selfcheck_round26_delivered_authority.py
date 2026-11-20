@@ -31,9 +31,10 @@
 本脚本做四件事：
   ① 源码锚点：权威读数只有一份实现，且**旧口径（恒为 0 的那份）已经从执行舱里彻底消失**；
   ② 源码锚点：4 处 `Math.max` 下限逐个给出处理结论（改 0 / 保留 1 并说明为什么保留）；
-  ③ 源码锚点：非必得配方的动态放大（`ceil(R/p)`）**一字未改**，绝没有被这次修复收紧；
+  ③ 源码锚点：非必得配方**不再按期望轮次预开名额**（2026-11-08 用户口径）：名额 = R − 在制，
+     与 p 无关（p 只进诊断行）；旧 `ceil(R/p)` 已被删除，绝不重新引入；
   ④ 等价模型 + 反例表：把「旧口径 delivered ≡ 0」与「新口径」在**用户现场的那组数**上对拍，
-     并证明新口径下「开件总量 ≤ 订单量（非必得 ≤ ceil(R/p)）」。
+     并证明新口径下「开件总量 ≤ 订单量（任何时刻同时占用的起步原料 ≤ 订单还差的件数）」。
 
 第 27 轮补充（2026-10-06，本轮实测取证后的口径细化，见 tools/selfcheck_round27_parked_product_capacity.py）：
   `remaining < 0` 这一支只允许被「真判不出来」命中；执行舱新增了 `NO_ORDER_READABLE = -2`
@@ -188,43 +189,44 @@ check("下限④b（看门狗 remaining）: 外层 max(0) + 订单量下界（�
       "delivered 换成权威读数后它的「刚好够」判定才可能成立",
       "final long remaining = Math.max(0L, Math.max(1L, status.info().amount()) - delivered);" in watchdog)
 
-# ============================================================ ③ 非必得放大不能被收紧
-section("③) 源码锚点：非必得配方（精密构件）的动态放大一字未改")
+# ============================================================ ③ 非必得不再预开
+section("③) 源码锚点：非必得配方不再按期望轮次预开名额（2026-11-08 用户口径）")
 
-has(chamber, "allowed = (long) Math.ceil(remaining / (double) p);",
-    "锚点: 非必得放大 = ceil(R / p)（推导：X = 第 R 次成功的投料次数，E[X] = R/p）")
-has(chamber, "if (!guaranteedResult(recipeId)) {",
-    "锚点: 只有非必得配方才放大（必得严格 R）")
-has(chamber, "private boolean guaranteedResult(final String recipeId) {",
-    "锚点: 必得判据仍在（Create 轮盘口径，判不出来一律按非必得 ⇒ 绝不误卡概率产线）")
-has(chamber, "private float mainResultChance(final String recipeId) {",
-    "锚点: 主产物归一概率 p 的唯一天平仍在")
+has(chamber, "final long allowed = remaining;",
+    "锚点: 名额预算 = 订单剩余量 R（必得 / 非必得同一公式，不再按期望轮次放大）")
+check("反例检测器: 旧口径「按期望轮次预开名额 ceil(R/p)」已从源码彻底移除",
+      "Math.ceil(remaining" not in chamber
+      and "ceil(remaining / (double) p)" not in chamber)
 has(chamber, "capacity = allowed - inFlight;",
-    "锚点: 名额仍然 = 允许在制数 − 跨舱在制件数（放大口径未换、未收紧）")
+    "锚点: 名额 = allowed − 跨舱在制件数（失败一件 ⇒ inFlight 减 1 ⇒ 名额回 1 ⇒ 按需补发一件）")
+has(chamber, "private boolean guaranteedResult(final String recipeId) {",
+    "锚点: 必得判据仍在（2026-11-08 起只用于诊断行的 guaranteed 标记，不参与名额判定）")
+has(chamber, "private float mainResultChance(final String recipeId) {",
+    "锚点: 主产物归一概率 p 的唯一天平仍在（只进诊断 p=，不参与任何判定）")
 
 
 def start_capacity(remaining, guaranteed, p, inflight):
-    """复刻 startCapacityForRecipe（2026-10-06 第 26/27 轮修正后的源码，逐字对应）。
+    """复刻 startCapacityForRecipe（2026-11-08 用户口径改定后，逐字对应）。
 
     第 27 轮新增：`remaining == -2`（NO_ORDER_READABLE = 任务表读得到、但没有需求）⇒ 0 件。
     这与 `-1`（判不出来）必须分开：`-1` 仍走「保守放 1 件」，绝不把老回归带回来。
+    2026-11-08：必得 / 非必得同一公式 `名额 = R − inflight`，**与 p 无关**；
+    旧的 `ceil(R/p)` 期望值预开已被用户驳回并删除。`guaranteed` / `p` 仍收着只为证明对它们不敏感。
     """
     if remaining == -2:
         return 0
     if remaining < 0:
         return 1 if inflight <= 0 else 0
     allowed = remaining
-    if not guaranteed and isinstance(p, float) and 0.0 < p < 1.0:
-        allowed = int(math.ceil(remaining / p))
     return max(0, allowed - inflight)
 
 
 check("推演① 必得：订单 10、已交付 4、在制 2 ⇒ 名额 4（还差 6 − 2）",
       start_capacity(10 - 4, True, 1.0, 2) == 4)
-check("推演② 非必得（p=0.8）：订单 64、已交付 0、在制 0 ⇒ 名额 80（动态放大，与修复前逐字一致）",
-      start_capacity(64, False, 0.8, 0) == 80)
-check("推演③ 非必得（p=0.8）：订单 1、已交付 0、在制 0 ⇒ 名额 2（下单 1 个精密构件仍允许 2 件在制）",
-      start_capacity(1, False, 0.8, 0) == 2)
+check("推演② 非必得（p=0.8）：订单 64、已交付 0、在制 0 ⇒ 名额 64（= R，不再按 ceil(R/p) 放大到 80）",
+      start_capacity(64, False, 0.8, 0) == 64)
+check("推演③ 非必得（p=0.8）：订单 1、已交付 0、在制 0 ⇒ 只允许 1 件在制（不再预开 2 件）",
+      start_capacity(1, False, 0.8, 0) == 1)
 check("推演④ 已交付满（remaining=0，必有 / 非必得都一样）⇒ 名额 0（一件都不许再开）",
       start_capacity(0, True, 1.0, 0) == 0 and start_capacity(0, False, 0.8, 0) == 0)
 check("推演⑤ 判不出来（remaining=-1）⇒ 保守下限仍在（无在制 1 件 / 有在制 0 件）—— 老回归没有带回来",
@@ -317,11 +319,18 @@ check("反例⑤ 旧口径在同一流水下「每交付一件就又开一件」
       % (deliv_old, backlog_old, started_old, started_new),
       started_old > 10 and started_old == deliv_old + backlog_old and started_new <= 10)
 
-# 非必得：开件上界 = ceil(R/p)，绝不被这次修复收紧
+# 非必得：开件上界 = 订单剩余量 R（失败一件才补一件），绝不再按 ceil(R/p) 预开
 budget_800 = start_capacity(10, False, 0.8, 0)
-check("反例⑥ 非必得配方未被收紧：订单 10、p=0.8、在制 0 ⇒ 仍有 13 个名额（= ceil(10/0.8)），"
-      "且随交付推进自然收敛（交付 10 后 remaining=0 ⇒ 0）",
-      budget_800 == 13 and start_capacity(0, False, 0.8, 0) == 0)
+check("反例⑥【2026-11-08 改定】非必得配方先只按订单量开工：订单 10、p=0.8、在制 0 ⇒ 名额 10"
+      "（旧口径会预开 13），且随交付推进自然收敛（交付 10 后 remaining=0 ⇒ 0）",
+      budget_800 == 10 and start_capacity(0, False, 0.8, 0) == 0)
+check("反例⑦【2026-11-08 新增】名额与主产物概率无关：p ∈ {1.0, 0.8, 0.5, 0.1} 在 R=20、"
+      "在制 0/19/20 上的结果逐字相同",
+      all(start_capacity(20, p >= 1.0, p, i) == 20 - i
+          for p in (1.0, 0.8, 0.5, 0.1) for i in (0, 19, 20)))
+check("反例⑧【2026-11-08 新增】失败一件才补一件：R=20、I=20 ⇒ 名额 0；模拟一件失败（I=19）"
+      "⇒ 名额 1（绝不提前按期望值把一批起步原料占进机器）",
+      start_capacity(20, False, 0.8, 20) == 0 and start_capacity(20, False, 0.8, 19) == 1)
 
 # ============================================================ 结果
 print()

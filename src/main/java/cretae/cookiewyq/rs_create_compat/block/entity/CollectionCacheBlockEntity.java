@@ -17,6 +17,7 @@ import cretae.cookiewyq.rs_create_compat.support.AbsorbType;
 import cretae.cookiewyq.rs_create_compat.support.Area;
 import cretae.cookiewyq.rs_create_compat.support.AreaScanHook;
 import cretae.cookiewyq.rs_create_compat.support.BlockContentReleaser;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import cretae.cookiewyq.rs_create_compat.support.CollectionBlockedLimits;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
 import cretae.cookiewyq.rs_create_compat.support.MarkerBudget;
@@ -3038,13 +3039,13 @@ public class CollectionCacheBlockEntity
     @Nullable
     protected static ResourceLocation fluidSourceIdAt(final Level level, final BlockPos pos) {
         // 第 119 轮修（审计 C-6）：先判「区块已加载」再 getBlockState。
-        // Level#getBlockState 对未加载区块会**同步加载**区块（本工程 support/SeparationFrameGuard
-        // 里已有同样的注释警告），而区域扫描每 tick 要问上千个坐标 —— 玩家走远、区块被卸载后
-        // 机器还在跑，就会反复触发同步加载，把主线程拖卡。未加载的坐标一律当作「没有流体」。
-        if (!level.isLoaded(pos)) {
+        // <b>第 138 轮修正</b>：isLoaded 挡不住「在流水线里但没到 FULL」的区块，紧随其后的
+        // getBlockState 仍会同步等生成 —— 改为 {@link SafeChunkRead#blockStateNow}（只读已 FULL 区块，
+        // 不加载、不阻塞）。未就绪的坐标一律当作「没有流体」。
+        final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+        if (state == null) {
             return null;
         }
-        final BlockState state = level.getBlockState(pos);
         // ① 纯流体方块：只有 LEVEL 一个属性（含水方块必然还带其它属性），且没有方块实体
         if (state.getProperties().size() != 1 || !state.hasProperty(LiquidBlock.LEVEL)
             || state.hasBlockEntity()) {

@@ -189,6 +189,8 @@
   "config.jade.plugin_rs_create_compat.bus": "Sequence assembly bus status (Jade)",
   "config.jade.plugin_rs_create_compat.bus_data": "Sequence assembly bus status data (Jade)",
   "config.jade.plugin_rs_create_compat.camouflage": "Camouflaged block tooltip (Jade)",
+  "config.jade.plugin_rs_create_compat.proxy": "Container proxy contents (Jade)",
+  "config.jade.plugin_rs_create_compat.proxy_data": "Container proxy contents data (Jade)",
   "config.jade.plugin_rs_create_compat.receiver": "Network Resource Receiver internal cache (Jade)",
   "config.jade.plugin_rs_create_compat.receiver_data": "Network Resource Receiver internal cache data (Jade)",
   "gui.rs_create_compat.advanced_quantity_keeper.autocraft_disabled_tooltip": "Install an autocrafting upgrade in an upgrade slot to toggle this",

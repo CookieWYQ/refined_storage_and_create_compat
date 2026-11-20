@@ -483,9 +483,10 @@ def push_source_ok(be_text: str) -> bool:
         "if (level == null || level.isClientSide()) {" in tick
         and "lastPushedPerTick = pushToNeighbours();" in tick
         # 不推给别的能量立方：按方块类型判（不依赖方块实体是否已加载）
-        and "if (level.getBlockState(target).getBlock() instanceof FEEnergyCubeBlock) {" in push
+        and "if (targetState.getBlock() instanceof FEEnergyCubeBlock) {" in push
         # 不为「充电」加载区块
-        and "if (!level.isLoaded(target)) {" in push
+        and "SafeChunkRead.blockStateNow(level, target)" in push
+        and "level.isLoaded(target)" not in push
         # 先 simulate 问收方（不改任何状态）
         and "final int accepted = storage.receiveEnergy(offer, true);" in push
         # 再按 accepted 从集群扣电
@@ -599,11 +600,17 @@ def cluster_order_ok(text: str) -> bool:
 def cluster_cache_ok(text: str) -> bool:
     body = strip_comments(text)
     return (
-        "private static final Map<Level, Map<Long, Snapshot>> CACHE = new WeakHashMap<>();" in body
+        "private static final Map<Level, LevelCache> CACHE = new WeakHashMap<>();" in body
+        and "private static final class LevelCache" in body
         and "cached.isFresh(server)" in body
         and "VALIDATE_INTERVAL_TICKS = 20" in body
-        and "removeAll(map, snapshot);" in body
-        and "return level.isLoaded(pos) && level.getBlockState(pos).getBlock() instanceof FEEnergyCubeBlock;" in body
+        and "removeAll(cache, snapshot);" in body
+        # 穿行只读「已就绪区块里」的方块状态；绝不走会同步加载 / 等待区块生成的 Level 读法
+        and "getChunkSource().getChunkNow(" in body
+        and "chunk.getBlockState(" in body
+        and "level.getBlockState(" not in body
+        and "level.getBlockEntity(" not in body
+        and "level.isLoaded(" not in body
     )
 
 
@@ -612,9 +619,9 @@ def cluster_client_safe_ok(text: str) -> bool:
     resolve = method_body(body, "public static Snapshot resolve(@Nullable final Level level, final BlockPos pos)")
     return (
         "if (!(level instanceof ServerLevel server)) {" in resolve
-        and "return new Snapshot(level, List.of(pos));" in resolve
+        and "return new Snapshot(level, List.of(pos), false);" in resolve
         # CACHE 只在 ServerLevel 分支之后才碰
-        and resolve.find("CACHE.computeIfAbsent") > resolve.find("return new Snapshot(level, List.of(pos));")
+        and resolve.find("CACHE.computeIfAbsent") > resolve.find("return new Snapshot(level, List.of(pos), false);")
     )
 
 
@@ -1806,7 +1813,7 @@ def main() -> int:
                    and max(0, CAP - CAP) == 0)
     counterexample("源码：推送改成推给能量立方（删掉 instanceof FEEnergyCubeBlock 跳过）⇒ ⑩-a 判负",
                    push_source_ok(be_text.replace(
-                       "if (level.getBlockState(target).getBlock() instanceof FEEnergyCubeBlock) {",
+                       "if (targetState.getBlock() instanceof FEEnergyCubeBlock) {",
                        "if (false) {")) is False)
     counterexample("源码：推送不先 simulate 而是直接满额灌（删掉 simulate 那一行）⇒ ⑩-a 判负",
                    push_source_ok(be_text.replace(

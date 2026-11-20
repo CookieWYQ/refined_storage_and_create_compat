@@ -69,6 +69,12 @@ WHITELIST = {
     "config.jade.plugin_" + MODID + ".receiver_data":
         "Jade 依服务端数据 UID（rs_create_compat:receiver_data）自动拼出的配置键，"
         "见 compat/jade/RsccReceiverJadeServerData",
+    "config.jade.plugin_" + MODID + ".proxy":
+        "Jade 依插件 UID（rs_create_compat:proxy）自动拼出的配置键，"
+        "见 client/jade/RsccProxyJadeProvider",
+    "config.jade.plugin_" + MODID + ".proxy_data":
+        "Jade 依服务端数据 UID（rs_create_compat:proxy_data）自动拼出的配置键，"
+        "见 support/InventoryProxyJadeServerData",
     # 定量保持器的「单位」键：基础界面已不再单独绘制单位文字（QuantityKeeperScreen#renderLabels
     # 有注释说明），但 tools/selfcheck_round50_keeper_fluid_display.py 直接读它们做输入框几何宽度
     # 基准（unit_w = max(width(unit_item), width(unit_mb))），属语言契约的一部分，不删。

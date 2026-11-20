@@ -12,7 +12,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -43,10 +42,11 @@ import java.util.WeakHashMap;
  *     <li><b>事件驱动失效</b>：邻块变化（放置 / 破坏 / 替换）由 {@link RsccClusterInvalidation} 作废
  *     相关缓存，下一次 {@link #ensure} 立即重算；</li>
  *     <li><b>缓存命中即返回</b>：{@link #ensure} 先查「坐标 → 集群」缓存，命中时只做
- *     「20 tick 一次」的成员存活校验（每个成员一次 {@code isLoaded} + 一次方块类型比较），
+ *     「20 tick 一次」的成员存活校验（每个成员一次安全读方块状态 + 一次方块类型比较），
  *     未到校验周期时只花一次 Map 查询；</li>
- *     <li><b>搜索只读方块状态</b>：BFS 穿行阶段绝不触达方块实体（避免强制加载 / 递归初始化），
- *     只有确认是同类型方块后才用 {@code getBlockEntity(pos, CHECK)} 取已存在的方块实体；</li>
+ *     <li><b>搜索只读「已 FULL 区块」</b>：BFS 穿行阶段绝不触达方块实体（避免强制加载 / 递归初始化），
+ *     方块状态走 {@link SafeChunkRead#blockStateNow}、方块实体走 {@code getBlockEntity(pos, CHECK)}；
+ *     两者都<b>绝不加载区块</b>。区块还在流水线里时记 partial，下一 tick 自动补算（第 138 轮）；</li>
  *     <li><b>规模上限</b> {@link #MAX_MEMBERS}，防止超大结构把单次重算拖慢。</li>
  * </ol>
  *
@@ -83,14 +83,30 @@ public final class RsccMachineCluster {
         private final BlockPos master;
         private final Object payload;
         private final Block block;
+        /** 上一轮重算是否因为「邻块区块还在加载流水线里」而少算了成员；为 true 时下一 tick 必须重算。 */
+        private final boolean partial;
+        /** 最近一次重算尝试的游戏刻（同一 tick 内多个成员各调一次 ensure 时只重算一次）。 */
+        private final long lastAttemptTick;
         private long lastValidated;
 
         private Cluster(final List<BlockPos> members, final BlockPos master, final Object payload,
-                        final Block block) {
+                        final Block block, final boolean partial, final long lastAttemptTick) {
             this.members = List.copyOf(members);
             this.master = master;
             this.payload = payload;
             this.block = block;
+            this.partial = partial;
+            this.lastAttemptTick = lastAttemptTick;
+        }
+
+        /** 是否「未算全」（邻块区块还在加载中）：为 true 时 {@link #isFresh} 恒为 false。 */
+        private boolean partial() {
+            return partial;
+        }
+
+        /** 最近一次重算尝试的游戏刻。 */
+        private long lastAttemptTick() {
+            return lastAttemptTick;
         }
 
         /** 成员坐标（字典序，只读）。 */
@@ -114,12 +130,18 @@ public final class RsccMachineCluster {
 
         /** 缓存是否仍然可信：成员都还在、方块类型未变（同族即可）、且校验周期未到。 */
         private boolean isFresh(final ServerLevel level) {
+            if (partial) {
+                return false; // 上一轮少算了成员（邻块区块还在加载）：下一 tick 必须重算
+            }
             final long now = level.getGameTime();
             if (now - lastValidated < VALIDATE_INTERVAL_TICKS) {
                 return true;
             }
             for (final BlockPos pos : members) {
-                if (!level.isLoaded(pos) || !sameFamily(level.getBlockState(pos).getBlock(), block)) {
+                // 第 138 轮：不许用 isLoaded + getBlockState ——isLoaded 挡不住「在流水线里但没到 FULL」
+                // 的区块，而 getBlockState 会在主线程同步等它生成（第 137 轮服务器看门狗判死的机制）。
+                final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+                if (state == null || !sameFamily(state.getBlock(), block)) {
                     return false;
                 }
             }
@@ -157,9 +179,11 @@ public final class RsccMachineCluster {
         return isLoaderBlock(first) && isLoaderBlock(second);
     }
 
-    /** 该坐标上是否是「可成集群的机器方块」（只读方块状态，绝不触达方块实体）。 */
+    /** 该坐标上是否是「可成集群的机器方块」（只读已 FULL 区块的方块状态，绝不触达方块实体、绝不加载区块）。 */
     public static boolean isClusterBlock(final Level level, final BlockPos pos) {
-        return level.isLoaded(pos) && isClusterBlock(level.getBlockState(pos));
+        // 第 138 轮：isLoaded 挡不住未 FULL 区块，改用只读已 FULL 区块的安全读
+        final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+        return state != null && isClusterBlock(state);
     }
 
     /**
@@ -216,8 +240,15 @@ public final class RsccMachineCluster {
         }
         final Map<Long, Cluster> map = CACHE.computeIfAbsent(level, key -> new HashMap<>());
         final Cluster cached = map.get(member.rscc$clusterPos().asLong());
-        if (cached != null && cached.isFresh(server)) {
-            return;
+        if (cached != null) {
+            if (cached.isFresh(server)) {
+                return;
+            }
+            // 未算全（还有邻块区块在加载）时，同一 tick 只重算一次：
+            // 否则一个集群里每台机器的 tick 都会各跑一遍 BFS。
+            if (cached.partial() && cached.lastAttemptTick() == server.getGameTime()) {
+                return;
+            }
         }
         rebuild(server, map, member.rscc$clusterPos(), null);
     }
@@ -295,8 +326,7 @@ public final class RsccMachineCluster {
             if (!isClusterBlock(server, neighbor)) {
                 continue;
             }
-            final BlockEntity be = server.getChunkAt(neighbor)
-                .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
+            final BlockEntity be = SafeChunkRead.blockEntityNow(server, neighbor);
             if (!(be instanceof RsccClusterable survivor) || survivor == member
                 || !survivor.rscc$clusterCompatible(member)) {
                 continue;
@@ -324,7 +354,13 @@ public final class RsccMachineCluster {
     private static void rebuild(final ServerLevel level, final Map<Long, Cluster> map,
                                 final BlockPos originPos, @Nullable final RsccClusterable departing) {
         final Cluster old = map.get(originPos.asLong());
-        final List<RsccClusterable> members = collect(level, originPos);
+        final Collected collected = collect(level, originPos);
+        if (collected.originBlock() == null) {
+            // 起点自身所在的区块还没到 FULL（正在加载）：保持现有缓存不动，下一 tick 再来。
+            // 绝不能在这里「清缓存」——否则区块加载中的每一 tick 都会把集群拆掉重建。
+            return;
+        }
+        final List<RsccClusterable> members = collected.members();
         if (members.isEmpty()) {
             if (old != null) {
                 for (final BlockPos p : old.members()) {
@@ -376,7 +412,7 @@ public final class RsccMachineCluster {
             }
         }
         final Cluster next = new Cluster(positions, master.rscc$clusterPos(), shared,
-            level.getBlockState(originPos).getBlock());
+            collected.originBlock(), collected.partial(), level.getGameTime());
         for (final BlockPos p : positions) {
             map.put(p.asLong(), next);
         }
@@ -413,32 +449,50 @@ public final class RsccMachineCluster {
         }
     }
 
+    /** BFS 结果：成员（字典序）、起点方块类型（{@code null} = 起点区块未到 FULL）、是否未算全。 */
+    private record Collected(List<RsccClusterable> members, @Nullable Block originBlock, boolean partial) {
+    }
+
     /**
-     * 以 {@code origin} 为起点做 6 向 BFS，收集同类型、已加载、且方块实体已存在的成员。
-     * <p>穿行只读方块状态（绝不触发方块实体加载）；结果按坐标字典序排序，故 {@code members.get(0)}
-     * 就是确定性的主控。
+     * 以 {@code origin} 为起点做 6 向 BFS，收集同类型、<b>所在区块已到 FULL</b>、且方块实体已存在的成员。
+     * <p>穿行只走安全读（{@link SafeChunkRead}：绝不加载区块、绝不创建方块实体）；结果按坐标字典序排序，
+     * 故 {@code members.get(0)} 就是确定性的主控。
+     * <p><b>partial</b>：邻块「在加载流水线里、但还没到 FULL」（{@code hasChunkHolder} 为真、
+     * {@code chunkNow} 为 null）时说明这一轮可能少算了成员 —— 置 partial，下一 tick 重算；区块真正未加载
+     * （holder 都没有）则按旧语义直接跳过（集群只以「已加载部分」为准）。
      */
-    private static List<RsccClusterable> collect(final ServerLevel level, final BlockPos origin) {
-        final Block originBlock = level.getBlockState(origin).getBlock();
+    private static Collected collect(final ServerLevel level, final BlockPos origin) {
+        final BlockState originState = SafeChunkRead.blockStateNow(level, origin);
+        if (originState == null) {
+            return new Collected(List.of(), null, false);
+        }
+        final Block originBlock = originState.getBlock();
         final List<BlockPos> found = new ArrayList<>();
         final Set<BlockPos> visited = new HashSet<>();
         final java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        boolean partial = false;
         visited.add(origin);
         queue.add(origin);
         while (!queue.isEmpty() && found.size() < MAX_MEMBERS) {
             final BlockPos cell = queue.poll();
-            final BlockEntity be = level.getChunkAt(cell)
-                .getBlockEntity(cell, LevelChunk.EntityCreationType.CHECK);
+            final BlockEntity be = SafeChunkRead.blockEntityNow(level, cell);
             if (!(be instanceof RsccClusterable)) {
                 continue;
             }
             found.add(cell);
             for (final Direction direction : Direction.values()) {
                 final BlockPos neighbor = cell.relative(direction);
-                if (!visited.add(neighbor) || !level.isLoaded(neighbor)) {
+                if (!visited.add(neighbor)) {
                     continue;
                 }
-                if (!sameFamily(level.getBlockState(neighbor).getBlock(), originBlock)) {
+                final BlockState neighborState = SafeChunkRead.blockStateNow(level, neighbor);
+                if (neighborState == null) {
+                    if (SafeChunkRead.hasChunkHolder(level, neighbor)) {
+                        partial = true; // 区块在流水线里但未 FULL：这一轮先看不见，下一 tick 重算
+                    }
+                    continue;
+                }
+                if (!sameFamily(neighborState.getBlock(), originBlock)) {
                     continue; // 只认「同族方块」相邻，不经过线缆
                 }
                 queue.add(neighbor);
@@ -447,12 +501,11 @@ public final class RsccMachineCluster {
         found.sort((a, b) -> RsccWireLinkSearch.lexicographic(a, b));
         final List<RsccClusterable> members = new ArrayList<>(found.size());
         for (final BlockPos pos : found) {
-            final BlockEntity be = level.getChunkAt(pos)
-                .getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK);
+            final BlockEntity be = SafeChunkRead.blockEntityNow(level, pos);
             if (be instanceof RsccClusterable member) {
                 members.add(member);
             }
         }
-        return members;
+        return new Collected(members, originBlock, partial);
     }
 }

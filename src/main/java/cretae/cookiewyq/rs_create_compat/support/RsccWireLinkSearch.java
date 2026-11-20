@@ -7,7 +7,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
@@ -145,11 +144,15 @@ public final class RsccWireLinkSearch {
      * @param exhaustive 本次发布的扫描是否<b>扫完</b>（前沿自然排空）。{@code false} 只有一个来源：
      *                   撞到 {@link #BUS_LINK_HARD_CAP} 这个「异常巨大线网」的安全阀（必然伴随锚点日志）。
      *                   <b>续扫期间不会对外出现 {@code false}</b>：没扫完时对外沿用上一次完整结果
+     * @param crossTalk  本次扫描是否发现<b>串线</b>：同一台执行舱既有「侧面 / 箭头面」接出去的线，
+     *                   又有「尾部（箭头背面）」接出去的线 ⇒ 尾部那条本该是上游干线，却和本簇物理连通，
+     *                   上下行混在一起（用户口径：判归属未确定）
      */
     public record LinkWalk(@Nullable SequenceExecutionChamberBlockEntity owner,
-                           List<BlockPos> reachable, List<BlockPos> cluster, boolean exhaustive) {
+                           List<BlockPos> reachable, List<BlockPos> cluster, boolean exhaustive,
+                           boolean crossTalk) {
         /** 空结果（重入守卫拦截 / 什么都够不到时复用）。 */
-        public static final LinkWalk EMPTY = new LinkWalk(null, List.of(), List.of(), true);
+        public static final LinkWalk EMPTY = new LinkWalk(null, List.of(), List.of(), true, false);
 
         /** 线缆是否够得到至少一台执行舱（= 这条总线处在「延长型」布局里）。 */
         public boolean linked() {
@@ -183,7 +186,9 @@ public final class RsccWireLinkSearch {
          * （否则任何接了大线网却还没接执行舱的总线都会亮红条）。</p>
          */
         public boolean ambiguous() {
-            return reachable.size() >= 2;
+            // 第 135 轮：串线（同一台执行舱的尾部与侧面/箭头面同时接线、且都在本簇里）也是未确定。
+            // 用户口径：「侧面以及顶部的线缆和底部的有接触……这种也算是一种串线……肯定判定是未确定」。
+            return reachable.size() >= 2 || crossTalk;
         }
 
         /**
@@ -206,9 +211,6 @@ public final class RsccWireLinkSearch {
     public static boolean hasRelevantNeighbor(final Level level, final BlockPos origin) {
         for (final Direction direction : Direction.values()) {
             final BlockPos neighbor = origin.relative(direction);
-            if (!level.isLoaded(neighbor)) {
-                continue;
-            }
             // 被扳手断开的接缝 / 面：这一侧算不通（与网络图、连接臂外形同一判定）
             if (RsccCableCuts.isDisconnected(level, origin, direction)) {
                 continue;
@@ -217,7 +219,11 @@ public final class RsccWireLinkSearch {
             if (SeparationFrameGuard.blocksConnection(level, origin, direction)) {
                 continue;
             }
-            final BlockState state = level.getBlockState(neighbor);
+            // 第 138 轮：安全读（只读已 FULL 区块）—— 不加载、不阻塞
+            final BlockState state = SafeChunkRead.blockStateNow(level, neighbor);
+            if (state == null) {
+                continue;
+            }
             if (state.getBlock() instanceof SequenceExecutionChamberBlock || RsccWireBlocks.isWire(state)) {
                 return true;
             }
@@ -228,13 +234,13 @@ public final class RsccWireLinkSearch {
     /** 该坐标是否仍是「处于总线输出模式的执行仓」（不是则 {@code null}）。 */
     @Nullable
     public static SequenceExecutionChamberBlockEntity chamberAt(final Level level, @Nullable final BlockPos pos) {
-        if (pos == null || !level.isLoaded(pos)) {
+        // 第 138 轮：只读已 FULL 的区块 —— isLoaded 挡不住「在流水线里但没到 FULL」的区块，
+        // 而 getBlockState / getChunkAt 会在主线程同步等它生成。
+        final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+        if (state == null || !(state.getBlock() instanceof SequenceExecutionChamberBlock)) {
             return null;
         }
-        if (!(level.getBlockState(pos).getBlock() instanceof SequenceExecutionChamberBlock)) {
-            return null;
-        }
-        return level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+        return SafeChunkRead.blockEntityNow(level, pos)
             instanceof SequenceExecutionChamberBlockEntity chamber && chamber.isBusOutput() ? chamber : null;
     }
 
@@ -358,11 +364,20 @@ public final class RsccWireLinkSearch {
         private final Map<BlockPos, Integer> depthOf = new HashMap<>();
         /** 本趟碰到的执行舱各自的层号（只有这几项要留到发布时刻）。 */
         private final Map<BlockPos, Integer> chamberDepth = new HashMap<>();
+        /**
+         * 第 135 轮：本趟在「箭头面 + 4 个侧面」碰到过的执行舱，与在「尾部（箭头背面）」碰到过的执行舱。
+         * <p>尾部那一面的线缆是上游干线，<b>不算</b>本总线的延长段；但若同一台舱的两侧都在本簇里，
+         * 就是上下行串线 ⇒ 发布时标 {@code crossTalk}，判归属未确定。</p>
+         */
+        private final Set<BlockPos> bodyAttached = new HashSet<>();
+        private final Set<BlockPos> tailAttached = new HashSet<>();
 
         /** 上一次<b>完整</b>扫描的结果（对外可见的唯一数据源）。 */
         private List<BlockPos> snapshotReachable = List.of();
         private List<BlockPos> snapshotCluster = List.of();
         private boolean snapshotExhaustive = true;
+        /** 上一次发布的扫描是否串线（见 {@link LinkWalk#crossTalk()}）。 */
+        private boolean snapshotCrossTalk;
         /** 是否已经有过一份完整结果（没有 ⇒ 本次判定一次扫完，见 {@link #resolve}）。 */
         private boolean hasSnapshot;
 
@@ -414,6 +429,8 @@ public final class RsccWireLinkSearch {
             chambers.clear();
             depthOf.clear();
             chamberDepth.clear();
+            bodyAttached.clear();
+            tailAttached.clear();
             polled = 0;
             capped = false;
             running = true;
@@ -463,19 +480,35 @@ public final class RsccWireLinkSearch {
                     if (SeparationFrameGuard.blocksConnection(level, cell, direction)) {
                         continue;
                     }
-                    if (!visited.add(neighbor) || !level.isLoaded(neighbor)) {
+                    // 第 138 轮：安全读（只读已 FULL 区块）—— 不加载、不阻塞
+                    final BlockState state = SafeChunkRead.blockStateNow(level, neighbor);
+                    if (state == null) {
                         continue;
                     }
-                    final BlockState state = level.getBlockState(neighbor);
                     if (state.getBlock() instanceof SequenceExecutionChamberBlock) {
-                        final BlockEntity blockEntity = level.getChunkAt(neighbor)
-                            .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
+                        // 第 135 轮「六个面」规则：执行舱的 FACING 就是模型上箭头指向的那一面（对接机器 / 下游）。
+                        // 箭头面 + 4 个侧面接出去的线 = 本总线延长段；尾部（箭头背面）那条是上游干线，不计入。
+                        // 判据：attach = 舱 → 线缆的方向；attach == FACING.getOpposite() 即尾部。
+                        // 尾部也要落进 tailAttached（而不是直接丢掉），否则「侧面线缆和底部线缆有接触」的串线
+                        // 永远发现不了 —— 用户明确要求串线判归属未确定。
+                        final Direction attach = direction.getOpposite();
+                        final Direction facing = state.hasProperty(SequenceExecutionChamberBlock.FACING)
+                            ? state.getValue(SequenceExecutionChamberBlock.FACING) : Direction.NORTH;
+                        if (attach == facing.getOpposite()) {
+                            tailAttached.add(neighbor.immutable());
+                            continue;
+                        }
+                        bodyAttached.add(neighbor.immutable());
+                        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, neighbor);
                         if (blockEntity instanceof SequenceExecutionChamberBlockEntity chamber
                             && chamber.isBusOutput()) {
                             chambers.putIfAbsent(neighbor, chamber);
                             chamberDepth.putIfAbsent(neighbor, nextDepth);
                         }
                         continue; // 执行舱不是导线：不穿过
+                    }
+                    if (!visited.add(neighbor)) {
+                        continue;
                     }
                     if (RsccWireBlocks.isWire(state)) {
                         cluster.add(neighbor);
@@ -514,6 +547,16 @@ public final class RsccWireLinkSearch {
                 // 按链去重：同一条链上的多台仓是同一个逻辑执行仓 ⇒「可达数」按链计（见 collapseByChain）
                 snapshotReachable = List.copyOf(collapseByChain(candidates, chambers));
             }
+            // 第 135 轮：串线判定 —— 同一台执行舱既在「箭头面 / 侧面」被本簇碰到、又在「尾部」被碰到，
+            // 说明尾部那条上游干线和本簇物理连通（上下行混在一起）⇒ 判归属未确定（见 LinkWalk#ambiguous）。
+            boolean crossTalk = false;
+            for (final BlockPos body : bodyAttached) {
+                if (tailAttached.contains(body)) {
+                    crossTalk = true;
+                    break;
+                }
+            }
+            snapshotCrossTalk = crossTalk;
             snapshotCluster = List.copyOf(cluster);
             snapshotExhaustive = !capped;
             snapshotTickAt = now;
@@ -521,6 +564,8 @@ public final class RsccWireLinkSearch {
             // 发布后立刻丢掉本趟的临时容器：方块实体引用与已访问集都不再驻留（内存有界）。
             chambers.clear();
             chamberDepth.clear();
+            bodyAttached.clear();
+            tailAttached.clear();
             depthOf.clear();
             visited.clear();
             queue.clear();
@@ -537,7 +582,7 @@ public final class RsccWireLinkSearch {
             }
             final BlockPos ownerPos = snapshotReachable.isEmpty() ? null : snapshotReachable.get(0);
             return new LinkWalk(chamberAt(level, ownerPos), snapshotReachable, snapshotCluster,
-                snapshotExhaustive);
+                snapshotExhaustive, snapshotCrossTalk);
         }
 
         /**

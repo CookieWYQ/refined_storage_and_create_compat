@@ -894,20 +894,44 @@ public final class RsccDiag {
 
     // ==================== 方块实体枚举 ====================
 
-    /** 该维度当前已加载的全部方块实体（来源 = 看门狗维护的已加载区块表）。 */
+    /** 该维度当前已加载的全部方块实体（来源 = 看门狗维护的已加载区块表 ∪ 玩家周边的已加载区块）。 */
     private static List<BlockEntity> blockEntities(final ServerLevel level) {
         final List<BlockEntity> result = new ArrayList<>();
-        final Set<Long> chunks = AssemblyWatchdog.rscc$loadedChunks(level.dimension());
-        if (chunks == null || chunks.isEmpty()) {
-            return result;
+        final java.util.LinkedHashSet<Long> chunks = new java.util.LinkedHashSet<>();
+        final Set<Long> tracked = AssemblyWatchdog.rscc$loadedChunks(level.dimension());
+        if (tracked != null && !tracked.isEmpty()) {
+            chunks.addAll(new ArrayList<>(tracked));
         }
-        for (final long packed : new ArrayList<>(chunks)) {
+        // <b>2026-11-07：看门狗的区块表实测会漏掉「玩家走过去的区块」</b>。
+        // 证据：2026-10-24 与 2026-11-07 两次快照的 machines 都只有出生点试炼密室的 60 个方块实体
+        // （坐标 x=-1..47 / z=-29..45），而玩家基地（执行仓 / 总线所在，x≈360~421）一台机器都没进快照
+        // —— 玩家「保存 diag 让我去看」时导出的其实是空现场。原因不必再猜：这里直接把
+        // 「每名玩家周围 view-distance 个区块」并进来（只用 getChunkNow 读已加载区块，绝不主动加载）。
+        final int viewDistance = level.getServer().getPlayerList().getViewDistance();
+        final int radius = Math.max(2, Math.min(16, viewDistance));
+        for (final ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+            if (player.level() != level) {
+                continue;
+            }
+            final net.minecraft.world.level.ChunkPos center = player.chunkPosition();
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    chunks.add(packChunk(center.x + dx, center.z + dz));
+                }
+            }
+        }
+        for (final long packed : chunks) {
             final LevelChunk chunk = level.getChunkSource().getChunkNow((int) (packed >> 32), (int) packed);
             if (chunk != null) {
                 result.addAll(chunk.getBlockEntities().values());
             }
         }
         return result;
+    }
+
+    /** 区块坐标打包成 long（与 {@code AssemblyWatchdog} 的键格式一致：高 32 位 x、低 32 位 z）。 */
+    private static long packChunk(final int x, final int z) {
+        return ((long) x & 0xFFFFFFFFL) << 32 | ((long) z & 0xFFFFFFFFL);
     }
 
     private static int countCamouflaged(final ServerLevel level) {

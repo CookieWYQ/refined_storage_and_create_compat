@@ -120,8 +120,8 @@ public class EnergyAuditScreen extends ChildConfigScreen {
     private static final int ROW_NAME_X = 33;
     /** 子行（每台）的缩进：与父行名字左缘对齐。 */
     private static final int NODE_INDENT = ROW_NAME_X;
-    /** 类型行右侧「×N」列的右缘（相对行右边界）。 */
-    private static final int COUNT_RIGHT = ROW_RIGHT - 78;
+    // 第 135 轮删除了「台数列右缘 = ROW_RIGHT − 78」这条写死的几何：用量串经常宽过 78px，
+    // 写死的列右缘会让两个数字叠在同一条像素列上。现在台数 / 用量的 x 全部由实测文本宽度从右往左推。
 
     // ==================== 配色（深色字压在浅色九宫格面板上，与其它子界面同族） ====================
     private static final int COLOR_TITLE = 0xFF333333;
@@ -327,8 +327,8 @@ public class EnergyAuditScreen extends ChildConfigScreen {
         final Minecraft minecraft = Minecraft.getInstance();
         final Player player = minecraft.player;
         final int returnMode = snapshot.returnMode();
-        // 先撤高亮：离开这个页面后不该继续在世界里留框
-        EnergyAuditHighlight.clear();
+        // 离开页面前**不撤框**：界面开着看不到世界，撤了等于这次高亮白点。改成关界面后残留一段时间。
+        EnergyAuditHighlight.linger();
         if (player == null) {
             minecraft.setScreen(null);
             return;
@@ -349,8 +349,11 @@ public class EnergyAuditScreen extends ChildConfigScreen {
 
     @Override
     public void removed() {
-        // 界面被任何方式移除（Esc / 返回 / 被服务端换掉）都撤框：不让它靠 TTL 自己灭
-        EnergyAuditHighlight.clear();
+        // 第 135 轮：关界面**不撤框**，只续命到 Config#energyAuditHighlightLingerTicks。
+        // 旧行为是 clear()，而能耗页是整屏 GUI ⇒ 玩家永远看不到自己刚选中的那台方块，
+        // 用户原话「关掉界面之后高亮是不是也就关了，所以说你这完全就用不了」。
+        // 到期自动灭（EnergyAuditHighlight 的 TTL 逻辑不变），重开界面点「清除高亮」可立刻撤。
+        EnergyAuditHighlight.linger();
         super.removed();
     }
 
@@ -516,7 +519,22 @@ public class EnergyAuditScreen extends ChildConfigScreen {
         }
     }
 
-    /** 类型行：▼/▶ + 图标 + 名称 + ×N + 该类型当前合计 FE/t。 */
+    /**
+     * 类型行：▼/▶ + 图标 + 名称 + ×N + 该类型当前合计 FE/t。
+     *
+     * <h2>第 135 轮：右列从右往左排，绝不互相压字</h2>
+     * <p>玩家截图里的「两个数字贴在一起 / 黑字压着灰字」是两处几何错误叠加：</p>
+     * <ol>
+     *     <li>「×N 台数」列的右缘被钉在 {@code ROW_RIGHT - 78}，但实际用量串（含「FE/t（每刻）」）
+     *     常常宽过 78px ⇒ 用量串左端越过台数列的右缘，两个数字直接叠在同一像素区间；</li>
+     *     <li>第三方模组的超长英文名（如 {@code Interdimensional Wireless Transmitter}）缩到
+     *     {@link RsccTextFit#MIN_SCALE} 仍放不下时会被硬画出去，盖住右列。</li>
+     * </ol>
+     * <p>现在改为<b>需求驱动</b>：先量用量串与台数串的实际宽度，从行右边界往左依次留位，
+     * 放不下就按「先撤台数、再撤用量」的优先级降级（两者都仍在该行 tooltip 里），
+     * 名字只占用真正剩下的宽度；缩到下限仍放不下的超长名单独走「整行只画名字」模式。
+     * 所有分支都保证：<b>名字右缘 ≤ 右列左缘</b>，任意两段文字不共享像素列。</p>
+     */
     private void renderTypeRow(final GuiGraphics guiGraphics, final EnergyAuditType type, final int rowY) {
         final boolean open = expanded.contains(type.blockId().toString());
         final int textY = rowY + (ROW_H - LINE_H) / 2;
@@ -529,20 +547,44 @@ public class EnergyAuditScreen extends ChildConfigScreen {
         }
         final String count = Component.translatable(LANG + "row.count", format(type.count())).getString();
         final String usage = Component.translatable(LANG + "usage", format(type.currentUsage())).getString();
-        final int countX = px + COUNT_RIGHT - font.width(count);
-        final int usageX = px + ROW_RIGHT - font.width(usage);
-        final int nameMax = countX - (px + LIST_X + 1 + ROW_NAME_X) - 4;
-        // 方块名（自由文本：注册名 / 第三方模组名）：放不下整体缩字号完整显示，不截断；
-        // 完整方块名与方块 ID 另在行 tooltip 里给出（hover 行即可看全）。
-        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(typeName(type)),
-            px + LIST_X + 1 + ROW_NAME_X, textY, Math.max(8, nameMax), COLOR_TEXT);
-        guiGraphics.drawString(font, count, countX, textY, COLOR_DIM, false);
-        // 当前耗电为 0（全部待机）时数字也用灰字：一眼能看出「这种现在不耗电」
-        guiGraphics.drawString(font, usage, usageX, textY,
-            type.currentUsage() > 0L ? COLOR_TEXT : COLOR_IDLE, false);
+        final String name = typeName(type);
+        final int nameLeft = px + LIST_X + 1 + ROW_NAME_X;
+        final int rowRight = px + ROW_RIGHT;
+        final int usageWidth = font.width(usage);
+        final int usageX = rowRight - usageWidth;
+        final int countWidth = font.width(count);
+        final int countX = usageX - COLUMN_GAP - countWidth;
+        // 台数列只有在「名字还留得下 MIN_NAME_W」时才画；否则把它的空间全部让给用量串与名字。
+        final boolean showCount = countX - nameLeft - COLUMN_GAP >= MIN_NAME_W;
+        final int rightEdge = showCount ? countX - COLUMN_GAP : usageX - COLUMN_GAP;
+        final int nameWidth = font.width(name);
+        final boolean nameTooLong = nameWidth > Math.max(8, rightEdge - nameLeft)
+            && RsccTextFit.requiredScaleForLine(font, Component.literal(name),
+                Math.max(8, rightEdge - nameLeft)) < RsccTextFit.MIN_SCALE;
+        // 超长第三方名字：整行只画名字（缩到下限仍放不下就不缩了，从行左缘起画到行右缘），
+        // 台数与用量交给行 tooltip —— 宁可这行少一列数字，也不让两段字叠在一起。
+        // 只保留**一处** drawFitLine 调用（第 126 轮 tooltip 覆盖扫描按调用点计数）。
+        final int nameLimit = nameTooLong ? Math.max(8, rowRight - nameLeft)
+            : Math.max(8, rightEdge - nameLeft);
+        if (!nameTooLong && showCount) {
+            guiGraphics.drawString(font, count, countX, textY, COLOR_DIM, false);
+        }
+        // 与行 tooltip 用**同一个文本表达式**（第 126 轮覆盖扫描按表达式取证据；这里不再另起局部变量）。
+        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(typeName(type)), nameLeft, textY,
+            nameLimit, COLOR_TEXT);
+        if (!nameTooLong) {
+            // 当前耗电为 0（全部待机）时数字也用灰字：一眼能看出「这种现在不耗电」
+            guiGraphics.drawString(font, usage, usageX, textY,
+                type.currentUsage() > 0L ? COLOR_TEXT : COLOR_IDLE, false);
+        }
         guiGraphics.fill(px + LIST_X + 1, rowY + ROW_H - 1, px + ROW_RIGHT, rowY + ROW_H,
             COLOR_GRID_LINE);
     }
+
+    /** 类型行里「名字 / 台数 / 用量」三段之间的最小间距（px）。 */
+    private static final int COLUMN_GAP = 6;
+    /** 名字至少留这么宽才值得画台数列；小于它就撤台数列（tooltip 里仍有）。 */
+    private static final int MIN_NAME_W = 32;
 
     /** 子行（某一台）：维度 + 坐标 + 单体当前 FE/t（待机时灰字 + 「待机」）。 */
     private void renderNodeRow(final GuiGraphics guiGraphics, final EnergyAuditType type,
@@ -560,13 +602,24 @@ public class EnergyAuditScreen extends ChildConfigScreen {
             ? Component.translatable(LANG + "usage", format(node.currentUsage())).getString()
             : Component.translatable(LANG + "idle").getString();
         final int usageX = px + ROW_RIGHT - font.width(usage);
-        final int whereMax = usageX - (px + LIST_X + 1 + NODE_INDENT) - 6;
-        // 「维度 + 坐标」：放不下整体缩字号完整显示（不截断）；完整串在行 tooltip 里也有。
-        RsccTextFit.drawFitLine(guiGraphics, font, Component.literal(where),
-            px + LIST_X + 1 + NODE_INDENT, textY, Math.max(8, whereMax),
-            selected ? COLOR_ACCENT : (node.active() ? COLOR_TEXT : COLOR_IDLE));
-        guiGraphics.drawString(font, usage, usageX, textY,
-            selected ? COLOR_ACCENT : (node.active() ? COLOR_TEXT : COLOR_IDLE), false);
+        final int whereMax = usageX - (px + LIST_X + 1 + NODE_INDENT) - COLUMN_GAP;
+        final boolean whereTooLong = font.width(where) > Math.max(8, whereMax)
+            && RsccTextFit.requiredScaleForLine(font, Component.literal(where),
+                Math.max(8, whereMax)) < RsccTextFit.MIN_SCALE;
+        final int whereColor = selected ? COLOR_ACCENT : (node.active() ? COLOR_TEXT : COLOR_IDLE);
+        // 同类型行：超长「维度 + 坐标」缩到下限仍放不下时，整行只画它（用量进 tooltip），绝不压字。
+        // 只保留一处 drawFitLine 调用（第 126 轮 tooltip 覆盖扫描按调用点计数）。
+        final int whereLimit = whereTooLong ? Math.max(8, px + ROW_RIGHT - (px + LIST_X + 1 + NODE_INDENT))
+            : Math.max(8, whereMax);
+        // 「维度 + 坐标」：放不下整体缩字号完整显示（不截断）；与行 tooltip 用同一个文本表达式。
+        RsccTextFit.drawFitLine(guiGraphics, font,
+            Component.translatable(LANG + "row.node",
+                dimensionText(node.dimension()), EnergyAuditNode.posText(node.pos())),
+            px + LIST_X + 1 + NODE_INDENT, textY, whereLimit, whereColor);
+        if (!whereTooLong) {
+            guiGraphics.drawString(font, usage, usageX, textY,
+                selected ? COLOR_ACCENT : (node.active() ? COLOR_TEXT : COLOR_IDLE), false);
+        }
     }
 
     // ==================== 交互 ====================

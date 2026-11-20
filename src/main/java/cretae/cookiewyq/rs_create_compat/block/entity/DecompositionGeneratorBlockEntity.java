@@ -11,6 +11,7 @@ import cretae.cookiewyq.rs_create_compat.support.DecompositionProfile;
 import cretae.cookiewyq.rs_create_compat.support.DecompositionTable;
 import cretae.cookiewyq.rs_create_compat.support.RsccAssemblyDebug;
 import cretae.cookiewyq.rs_create_compat.support.RsccSpeedStackUpgradeContainer;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -793,11 +794,8 @@ public class DecompositionGeneratorBlockEntity
                 break;
             }
             final BlockPos target = worldPosition.relative(direction);
-            // 不为了「给邻居充电」去加载区块：未加载的邻居本 tick 跳过
-            if (!level.isLoaded(target)) {
-                continue;
-            }
-            final BlockEntity neighbour = level.getBlockEntity(target);
+            // 第 138 轮：安全读（只读已 FULL 区块）—— 不为了「给邻居充电」去加载区块
+            final BlockEntity neighbour = SafeChunkRead.blockEntityNow(level, target);
             if (neighbour == null) {
                 continue;
             }

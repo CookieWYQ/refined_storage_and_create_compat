@@ -459,10 +459,19 @@ public class AdvancedQuantityKeeperBlockEntity
         return ItemResource.ofItemStack(marker);
     }
 
-    /** 本机声称控制的全部资源键（每个已标记且可解析的槽一个）：供同网络仲裁使用。 */
+    /**
+     * 本机声称控制的全部资源键（每个<b>已标记且可解析</b>的槽一个）：供同网络仲裁使用。
+     *
+     * <p><b>第 138 轮 M3</b>：目标量 = 0（未标记）的槽<b>不认领</b> —— 否则「同一资源两台保持器」时，
+     * 未标记的那台可能因为坐标更靠前而让真正生效的那台永远让位，表现为功能静默失效。
+     * 认领口径与 {@link KeeperTarget#isMarked} 同源。</p>
+     */
     public List<ResourceKey> claimedResources() {
         final List<ResourceKey> keys = new java.util.ArrayList<>(SLOT_COUNT);
         for (int slot = 0; slot < SLOT_COUNT; slot++) {
+            if (!KeeperTarget.isMarked(targets[slot])) {
+                continue; // 未标记（目标 0）：不认领，避免把真正生效的同伴挤成「让位」
+            }
             final ResourceKey key = networkResourceKey(slot);
             if (key != null) {
                 keys.add(key);

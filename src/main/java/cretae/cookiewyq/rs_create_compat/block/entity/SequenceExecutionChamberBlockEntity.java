@@ -40,6 +40,7 @@ import cretae.cookiewyq.rs_create_compat.support.RsccExporterExecutorMode;
 import cretae.cookiewyq.rs_create_compat.support.RsccExporterMenuBridge;
 import cretae.cookiewyq.rs_create_compat.support.RsccImporterExecutorMode;
 import cretae.cookiewyq.rs_create_compat.support.RsccMachineCluster;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import cretae.cookiewyq.rs_create_compat.support.MachineWorkSignal;
 import cretae.cookiewyq.rs_create_compat.support.RsccRefillPolicy;
 import cretae.cookiewyq.rs_create_compat.support.RsccSlotNbt;
@@ -68,7 +69,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.material.Fluid;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
@@ -1633,10 +1633,8 @@ public class SequenceExecutionChamberBlockEntity
             return;
         }
         for (final BlockPos pos : reachableExporterPositions()) {
-            if (!level.isLoaded(pos)) {
-                continue;
-            }
-            if (level.getBlockEntity(pos) instanceof RsccExporterExecutorMode exporter) {
+            // 第 138 轮：安全读（只读已 FULL 区块），不加载、不阻塞
+            if (SafeChunkRead.blockEntityNow(level, pos) instanceof RsccExporterExecutorMode exporter) {
                 exporter.rscc$refreshExecutorMode();
             }
         }
@@ -3240,6 +3238,50 @@ public class SequenceExecutionChamberBlockEntity
     private static final long RUNTIME_RESIDUE_STATION_COOLDOWN_TICKS = 200L;
 
     /**
+     * <b>「裸在制件长期原样不动 ⇒ 这条登记已经死了」的判定窗口</b>（tick，1200 = 60 秒）。
+     *
+     * <h2>它修的是哪一种死局（2026-11-13 用户远程服务器现场，已导出快照）</h2>
+     * <p>快照里两条 {@code step=-1} 的金板登记：{@code (420,100,102)} age 9,409,580 tick、
+     * {@code (419,100,102)} age 9,409,805 tick（≈5.4 天，开服当天推进去，从未进入第一个工序）；
+     * 任务 {@code delivered=3}、{@code remaining=2} ⇒ 按名额公式 {@code capacity = R − inFlight}
+     * = 2 − 2 = 0 ⇒ <b>本仓从此一次都不再推料</b>。</p>
+     *
+     * <p>而既有三条回收路径全部到不了它：</p>
+     * <ul>
+     *     <li>{@link #reclaimRuntimeStationResidue()} 的两类「卡死」判据都要求
+     *     <b>该格 {@code machine_full} 计数 &gt; 0</b>（强旁证）—— 名额为 0 时本仓<b>根本不再尝试推送</b>，
+     *     因此永远收不到 {@code machine_full}，旁证永远不成立（<b>判据自身的死锁</b>）；</li>
+     *     <li>「结果池物品」分支要求台上那件是配方结果池里的东西 —— 金板是<b>起步原料</b>，不是结果池物品；</li>
+     *     <li>既有判据 ④ 明确写「{@code 登记物品 == 台上物品} ⇒ 我们推过去的那一份 ⇒ 合法等待，绝不碰」——
+     *     这句在「刚推上去、机器还没接手」时是对的，但它<b>没有时间上限</b>，于是一件永远不动的裸原料
+     *     被这句话永久保护。</li>
+     * </ul>
+     *
+     * <h2>判据（可证死，不是「等得久」）</h2>
+     * <p>Create 的序列装配在一步<b>真正开始</b>的那一刻就会把置物台上那件替换成带
+     * {@code create:sequenced_assembly} 进度组件的过渡件（{@code SequencedAssemblyRecipe#advance}）。
+     * 因此「台上仍是<b>不带进度组件</b>的裸件、且<b>就是本仓登记的那一件</b>、且<b>自上一次成功推送起
+     * 已满 60 秒</b>」= 这 60 秒里没有任何机器接手过它。60 秒远超任何正常取料 / 起件节奏
+     * （Create 的一步是秒级，见 {@link #RUNTIME_RESIDUE_PROGRESS_STALL_TICKS} 的取值依据），
+     * 因此这份登记已不代表「一件在做的东西」—— 它只是把名额压成 0 的死账。</p>
+     * <p>只处理 {@code step < 0} 的登记（= 起步原料 / 步骤专用投入物，由推料侧用 -1 写入）；
+     * 过渡件（{@code isTransitionOfMyRecipes}）一律不在这条分支里动，避免抢走半成品。</p>
+     */
+    private static final long STALE_BARE_UNIT_TICKS = 1200L;
+
+    /**
+     * <b>同一工位两次「超龄裸件回收」之间的冷却</b>（tick，6000 = 5 分钟）。
+     *
+     * <p>为什么比 {@link #RUNTIME_RESIDUE_STATION_COOLDOWN_TICKS}（10 秒）长得多：那一条防的是
+     * 「清掉 ⇒ 立刻又被推回来 ⇒ 再清」的<b>秒级</b>往返，而本回收的对象是「机器根本不吃这件料」的
+     * 工位（例如机械手没拿步骤投入物 / 机器没通电）。这类工位修好之前，收回网络的那一份会被同一条
+     * 总线<b>再推回同一格</b>，于是 10 秒冷却会变成每 10 秒一次的推收往返。给到 5 分钟：
+     * 一次性故障（本轮的现场）第一次就自愈；真正坏掉的工位只留下「每 5 分钟一次、物品守恒」的
+     * 低频重试，日志里能看见，且绝不放大成刷屏。</p>
+     */
+    private static final long STALE_BARE_RECOVER_COOLDOWN_TICKS = 6000L;
+
+    /**
      * <b>每工位的残留观测</b>（键 ⊆ {@link #inFlightUnits}，因此天然有界；每轮对账删孤儿）。
      *
      * <p>四个用途，全部只读世界 / 只改本地表：</p>
@@ -3445,28 +3487,35 @@ public class SequenceExecutionChamberBlockEntity
         if (station == null) {
             return false;
         }
-        if (level == null || !level.isLoaded(station)) {
-            return true; // 看不见 ≠ 没有：保留登记，等区块加载后再判（绝不在未加载时丢凭据）
-        }
-        final net.neoforged.neoforge.items.IItemHandler handler =
-            cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy.itemHandlerAt(level, station);
-        if (handler == null) {
-            return false; // 已加载但不再是容器 ⇒ 工位真的没了（reconcile 会删这条登记）
+        if (level == null) {
+            return true; // 判不了 ⇒ 保留登记（保守方向：宁可不搬，绝不在看不见时丢凭据）
         }
         final Item expected = unit == null ? null : unit.item();
-        for (int slot = 0; slot < handler.getSlots(); slot++) {
-            final ItemStack inSlot = handler.getStackInSlot(slot);
-            if (inSlot.isEmpty()) {
-                continue;
+        // 2026-11-07：按<b>整工位</b>扫（登记坐标 + 工位本体/置物台 + 同工位机械手）——
+        // 登记坐标是"推料给谁"（可能是机械手），而装配产出落在置物台上（见 stationGroupPositions 的说明）。
+        for (final BlockPos pos : stationGroupPositions(level, station)) {
+            if (!level.isLoaded(pos)) {
+                return true; // 看不见 ≠ 没有：保留登记，等区块加载后再判（绝不在未加载时丢凭据）
             }
-            if (expected != null && inSlot.getItem() == expected) {
-                return true; // 我们推过去的那一件还压在这里
+            final net.neoforged.neoforge.items.IItemHandler handler =
+                cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy.itemHandlerAt(level, pos);
+            if (handler == null) {
+                continue; // 这一格不是容器（机械手槽位不算容器 / 已被拆）⇒ 看下一格
             }
-            if (isTransitionOfMyRecipes(inSlot.getItem())) {
-                return true; // 原料已被消耗、件已变成过渡件（正在加工 / 稍后才产出）
+            for (int slot = 0; slot < handler.getSlots(); slot++) {
+                final ItemStack inSlot = handler.getStackInSlot(slot);
+                if (inSlot.isEmpty()) {
+                    continue;
+                }
+                if (expected != null && inSlot.getItem() == expected) {
+                    return true; // 我们推过去的那一件还压在整工位的某一格里
+                }
+                if (isTransitionOfMyRecipes(inSlot.getItem())) {
+                    return true; // 原料已被消耗、件已变成过渡件（正在加工 / 稍后才产出）
+                }
             }
         }
-        return false; // 工位空了 / 只剩与本产线无关的东西 ⇒ 这条登记可以清
+        return false; // 整工位都空了 / 只剩与本产线无关的东西 ⇒ 这条登记可以清
     }
 
     /** 只读：登记表里是否还有「不能丢凭据」的条目（见 {@link #stationHoldsPipelineResidue}）。 */
@@ -3604,6 +3653,12 @@ public class SequenceExecutionChamberBlockEntity
                 }
                 continue;
             }
+            // 2026-11-13 第 136 轮：超龄「裸登记」而工位上已经没有任何本产线残留 ⇒ 这条登记是孤儿。
+            // 与「超龄裸件回收」互补：那一半处理「东西还在、只是永远不动」，这一半处理
+            // 「东西早就没了 / 被换成了与本产线无关的东西」。两者都只改本模组自己的账本。
+            if (dropOrphanBareRegistration(level, station, now)) {
+                continue;
+            }
             final boolean occupied = stationIsOccupied(level, station);
             final Long abandonedSince = abandonedInFlightAt.get(station);
             if (abandonedSince != null) {
@@ -3643,6 +3698,67 @@ public class SequenceExecutionChamberBlockEntity
                     + " 一件在做的东西，不再占名额；该格一旦重新收料或变空即自动恢复计数)");
             }
         }
+    }
+
+    /**
+     * <b>只读 + 只删本模组自己的账</b>：这条「超龄裸登记」是不是孤儿（该工位上已经没有本产线的任何残留）。
+     *
+     * <h2>为什么需要它（与「超龄裸件回收」互补的另一半）</h2>
+     * <p>现场快照里两条 5.4 天的 {@code step=-1} 金板登记把名额压成 0。若那两片金板其实<b>早已不在台上</b>
+     * （被玩家拿走 / 区块外被别的机器吃掉 / 换成了与本产线无关的东西），单纯靠「把台上那件收回」的
+     * 判据是清不掉的：登记会永远挂着一个“已经不是我们那件”的工位。此时正确动作<b>不是搬东西</b>
+     * （台上不是我们的，绝不碰），而是<b>删掉这条已经失去凭据的登记</b>：
+     * 物品守恒自然成立（一个字节都没动），名额也随之自愈。</p>
+     *
+     * <p>判据（全部成立）：登记存在、{@code step < 0}（起步原料 / 步骤专用投入物）、
+     * 物品不是本仓过渡件、自上次成功推送已满 {@value #STALE_BARE_UNIT_TICKS} tick、
+     * <b>该格此刻非空</b>（空的登记不占名额，留给下一次推送重写，不动它）、
+     * 且 {@link #stationHoldsPipelineResidue} 判定「整工位找不到本仓登记的那一件、也找不到本产线过渡件」。
+     * 判不出来（未加载 / 抛异常）一律<b>不动</b>（保守方向：宁可不删，也不丢凭据）。</p>
+     *
+     * @return true = 已删掉这条孤儿登记（调用方直接跳过该工位本轮的其余对账）
+     */
+    private boolean dropOrphanBareRegistration(final Level level, final BlockPos station,
+                                               final long now) {
+        final InFlightUnit unit = inFlightUnits.get(station);
+        if (unit == null || unit.item() == null || unit.step() >= 0) {
+            return false;
+        }
+        if (isTransitionOfMyRecipes(unit.item())) {
+            return false; // 过渡件登记：不在这一半处理
+        }
+        if (!isStartIngredient(unit.item()) && !isStepExtraInput(unit.item())) {
+            return false;
+        }
+        if (now < unit.sinceTick() || now - unit.sinceTick() < STALE_BARE_UNIT_TICKS) {
+            return false; // 还年轻：可能刚推上去、机器还没接手
+        }
+        if (!stationIsOccupied(level, station)) {
+            return false; // 空的：不占名额（分量①只数“压着东西”的格），留给下一次推送重写
+        }
+        final boolean holds;
+        try {
+            holds = stationHoldsPipelineResidue(station, unit);
+        } catch (final RuntimeException failure) {
+            return false; // 判不出来 ⇒ 不动（绝不因为一次读取失败就丢掉凭据）
+        }
+        if (holds) {
+            return false;
+        }
+        inFlightUnits.remove(station);
+        unitLivenessAt.remove(station);
+        abandonedInFlightAt.remove(station);
+        inFlightAbandonedCount = abandonedInFlightAt.size();
+        setChanged();
+        if (RsccAssemblyDebug.isEnabled()) {
+            RsccAssemblyDebug.event(RsccAssemblyDebug.machine("chamber", worldPosition)
+                + " inflight_orphan_removed station=" + RsccAssemblyDebug.at(station)
+                + " item=" + RsccAssemblyDebug.itemId(unit.item())
+                + " age=" + (now - unit.sinceTick()) + "t"
+                + " (登记满 " + STALE_BARE_UNIT_TICKS + " tick 而该工位已没有本产线的任何残留 ⇒"
+                + " 这条登记失去凭据；只删本模组账本，物品一个字节都没动，名额随之自愈)");
+        }
+        return true;
     }
 
     /**
@@ -3787,13 +3903,27 @@ public class SequenceExecutionChamberBlockEntity
                 continue;
             }
             // 已判死件的优先清（那一格正是把名额压成 0 的那一格）；否则也照同样判据清理。
-            final int moved = clearDeadStationPieceAt(level, station);
+            // 2026-11-07：先扫<b>登记坐标</b>（起步原料 / 步骤投入物 / 过渡件三种残留都放行），
+            // 再去<b>同工位其余容器</b>只收过渡件（机械手把手上的金板压到置物台的在制件上之后，
+            // 件留在置物台、登记坐标（机械手）已空 —— 只扫登记坐标会把它永远漏掉）。
+            int moved = clearDeadStationPieceAt(level, station, station, true);
+            if (moved <= 0) {
+                for (final BlockPos other : stationGroupPositions(level, station)) {
+                    if (other.equals(station)) {
+                        continue;
+                    }
+                    moved = clearDeadStationPieceAt(level, other, station, false);
+                    if (moved > 0) {
+                        break;
+                    }
+                }
+            }
             if (moved > 0) {
                 deadStationClearBurst += moved;
                 RsccAssemblyDebug.event(RsccAssemblyDebug.machine("chamber", worldPosition)
                     + " dead_station_cleared station=" + RsccAssemblyDebug.at(station)
                     + " moved=" + moved
-                    + " (该格压着一件「本步已经没有任何订单 / 机器」的过渡件，"
+                    + " (该工位压着一件「本步已经没有任何订单 / 机器」的过渡件，"
                     + "它会把机器唯一的加工位永久占死；已按任务结束同一通道收回本仓)");
             }
         }
@@ -3803,11 +3933,18 @@ public class SequenceExecutionChamberBlockEntity
     /**
      * {@link #clearDeadStationPieces()} 的逐格实现（判据见那个方法的 javadoc）。
      *
+     * <p>2026-11-07 起按<b>整工位</b>调用：{@code pos} 是本次真正去扫的容器坐标，
+     * {@code registered} 是它在 {@link #inFlightUnits} 里的登记键（两者多数时候相同）。
+     * 只有 {@code allowStartIngredient} 为真（= 正在扫登记坐标本身）时才放行
+     * 「同物品的起步原料 / 步骤专用投入物」；扫同工位其它容器时只收过渡件，
+     * 避免把玩家手放在置物台上的金板 / 齿轮当成残留。</p>
+     *
      * @return 该格实际搬动的件数（0 = 它没堵 / 不应该碰）
      */
-    private int clearDeadStationPieceAt(final Level level, final BlockPos station) {
+    private int clearDeadStationPieceAt(final Level level, final BlockPos pos,
+                                        final BlockPos registered, final boolean allowStartIngredient) {
         final net.neoforged.neoforge.items.IItemHandler handler =
-            cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy.itemHandlerAt(level, station);
+            cretae.cookiewyq.rs_create_compat.support.RsccChamberImportStrategy.itemHandlerAt(level, pos);
         if (handler == null) {
             return 0; // 不是容器 / 未加载：判不了就不动
         }
@@ -3818,17 +3955,20 @@ public class SequenceExecutionChamberBlockEntity
                     continue;
                 }
                 final Item item = inSlot.getItem();
-                final InFlightUnit registered = inFlightUnits.get(station);
+                final InFlightUnit registeredUnit = inFlightUnits.get(registered);
                 if (!isTransitionOfMyRecipes(item)) {
                     // <b>不是过渡件</b>：只放行「本仓登记过的那一件」的起步原料 / 步骤专用投入物残留
                     // （2026-10-17：取消后置物台上的齿轮 / 金板 / 铁粒等）。
                     // 必须<b>同物品</b>命中登记表，否则不碰（玩家手工放的、别的仓推的、
                     // 别的配方 / 别的模组的东西一律不动）。
-                    if (registered == null || registered.item() != item
+                    if (!allowStartIngredient) {
+                        continue; // 同工位其它容器只收过渡件
+                    }
+                    if (registeredUnit == null || registeredUnit.item() != item
                         || (!isStartIngredient(item) && !isStepExtraInput(item))) {
                         continue;
                     }
-                    if (unitInFlightAt(station)) {
+                    if (unitInFlightAt(registered)) {
                         continue; // 工位上还有在制件 ⇒ 这份原料正被产线使用，绝不抢
                     }
                     if (inputMaterialWantedNow(item)) {
@@ -3841,7 +3981,7 @@ public class SequenceExecutionChamberBlockEntity
                         continue;
                     }
                     // 输出总线此刻仍会把它推给它自己那一格 ⇒ 它是这条链的正常件，不碰
-                    if (busTargetAccepts(station, item)) {
+                    if (busTargetAccepts(pos, item) || busTargetAccepts(registered, item)) {
                         // <b>2026-10-17：仅当该过渡件所属配方仍有活跃订单时</b>才把它当「正常件」；
                         // 取消 / 完成后订单已经没了，它只是压在工位上的残留 ⇒ 继续往下收回。
                         // 旧实现无条件 continue，于是「输出总线勾了该中间产物类别」的配置下，
@@ -3868,12 +4008,12 @@ public class SequenceExecutionChamberBlockEntity
                 // 这一格已经清出来 ⇒ 撤掉该格的死件标记与拒收证据（下一件推过来时重新计），
                 // 并删除这条在制登记：sweep 已经把它收回，凭据用完即废（否则空工位的旧登记会
                 // 永久占着名额 / 让「是否还有残留」恒为真）。
-                inFlightUnits.remove(station);
-                abandonedInFlightAt.remove(station);
+                inFlightUnits.remove(registered);
+                abandonedInFlightAt.remove(registered);
                 inFlightAbandonedCount = abandonedInFlightAt.size();
-                refusedTargetAt.remove(station);
-                refusedTargetHits.remove(station);
-                unitLivenessAt.put(station, level.getGameTime());
+                refusedTargetAt.remove(registered);
+                refusedTargetHits.remove(registered);
+                unitLivenessAt.put(registered, level.getGameTime());
                 setChanged();
                 // <b>2026-10-17：收进本仓后立即走同一套「任务结束回流」</b>，把这一件写回网络。
                 // 否则它只是从工位挪到本仓内部存储，玩家在终端里仍然看不到（尤其没有输入总线 /
@@ -3888,7 +4028,7 @@ public class SequenceExecutionChamberBlockEntity
                     RsccAssemblyDebug.warn("dead_station_failed@" + RsccAssemblyDebug.at(worldPosition)
                             + "#" + slot,
                         RsccAssemblyDebug.machine("chamber", worldPosition)
-                            + " dead_station_failed station=" + RsccAssemblyDebug.at(station)
+                            + " dead_station_failed station=" + RsccAssemblyDebug.at(pos)
                             + " slot=" + slot
                             + " error=" + failure.getClass().getSimpleName()
                             + " message=" + failure.getMessage());
@@ -4162,7 +4302,13 @@ public class SequenceExecutionChamberBlockEntity
         }
         final boolean clearedRecently = watch.clearedAt() != NEVER
             && now - watch.clearedAt() < RUNTIME_RESIDUE_STATION_COOLDOWN_TICKS;
+        // 超龄裸件回收的独立冷却（更长，见 {@link #STALE_BARE_RECOVER_COOLDOWN_TICKS}）：
+        // 用同一个 watch.clearedAt 计时，但阈值不同，因此两类清理互不改变对方的既有语义。
+        final boolean staleBareClearedRecently = watch.clearedAt() != NEVER
+            && now - watch.clearedAt() < STALE_BARE_RECOVER_COOLDOWN_TICKS;
         boolean candidate;
+        // 2026-11-13 第 136 轮：本条走的是「超龄裸件（本仓登记的那一份、一直没有进度组件）」那条新分支吗。
+        boolean staleBare = false;
         final String reasonClass;
         String watchDetail;
         if (assembly != null) {
@@ -4209,19 +4355,38 @@ public class SequenceExecutionChamberBlockEntity
             // 判据 ④（硬约束）：这正是本仓推给这一步的那一份 ⇒ 合法等待，绝不碰。
             // 只对「结果池物品」生效：卡死件已经有更硬的「machine_full 在涨 + 进度不动」证据。
             if (unit.item() != null && unit.item() == item) {
-                return 0;
-            }
-            if (!isSettledResultOfRecipe(unit, item)) {
+                // 2026-11-13 第 136 轮：判据 ④ 补上<b>时间上限</b>。
+                // 旧实现「登记物品 == 台上物品 ⇒ 无条件 return 0」没有上限，于是
+                // 「推上去之后再没有任何机器接手」的裸起步原料被永久保护，名额
+                // （capacity = remaining − inFlight）被它压成 0，而名额为 0 时本仓
+                // 根本不再尝试推送 ⇒ 也永远不会有 machine_full 旁证 ⇒ 判据 ① / ② 那条
+                // 卡死通道永远进不来（判据自身的死锁，现场见 STALE_BARE_UNIT_TICKS 的说明）。
+                // 新口径：只有「可证从未被机器接手」的<b>超龄</b>裸件才走回收，见下方判据。
+                if (!staleBareUnitRecoverable(now, unit)) {
+                    return 0; // 年轻 / 不是裸原料登记 ⇒ 与旧实现逐字一致：合法等待，绝不碰
+                }
+                // 强旁证（machine_full 计数）在这条分支上<b>不</b>作要求：名额被压成 0 时
+                // 本仓不会再去推料，machine_full 永远不会有新计数 —— 要求它等于永远不清。
+                staleBare = true;
+                candidate = true;
+                reasonClass = "stale_bare_registration";
+                watchDetail = " age=" + (now - unit.sinceTick()) + "t step=" + unit.step();
+            } else if (!isSettledResultOfRecipe(unit, item)) {
                 logRuntimeResidueSkip(station, item, "not_result_pool");
                 return 0;
+            } else {
+                candidate = true;
+                reasonClass = "settled_result_blocked_station";
+                watchDetail = "";
             }
-            candidate = true;
-            reasonClass = "settled_result_blocked_station";
-            watchDetail = "";
         }
         if (candidate && (assembly != null || bareTransition) && clearedRecently) {
             logRuntimeResidueSkip(station, item, "station_cooldown");
             return 0; // 冷却：同一工位 10 秒内不重复清（防「清了又被立刻推回来」的往返）
+        }
+        if (staleBare && staleBareClearedRecently) {
+            logRuntimeResidueSkip(station, item, "station_cooldown_long");
+            return 0; // 超龄裸件回收的 5 分钟冷却（见 STALE_BARE_RECOVER_COOLDOWN_TICKS）
         }
         final String key = station.asLong() + "#" + RsccAssemblyDebug.itemId(item);
         final Long since = runtimeResidueSince.get(key);
@@ -4326,10 +4491,57 @@ public class SequenceExecutionChamberBlockEntity
                 + watchDetail
                 + " reason=" + reasonClass
                 + " (这一件占着站台把后续推送全部拒收；已按「"
-                + (assembly != null ? "进度卡死" : bareTransition ? "裸过渡件" : "结果池证据")
-                + " + machine_full 在涨」收回，并清掉该工位的在制登记与拒收证据)");
+                + (staleBare ? "超龄裸件（登记的那一份、一直没有进度组件、且自上次成功推送已满 "
+                    + STALE_BARE_UNIT_TICKS + " tick）" : assembly != null ? "进度卡死"
+                    : bareTransition ? "裸过渡件" : "结果池证据")
+                + (staleBare ? "」原样收回网络、再撤登记（不要求 machine_full 旁证：名额被压成 0 时"
+                    + "本仓根本不会再去推料）" : " + machine_full 在涨」收回")
+                + "，并清掉该工位的在制登记与拒收证据)");
         }
         return (int) moved;
+    }
+
+    /**
+     * <b>只读</b>：这一条登记能不能按「超龄裸件」回收（判据见 {@link #STALE_BARE_UNIT_TICKS}）。
+     *
+     * <p>调用点只有一个：{@link #reclaimStationResidueAt} 的「登记物品 == 台上物品」分支。
+     * 那里已经保证台上这一格<b>恰好一件</b>、<b>不带 {@code create:sequenced_assembly} 进度组件</b>
+     * （否则会走带进度组件那条分支）、且<b>物品与登记完全一致</b>（= 是本仓推过去的那一份）。</p>
+     *
+     * <h2>判据（全部成立才为真，任一条不成立都返回 false ⇒ 与旧实现逐字一致：合法等待，绝不碰）</h2>
+     * <ol>
+     *     <li>{@code step < 0}：只处理推料侧用 {@code -1} 写入的<b>起步原料 / 步骤专用投入物</b>；
+     *     过渡件登记的 {@code step >= 0} 一律留在既有分支（绝不在这里抢半成品）；</li>
+     *     <li>物品是<b>起步原料或步骤专用投入物</b>（{@link #isStartIngredient} / {@link #isStepExtraInput}）；
+     *     并且<b>不是</b>本仓过渡件（{@link #isTransitionOfMyRecipes}）—— 双重保险，防「登记是原料、
+     *     物品被换成了过渡件」这种形态被误判；</li>
+     *     <li>自<b>本仓上一次向这一格成功推送</b>（{@code sinceTick}，由
+     *     {@link #rscc$noteUnitPushed} 在每次成功推料时刷新）起已满 {@value #STALE_BARE_UNIT_TICKS} tick
+     *     （60 秒）—— 这 60 秒里没有任何机器把它接手 / 推进（接手会写入进度组件）；
+     *     期间任何一次成功推料都会刷新 {@code sinceTick} ⇒ 活着 / 刚被喂过的工位永远不满足。</li>
+     * </ol>
+     * <p>只读：不搬运任何资源；真正的搬运在外层既有通道里（SIMULATE 夹量 → 精确抽 1 件 →
+     * 优先入网 → 网络装不下才收本仓 → 两侧都装不下就原样还回），并逐笔记守恒账。</p>
+     *
+     * @param now  当前 gameTime
+     * @param unit 该工位的在制登记（非空，且 {@code unit.item()} 与台上物品一致）
+     */
+    private boolean staleBareUnitRecoverable(final long now, final InFlightUnit unit) {
+        if (unit == null || unit.item() == null) {
+            return false;
+        }
+        if (unit.step() >= 0) {
+            return false; // 过渡件登记：不在这条分支里动
+        }
+        final Item item = unit.item();
+        if (isTransitionOfMyRecipes(item)) {
+            return false; // 本仓过渡件：即使 step=-1 也不抢（走既有过渡件分支）
+        }
+        if (!isStartIngredient(item) && !isStepExtraInput(item)) {
+            return false; // 不是起步原料 / 步骤专用投入物：不是这条判据的对象
+        }
+        final long age = now - unit.sinceTick();
+        return age >= 0L && age >= STALE_BARE_UNIT_TICKS;
     }
 
     /**
@@ -4900,10 +5112,11 @@ public class SequenceExecutionChamberBlockEntity
      */
     @org.jetbrains.annotations.Nullable
     public static BlockPos operatingPosOf(final Level level, final BlockPos machine) {
-        if (machine == null || level == null || !level.isLoaded(machine)) {
+        // 第 138 轮：安全读（只读已 FULL 区块）
+        final BlockState state = SafeChunkRead.blockStateNow(level, machine);
+        if (state == null) {
             return null;
         }
-        final BlockState state = level.getBlockState(machine);
         if (!(state.getBlock()
             instanceof com.simibubi.create.content.kinetics.deployer.DeployerBlock)) {
             return null; // 不是机械手：它加工的件就在自己的容器里（既有路径已覆盖）
@@ -6717,7 +6930,7 @@ public class SequenceExecutionChamberBlockEntity
                 continue;
             }
             // 只取「已存在」的方块实体（CHECK）：整表重建绝不为邻块强制初始化
-            if (!(level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+            if (!(SafeChunkRead.blockEntityNow(level, pos)
                 instanceof final RsccExporterExecutorMode exporter)) {
                 continue;
             }
@@ -6872,8 +7085,7 @@ public class SequenceExecutionChamberBlockEntity
             if (!level.isLoaded(pos)) {
                 continue; // 区块未加载：不记「已刷」，看门狗会把它算成「没刷到」
             }
-            final BlockEntity blockEntity = level.getChunkAt(pos)
-                .getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK);
+            final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, pos);
             if (!(blockEntity instanceof final RsccExporterExecutorMode exporter)) {
                 continue;
             }
@@ -7240,11 +7452,11 @@ public class SequenceExecutionChamberBlockEntity
                 // 时，说明订单不允许再开新件，份额外总线必须继续等（份额内的那台加工完自然会放行）。
                 // 该闸门与备料侧 {@code :5753} 的 cap 口径<b>完全同源</b>，因此推料 / 备料两侧一致。
                 //
-                // <b>2026-10-06：名额改成「按配方」算（必得配方严格、概率配方动态）</b>——
+                // <b>2026-10-06：名额改成「按配方」算（2026-11-08 起必得 / 概率配方同一公式）</b>——
                 // 原式在这里对起步原料类别是错的：一个仓同时挂「轨道（下单 1）」与「精密构件（下单 64）」
                 // 时，整仓名额 64 会把石头台阶也一起放行；而跨执行舱在制件（件已推到别的仓的机器上）
                 // 根本不在这条式子里。起步原料类别改走 {@link #unitCapacityLeftFor}（→
-                // {@link #startCapacityFor} → {@link #startCapacityForRecipe}，含跨舱计数与概率放大），
+                // {@link #startCapacityFor} → {@link #startCapacityForRecipe}，含跨舱计数，名额与 p 无关），
                 // <b>其它类别一字未改</b>（旧式就在 {@link #unitCapacityLeftFor} 的非起步原料分支里）。
                 final boolean unitCapacityLeft = unitCapacityLeftFor(info);
                 if (!unitCapacityLeft || !ownsFallbackTurn(exporterPos, owners, shareProbeOf(info))) {
@@ -8188,10 +8400,10 @@ public class SequenceExecutionChamberBlockEntity
      *     （Create 在这种池上返回空栈）⇒ 不算必得，落到保守的一侧。</li>
      * </ol>
      *
-     * <p><b>判不出来一律按「非必得」</b>（配方查不到 / 不是序列装配配方 / 结果池解析异常）：
-     * 非必得 ⇔ 走「动态多开」那一侧，因此<b>宁可多开也不会因为判不出来而把概率产线卡死</b>。
-     * 代价不对称：把必得的误判成非必得只是多开几件；把非必得的误判成必得，会让一条永远凑不够订单的
-     * 产线被死死按在「只能开 R 件」上（R 次轮盘全落空 ⇒ 一件成品都没有）。</p>
+     * <p><b>2026-11-08 起本方法不再参与名额判定</b>：名额对必得 / 概率配方是<b>同一个公式</b>
+     * （见 {@link #startCapacityForRecipe(String)} 的 ②）。判不出来的方向也随之变得无害 ——
+     * 无论判成哪一侧，名额都是「还差几件 − 在制件数」，绝不会因为一次误判而预开或收紧。
+     * 它现在只用于诊断行上标记 {@code guaranteed}（让人一眼看出这条配方的主产物是不是必得）。</p>
      *
      * <p>实测对照（本轮已核实）：{@code create:sturdy_sheet} / {@code create:track} 的 {@code results}
      * 只有一项、且<b>没有</b> {@code chance} 字段 ⇒ 必得；{@code create:precision_mechanism} 的池是
@@ -8211,7 +8423,8 @@ public class SequenceExecutionChamberBlockEntity
     /**
      * <b>只读</b>：该配方主产物的<b>归一概率</b> p（Create 轮盘口径：主产物权重 / 全部非空项权重之和）；
      * 判不出来（配方缺失 / 结果池里没有非空产物 / 解析异常）返回 {@code -1}。
-     * <p>唯一的用途是 {@link #startCapacityForRecipe(String)} 里非必得配方的放大倍数。</p>
+     * <p>2026-11-08 起<b>唯一用途</b>是 {@link #startCapacityForRecipe(String)} 的诊断行（打印 {@code p=}），
+     * <b>不参与任何名额判定</b> —— 名额对必得 / 概率配方是同一个公式（见那里的 javadoc ②）。</p>
      */
     private float mainResultChance(final String recipeId) {
         final SequencedRecipeProbe.Split split = resultPoolSplit(recipeId);
@@ -8283,25 +8496,26 @@ public class SequenceExecutionChamberBlockEntity
      * 「我一件都没开」⇒ 名额恢复 ⇒ 再投一份起步原料 ⇒ 又开一件。这正是用户实测的
      * 「下单 1 条轨道产出 2 条」「冲压的时候又来了一个」。</p>
      *
-     * <h2>② 非必得（p &lt; 100%）配方：按预期产出率放大（推导）</h2>
-     * <p>设订单剩余 R 件、主产物单次概率 p（Create 轮盘：p = 主产物权重 / Σ 全部非空项权重，
-     * 见 {@link SequencedRecipeProbe#splitResultPool}）。每跑完一件在制件 = <b>一次独立轮盘</b>，
-     * 交付 R 件成品就是「第 R 次成功之前要投多少次」：</p>
+     * <h2>② 非必得（p &lt; 100%）配方：<b>不预开，按实际损失补发</b>（2026-11-08 按用户口径改定）</h2>
+     * <p>用户原话（2026-11-08）：<b>「我的真正目的就只是做 20 件……多的是针对于（如果）我现在 20 个
+     * 金板没有完成你再多发，而不是说不管怎么样都发。」</b>因此名额<b>与 p 无关</b>，恒为：</p>
      * <pre>
-     *   X = 第 R 次成功所需要的轮盘次数（负二项分布），E[X] = R / p
-     *   ⇒ 允许同时在制的件数 = ceil(R / p)
-     *
-     *   为什么取 ceil(R/p)：
-     *     * 不取更小（例如既有口径 R）：并发数小于「期望所需次数」时，产能被并发上限卡住，
-     *       订单要跑得比期望更久才能凑够 —— 与用户「非 100% 就要动态发」的要求相反；
-     *     * 不取更大：再放大只是让更多件同时烧同一份起步原料，期望产出不变、废料更多。
-     *   例（precision_mechanism，p = 120 / 150 = 0.8）：
-     *     下单 1 个  ⇒ 允许 ceil(1 / 0.8)  = 2 件在制
-     *     下单 64 个 ⇒ 允许 ceil(64 / 0.8) = 80 件在制（既有口径是 64 ⇒ 只会更宽，绝不更紧）
+     *   名额 = 订单剩余量 R − 已在制件数 inFlight      （必得 / 概率配方<b>同一个公式</b>）
      * </pre>
-     * <p><b>p 判不出来</b>（配方缺失 / 池里没有非空产物）时<b>不放大、直接用 R</b>：那正是<b>既有行为</b>
-     * —— 「判不出来绝不收紧」是这里唯一安全的保守方向（少开只会慢一点，而既有的「未达标继续补料」
-     * 仍会一件一件做到达标；多开则可能把起步原料成倍投进机器）。</p>
+     * <p><b>为什么这样也能把订单做满（按需补发的闭环）</b>：一次轮盘落空（或这一件被销毁）⇒ 它从
+     * 在制里消失（{@code inFlight} 减 1），而 {@code R} 只在<b>成品被认领</b>时才减 ⇒
+     * {@code capacity = R − inFlight} 当 tick 就回到 1 ⇒ 推料侧立刻补一份起步原料、再开一件。
+     * 于是「补发」只由<b>真实发生的损失</b>触发，绝不会先按期望值把一批起步原料提前占进机器。
+     * 终止性：每件在制件要么交付（R 减 1）、要么损失（inFlight 减 1），因此补发次数 = 实际损失次数，
+     * 不会自我放大。</p>
+     * <p><b>为什么不再用 {@code ceil(R/p)}（本轮被用户驳回的旧设计）</b>：期望值口径会在订单<b>一件都还
+     * 没失败</b>时就把 R/p 份起步原料投进产线 —— p=0.8、R=20 就是 25 份。资源紧张时多占的 5 份金板
+     * 既拿不回来、又会变成置物台上的残留；即便回收成功，也是「先浪费再补救」。用户要的是
+     * <b>先只按订单量开工，缺了再补</b>。</p>
+     * <p><b>代价（如实写明）</b>：p &lt; 1 时订单的完成时间不再受「R/p 次轮盘」的理论下界支配 ——
+     * 每次失败之后才补一件，等于把一次失败的处理延迟放到关键路径上（通常是一两次推料 tick）。
+     * 换来的是用户要的硬不变量：<b>任何时刻同时占用的起步原料 ≤ 订单还差的件数</b>。</p>
+     * <p>p 仍然算，但<b>只用于诊断行</b>（{@code p=0.800}），<b>不参与任何名额判定</b>。</p>
      *
      * <h2>③ 订单剩余量判不出来</h2>
      * <p>沿用既有口径：<b>一件在制都没有时允许开一件，已经有在制件时一件都不再开</b>
@@ -8355,17 +8569,12 @@ public class SequenceExecutionChamberBlockEntity
             // 判不出来：不确定时取小不取大（与 allowedConcurrentUnits 的读不到分支同形）
             capacity = inFlight <= 0L ? 1L : 0L;
         } else {
-            long allowed = remaining;
-            if (!guaranteedResult(recipeId)) {
-                final float p = mainResultChance(recipeId);
-                if (p > 0F && p < 1F) {
-                    // ② 非必得：按「第 R 次成功的期望次数 R/p」放大（推导见上方 javadoc）
-                    allowed = (long) Math.ceil(remaining / (double) p);
-                }
-                // p ≥ 1 / p ≤ 0 / 判不出来（-1）⇒ 不放大，保持既有口径（绝不收紧）
-            }
+            // ② 非必得不再预开（2026-11-08 用户口径）：名额 = 还差几件 − 在制件数，与 p 无关；
+            // 一件失败 ⇒ inFlight 减 1 ⇒ 名额当 tick 回到 1 ⇒ 按需补发一件（推导见上方 javadoc ②）。
+            final long allowed = remaining;
             budgetForLog = allowed;
-            // ① 必得：allowed = R（严格），② 非必得：allowed = ceil(R/p)；两者都减去跨舱在制件数
+            // 2026-11-08 新口径：必得 / 非必得同一个公式 —— allowed = R（严格），容量 = R − 跨舱在制件数；
+            // p 只进诊断行、不参与判定（2026-11-08 起旧的「按期望轮次预开名额」写法已删除，见上方 javadoc ②）。
             capacity = allowed - inFlight;
         }
         final long result = Math.max(0L, capacity);
@@ -8376,14 +8585,23 @@ public class SequenceExecutionChamberBlockEntity
         if (RsccAssemblyDebug.isEnabled()) {
             final long[] parts = inFlightBreakdownForRecipe(recipeId);
             final long deliveredForLog = deliveredUnitsForRecipe(recipeId);
+            // p 只出现在诊断里（2026-11-08 起不参与名额判定）：让人一眼看清这条配方的主产物概率，
+            // 并与新口径（allowed = R，失败后按需补发）对照。绝不参与任何判定。
+            final float chanceForLog = mainResultChance(recipeId);
+            final String pLog = chanceForLog < 0F
+                ? "?"
+                : (chanceForLog >= 1F
+                    ? "1.000"
+                    : String.format(java.util.Locale.ROOT, "%.3f", chanceForLog));
             RsccAssemblyDebug.transition("capacity@" + RsccAssemblyDebug.at(worldPosition) + "#" + recipeId,
                 "R=" + remaining + ";D=" + deliveredForLog + ";I=" + inFlight + ";A=" + budgetForLog
-                    + ";C=" + result,
+                    + ";C=" + result + ";P=" + pLog,
                 RsccAssemblyDebug.machine("chamber", worldPosition) + " capacity " + recipeId
                     + " remaining=" + remaining + " delivered=" + deliveredForLog
                     + " inflight=" + inFlight + "(reg=" + parts[0] + ",store=" + parts[1]
                     + ",pool=" + parts[2] + ",settled=" + parts[3] + ")"
-                    + " allowed=" + budgetForLog + " cap=" + result);
+                    + " allowed=" + budgetForLog + " cap=" + result
+                    + " p=" + pLog + (guaranteedResult(recipeId) ? " guaranteed" : ""));
         }
         startCapacityProbeCache.put(recipeId, result);
         return result;
@@ -9062,8 +9280,8 @@ public class SequenceExecutionChamberBlockEntity
      * <b>只读</b>：这一类别此刻还有没有「开一件新在制件」的名额（份额外总线让位前的闸门）。
      *
      * <p><b>起步原料类别</b>（唯一会开出新在制件的投入物）走<b>按配方</b>的名额
-     * （{@link #startCapacityFor}）：必得配方严格「订单剩余 − 跨舱在制件」，非必得配方按
-     * {@code ceil(R/p)} 放大 —— 详细推导见 {@link #startCapacityForRecipe}。</p>
+     * （{@link #startCapacityFor}）：必得 / 非必得同一个公式「订单剩余 R − 跨舱在制件」，
+     * 与主产物概率 p 无关（p 只进诊断行）—— 详细推导见 {@link #startCapacityForRecipe}。</p>
      *
      * <p><b>起步原料以外的类别</b>（过渡件 / 步骤专用投入物 / 流体）不会开出新件，沿用旧口径
      * （{@code allowedConcurrentUnits() − inFlightUnitCount()}）—— 行为逐字不变。</p>
@@ -9365,7 +9583,7 @@ public class SequenceExecutionChamberBlockEntity
             return null;
         }
         // 只取「已存在」的方块实体（CHECK），绝不为查询强制初始化邻块
-        if (level.getChunkAt(exporterPos).getBlockEntity(exporterPos, LevelChunk.EntityCreationType.CHECK)
+        if (SafeChunkRead.blockEntityNow(level, exporterPos)
             instanceof RsccExporterExecutorMode exporter) {
             return exporter.rscc$supplyTargetPos();
         }
@@ -9438,6 +9656,40 @@ public class SequenceExecutionChamberBlockEntity
         }
         final List<BlockPos> siblings = stationSiblingsProbeCache.get(station);
         return siblings == null ? List.of() : siblings;
+    }
+
+    /**
+     * 只读：一条在制登记（键 = <b>实际推送目标</b>）所对应的<b>整工位全部容器坐标</b>。
+     *
+     * <h2>为什么登记坐标不等于"件在哪里"（2026-11-07 用户实测：金板完成一次装配后没回网）</h2>
+     * <p>在制登记 {@link #inFlightUnits} 的键是<b>推料成功的那一格</b>（{@code rscc$noteUnitPushed}
+     * 在 export strategy 里记的就是 {@code target}）。但「机械手 + 它朝向 2 格外的置物台」是同一个工位：
+     * 本仓把金板推给<b>机械手</b>，机械手把金板压到<b>置物台</b>上的在制件上，装配完的过渡件留在
+     * <b>置物台</b>（{@link #stationKey}）那一格 —— 登记坐标（机械手）此刻已经空了。</p>
+     * <p>旧实现里 {@link #stationHoldsPipelineResidue} / {@link #clearDeadStationPieceAt} 都只扫
+     * <b>登记坐标那一个 handler</b>，于是：①任务结束边沿判「工位已空」⇒ 删掉凭据；②有界 sweep 只遍历
+     * 登记表、且只扫登记坐标 ⇒ 置物台上那件过渡件<b>此后没有任何路径收得回来</b>（正是用户看到的
+     * 「金板完成了一次装配，然后就没有回去」）。本方法把「登记坐标 + 工位本体 + 同工位机械手」并成一张
+     * 有序表（登记坐标在前），供上面两条路径做整工位判定。只读，不做任何资源搬运。</p>
+     */
+    private List<BlockPos> stationGroupPositions(final Level level, final BlockPos registered) {
+        if (level == null || registered == null) {
+            return List.of();
+        }
+        final java.util.LinkedHashSet<BlockPos> positions = new java.util.LinkedHashSet<>(4);
+        positions.add(registered); // 登记坐标优先：绝大多数情况件就在这一格
+        final BlockPos station = stationKeyCached(level, registered);
+        if (station != null) {
+            positions.add(station); // 工位本体 = 机械手的操作对象（置物台），装配产出落在这一格
+        }
+        if (station != null) {
+            for (final BlockPos sibling : stationSiblings(level, station)) {
+                if (sibling != null) {
+                    positions.add(sibling); // 同工位的其余供料目标（例如对着置物台的机械手）
+                }
+            }
+        }
+        return new ArrayList<>(positions);
     }
 
     /**
@@ -9585,10 +9837,8 @@ public class SequenceExecutionChamberBlockEntity
 
     /** 只读：某一格机器容器里此刻压着的所有物品种类（没有容器 / 未加载 = 空集）。 */
     private static Set<Item> occupiedItemsOf(final Level level, final BlockPos target) {
-        if (target == null || !level.isLoaded(target)) {
-            return Set.of();
-        }
-        final BlockEntity machine = level.getBlockEntity(target);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockEntity machine = target == null ? null : SafeChunkRead.blockEntityNow(level, target);
         if (machine == null) {
             return Set.of();
         }
@@ -10049,8 +10299,8 @@ public class SequenceExecutionChamberBlockEntity
      * 把这份起步原料整条从目标表里去掉（{@code cap <= 0} ⇒ 一条判定都不做），于是「一件在飞时绝不再备第二份」。</p>
      *
      * <p><b>2026-10-06：判据从「整仓一个名额」细化成「逐物品按配方算」</b>（{@link #startCapacityForRecipe}）：
-     * 必得（100%）配方严格 {@code 订单剩余 − 跨执行舱在制件}，非必得（&lt;100%）配方按
-     * {@code ceil(订单剩余 / p) − 跨执行舱在制件} 放大（推导见 {@link #startCapacityForRecipe}）。
+     * 必得（100%）与非必得（&lt;100%）同一公式：{@code 订单剩余 R − 跨执行舱在制件}，
+     * 与主产物概率 p 无关（p 只进诊断行；失败一件才补发一件，推导见 {@link #startCapacityForRecipe}）。
      * 只改「怎么算这个名额」，闸门的位置与「为 0 就整条去掉」的语义一字未改。</p>
      *
      * <p><b>为什么不是「总是 1 份」</b>：订单 64 件 + 两台机器时差额是 62，两台机器仍能并行开工；
@@ -10073,7 +10323,7 @@ public class SequenceExecutionChamberBlockEntity
             return; // 与本仓起步原料无关（绝大多数批次）：一条判定都不做
         }
         // <b>2026-10-06：名额改成逐物品各算各的</b>（{@link #startCapacityFor} → 按「这份料属于哪条配方」，
-        // 必得配方严格 = 订单剩余 − 跨舱在制件，非必得配方 = ceil(R/p) − 跨舱在制件）。
+        // 必得 / 非必得同一公式 = 订单剩余 R − 跨舱在制件，与 p 无关 —— p 只进诊断行）。
         // 旧写法对整张目标表只算一个 cap，于是「一个仓同时挂轨道（下单 1）与精密构件（下单 64）」时，
         // 整仓名额 64 会把石头台阶也一起放行 —— 那正是「下单 1 条轨道产出 2 条」的另一条路径。
         // 快照遍历：下面要就地删键（名额为 0 的整条去掉）。
@@ -10971,8 +11221,9 @@ public class SequenceExecutionChamberBlockEntity
      * 「过料」。因此这里再夹一次 {@link #allowedConcurrentUnits()}（= 订单剩余件数；读不到时取
      * 「本仓当下真在制 / 待补的件数」这一保守下界，至少 1），与 {@link #exportShare(int)} /
      * {@link #wantingTargetCount(Item)} 用的是同一个收敛值。</p>
-     * <p>于是在制名额的上界<b>只减不增</b>：请求量 ≤ 订单剩余件数 ≤ 非必得配方的 {@code ceil(R/p)}
-     * （见 {@link #startCapacityForRecipe(String)}），而真正的开工闸门根本不看请求量、只看名额，
+     * <p>于是在制名额的上界<b>只减不增</b>：请求量 ≤ 订单剩余件数 R，名额 = R − 跨舱在制件数
+     * （见 {@link #startCapacityForRecipe(String)}；必得 / 非必得同一公式、与 p 无关），
+     * 而真正的开工闸门根本不看请求量、只看名额，
      * 因此「按台数发」不可能让开件数超过名额上限。</p>
      *
      * <p><b>判不出来（未进入世界 / 客户端 / 没有任何供料目标）⇒ 1</b>：与旧口径里确定性配方的
@@ -12250,7 +12501,7 @@ public class SequenceExecutionChamberBlockEntity
             if (!level.isLoaded(pos)) {
                 continue;
             }
-            if (level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+            if (SafeChunkRead.blockEntityNow(level, pos)
                 instanceof final RsccImporterExecutorMode importer) {
                 if (importer.rscc$isAutoCollect()) {
                     autoImporter = true;
@@ -14100,7 +14351,7 @@ public class SequenceExecutionChamberBlockEntity
                 continue;
             }
             // 只取「已存在」的方块实体（CHECK），搜索 / 查询阶段绝不强制初始化邻块
-            if (!(level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+            if (!(SafeChunkRead.blockEntityNow(level, pos)
                 instanceof final RsccExporterExecutorMode exporter)) {
                 continue;
             }
@@ -14235,16 +14486,17 @@ public class SequenceExecutionChamberBlockEntity
                 if (!flood.visited.add(neighbor)) {
                     continue;
                 }
-                if (!level.isLoaded(neighbor)) {
+                // 第 138 轮：安全读（只读已 FULL 区块）—— isLoaded 挡不住「在流水线里但没到 FULL」
+                // 的区块，而 getBlockState / getChunkAt 会在主线程同步等它生成。
+                // 只读方块状态来判定：不对「仅用于穿行」的方块取方块实体（避免探测时强制初始化邻块 → 递归）
+                final BlockState neighborState = SafeChunkRead.blockStateNow(level, neighbor);
+                if (neighborState == null) {
                     continue;
                 }
-                // 只读方块状态来判定：不对「仅用于穿行」的方块取方块实体（避免探测时强制初始化邻块 → 递归）
-                final BlockState neighborState = level.getBlockState(neighbor);
                 if (importers ? RsccWireBlocks.isImporterBus(neighborState)
                     : RsccWireBlocks.isExporterBus(neighborState)) {
                     // 只有确认是「总线方块」后才取它的方块实体，且「只取已存在的、不创建」
-                    final BlockEntity blockEntity = level.getChunkAt(neighbor)
-                        .getBlockEntity(neighbor, LevelChunk.EntityCreationType.CHECK);
+                    final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, neighbor);
                     if (importers) {
                         if (blockEntity instanceof RsccImporterExecutorMode importer
                             && (!restrictToMyChain || isInMyChain(importer.rscc$linkedExecutorPos()))) {
@@ -14429,8 +14681,7 @@ public class SequenceExecutionChamberBlockEntity
         if (currentLevel == null || !currentLevel.isLoaded(pos)) {
             return null;
         }
-        final BlockEntity blockEntity = currentLevel.getChunkAt(pos)
-            .getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK);
+        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(currentLevel, pos);
         return blockEntity instanceof final SequenceExecutionChamberBlockEntity chamber ? chamber : null;
     }
 
@@ -15144,10 +15395,8 @@ public class SequenceExecutionChamberBlockEntity
     @org.jetbrains.annotations.Nullable
     private static net.neoforged.neoforge.fluids.capability.IFluidHandler fluidHandlerAt(
         final Level level, @org.jetbrains.annotations.Nullable final BlockPos pos) {
-        if (level == null || pos == null || !level.isLoaded(pos)) {
-            return null;
-        }
-        final BlockEntity blockEntity = level.getBlockEntity(pos);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, pos);
         if (blockEntity == null) {
             return null;
         }
@@ -15458,8 +15707,7 @@ public class SequenceExecutionChamberBlockEntity
             if (!level.isLoaded(exporterPos)) {
                 continue;
             }
-            final BlockEntity blockEntity = level.getChunkAt(exporterPos)
-                .getBlockEntity(exporterPos, LevelChunk.EntityCreationType.CHECK);
+            final BlockEntity blockEntity = SafeChunkRead.blockEntityNow(level, exporterPos);
             if (!(blockEntity instanceof final RsccExporterExecutorMode mode) || !mode.rscc$isExecutorMode()) {
                 continue;
             }
@@ -15548,7 +15796,7 @@ public class SequenceExecutionChamberBlockEntity
                     continue;
                 }
                 // 只取「已存在」的方块实体（CHECK）：查询阶段绝不为邻块强制初始化
-                if (!(level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+                if (!(SafeChunkRead.blockEntityNow(level, pos)
                     instanceof final RsccExporterExecutorMode exporter)) {
                     continue;
                 }
@@ -15626,7 +15874,7 @@ public class SequenceExecutionChamberBlockEntity
                 continue;
             }
             // 只取「已存在」的方块实体（CHECK），绝不为查询强制初始化邻块
-            if (!(level.getChunkAt(busPos).getBlockEntity(busPos, LevelChunk.EntityCreationType.CHECK)
+            if (!(SafeChunkRead.blockEntityNow(level, busPos)
                 instanceof final RsccExporterExecutorMode exporter)) {
                 continue;
             }
@@ -16996,7 +17244,7 @@ public class SequenceExecutionChamberBlockEntity
                 continue;
             }
             // 只取「已存在」的方块实体（查询阶段绝不强制初始化邻块）
-            if (!(level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK)
+            if (!(SafeChunkRead.blockEntityNow(level, pos)
                 instanceof final SequenceAssemblyExecutorBlockEntity executor)) {
                 continue;
             }
@@ -18096,6 +18344,33 @@ public class SequenceExecutionChamberBlockEntity
             }
         }
         out.put("units", units);
+
+        // ---- 在制件登记表明细（2026-11-07 诊断补强） ----
+        // 之前这里只有 inFlight 布尔值，玩家报「多发一件金板 / 完成一次装配后没回网」时，
+        // 日志里根本看不到「这一件登记在哪个坐标、属于哪条配方哪一步、已经在那儿待了多久」。
+        // 而这类残留的根因恰恰是「登记坐标（推给谁）≠ 件实际所在坐标（置物台）」——
+        // 因此这里把登记键、整工位坐标组、物品、配方、步序、停留 tick 数全部列出来（只读）。
+        final List<Object> inFlightDetail = new ArrayList<>();
+        final long nowTick = level == null ? 0L : level.getGameTime();
+        for (final Map.Entry<BlockPos, InFlightUnit> entry : new ArrayList<>(inFlightUnits.entrySet())) {
+            final InFlightUnit unit = entry.getValue();
+            if (unit == null) {
+                continue;
+            }
+            final Map<String, Object> row = new LinkedHashMap<>();
+            row.put("station", RsccAssemblyDebug.at(entry.getKey()));
+            row.put("item", unit.item() == null ? "-" : RsccAssemblyDebug.itemId(unit.item()));
+            row.put("recipe", unit.recipe() == null ? "-" : unit.recipe());
+            row.put("step", unit.step());
+            row.put("age", nowTick - unit.sinceTick());
+            final List<String> group = new ArrayList<>(2);
+            for (final BlockPos pos : stationGroupPositions(level, entry.getKey())) {
+                group.add(RsccAssemblyDebug.at(pos));
+            }
+            row.put("group", group);
+            inFlightDetail.add(row);
+        }
+        out.put("inFlightUnits", inFlightDetail);
 
         // ---- 本仓现存物品 / 流体（内部存储 + 磁盘缓存的统一视图） ----
         final Map<String, Long> itemCounts = new java.util.TreeMap<>();

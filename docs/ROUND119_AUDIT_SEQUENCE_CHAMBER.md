@@ -198,6 +198,12 @@ RS 打一条 warn 当作成功 ⇒ **后半批（那条流体 / 那批物品）�
 
 ## F4（中）在制件登记表不落盘 ⇒ 重启后工位残留永久无人回收
 
+> **状态（2026-11-08 补记）**：**已修**，第 121 轮 F4（2026-10-31）。`inFlightUnits` 现按条目落盘
+> （`TAG_IN_FLIGHT_UNITS = "InFlightUnits"`，`writeInFlightUnits` / `readInFlightUnits`，5 字段
+> `Station/Recipe/Step/Item(注册名)/Since`，非法条目淘汰、空表不写键、读侧上限 64），读回后三条回收路径
+> 复用同一份登记表。守卫：`tools/selfcheck_round121_inflight_persist.py`（48 断言 / 15 反例）。
+> 本文以下内容是**当时的审计记录**，行号与"不落盘"的结论均为第 119 轮时点，保留作历史证据。
+
 ### 位置
 
 - `block/entity/SequenceExecutionChamberBlockEntity.java:3082-3084`（`inFlightUnits` 是普通内存 `Map`）

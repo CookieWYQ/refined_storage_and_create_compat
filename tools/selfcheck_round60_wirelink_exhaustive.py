@@ -138,8 +138,11 @@ check("② 「暂时没扫完」不会被当完整结果发布：发布只在 qu
       and "// 扫完：只有这一刻才发布本次结果" in LINK)
 check("②b 除首次那一支以外，没有任何「本次判定一次扫完」的通道（每 tick 上界不可被绕过）",
       LINK_CODE.count("step(level, Integer.MAX_VALUE, now, origin);") == 1)
-check("③ 旧判据的最后一项确实从代码里去掉：ambiguous() 正文不再出现 exhaustive",
-      "exhaustive" not in AMBIGUOUS_BODY and "return reachable.size() >= 2;" in AMBIGUOUS_BODY,
+check("③ 旧判据的最后一项确实从代码里去掉：ambiguous() 正文不再出现 exhaustive"
+      "（第 135 轮追加：另含串线 crossTalk 一项）",
+      "exhaustive" not in AMBIGUOUS_BODY
+      and "return reachable.size() >= 2" in AMBIGUOUS_BODY
+      and "crossTalk" in AMBIGUOUS_BODY,
       AMBIGUOUS_BODY.strip())
 check("④ 停用仍只由 ambiguous 决定（Report 的第一个参数没变），truncated 只是提示",
       "return new Report(walk.ambiguous(), !walk.exhaustive(), reachable.size()," in INTERFERENCE)

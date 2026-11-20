@@ -402,6 +402,13 @@ public class Config {
             "每收到一份新快照会重新续期，因此选中期间它一直在；取消选中后最多再亮这么久。")
         .defineInRange("energyAuditHighlightTtlTicks", 60, 5, 1200);
 
+    private static final ModConfigSpec.IntValue ENERGY_AUDIT_HIGHLIGHT_LINGER = BUILDER
+        .comment("关掉能耗监视界面之后，世界里的高亮框还留多久（tick，默认 1200 = 60 秒）。",
+            "第 135 轮修：原来一关界面就立刻撤框，而界面开着又看不到世界 ⇒ 高亮等于没有。",
+            "现在关界面只把框的寿命续到这么久，玩家可以走出去实地看是哪台；到期自动灭。",
+            "要立刻撤掉，重新打开监视页点「清除高亮」即可。")
+        .defineInRange("energyAuditHighlightLingerTicks", 1200, 100, 7200);
+
     // ========== 降解室发电机（第 101 轮新增） ==========
     private static final ModConfigSpec.IntValue DECOMPOSITION_GENERATOR_CAPACITY = BUILDER
         .comment("「降解室发电机」的内部能量缓存上限（FE，默认 100 万）。",
@@ -470,6 +477,8 @@ public class Config {
     public static int energyAuditRefreshTicks;
     /** 能耗监视：高亮显示时长（tick）。 */
     public static int energyAuditHighlightTtlTicks;
+    /** 能耗监视：关掉界面后高亮框的残留寿命（tick）。 */
+    public static int energyAuditHighlightLingerTicks;
     /** 降解室发电机内部能量缓存上限（FE）。 */
     public static int decompositionGeneratorCapacity;
     /** 降解室发电机每 tick 向相邻方块推送的上限（FE/t）。 */
@@ -630,6 +639,7 @@ public class Config {
         energyAuditMaxTypes = ENERGY_AUDIT_MAX_TYPES.get();
         energyAuditRefreshTicks = ENERGY_AUDIT_REFRESH_TICKS.get();
         energyAuditHighlightTtlTicks = ENERGY_AUDIT_HIGHLIGHT_TTL.get();
+        energyAuditHighlightLingerTicks = ENERGY_AUDIT_HIGHLIGHT_LINGER.get();
         decompositionGeneratorCapacity = DECOMPOSITION_GENERATOR_CAPACITY.get();
         decompositionGeneratorPushPerTick = DECOMPOSITION_GENERATOR_PUSH.get();
 

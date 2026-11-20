@@ -72,11 +72,14 @@ public final class RsccStationProbe {
     @Nullable
     public static StationMachine detect(final Level level, @Nullable final BlockPos target,
                                         final Set<Item> candidates) {
-        if (level == null || target == null || candidates == null || candidates.isEmpty()
-            || !level.isLoaded(target)) {
+        if (level == null || target == null || candidates == null || candidates.isEmpty()) {
             return null;
         }
-        final BlockState state = level.getBlockState(target);
+        // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+        final BlockState state = SafeChunkRead.blockStateNow(level, target);
+        if (state == null) {
+            return null;
+        }
         final Item own = itemOf(state);
         if (own != null && candidates.contains(own)) {
             // 机器本身就是容器：总线朝向它 = 直接喂它。机械手是唯一「手位」语义的机器。
@@ -84,8 +87,9 @@ public final class RsccStationProbe {
         }
         // 承载件（置物台 / 传送带 / 盆）：加工机在正上方 2 格（见类注释的三处 Create 源码证据）
         final BlockPos above = target.above(2);
-        if (level.isLoaded(above)) {
-            final Item aboveItem = itemOf(level.getBlockState(above));
+        final BlockState aboveState = SafeChunkRead.blockStateNow(level, above);
+        if (aboveState != null) {
+            final Item aboveItem = itemOf(aboveState);
             if (aboveItem != null && candidates.contains(aboveItem)) {
                 return new StationMachine(aboveItem, above, false);
             }
@@ -93,10 +97,10 @@ public final class RsccStationProbe {
         // 机械手：朝向的 2 格外就是本目标 ⇒ 这台机械手在加工这一格上的件
         for (final Direction direction : Direction.values()) {
             final BlockPos machine = target.relative(direction, 2);
-            if (!level.isLoaded(machine)) {
+            final BlockState machineState = SafeChunkRead.blockStateNow(level, machine);
+            if (machineState == null) {
                 continue;
             }
-            final BlockState machineState = level.getBlockState(machine);
             final Item machineItem = itemOf(machineState);
             if (machineItem == null || !candidates.contains(machineItem)) {
                 continue;
@@ -121,10 +125,11 @@ public final class RsccStationProbe {
 
     /** 该坐标方块的注册 id 字符串（未加载 / 取不到 ⇒ 空串）；供界面显示与诊断使用。 */
     public static String blockId(final Level level, @Nullable final BlockPos pos) {
-        if (level == null || pos == null || !level.isLoaded(pos)) {
+        // 第 138 轮：安全读（只读已 FULL 区块）
+        final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+        if (state == null) {
             return "";
         }
-        final BlockState state = level.getBlockState(pos);
         final ResourceLocation key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return key == null ? "" : key.toString();
     }

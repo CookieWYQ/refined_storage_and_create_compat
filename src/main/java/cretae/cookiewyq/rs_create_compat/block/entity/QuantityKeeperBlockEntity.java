@@ -414,8 +414,17 @@ public class QuantityKeeperBlockEntity extends AbstractBaseNetworkNodeContainerB
         return ItemResource.ofItemStack(marker);
     }
 
-    /** 本机声称控制的资源键（基础版只有一个标记位，故最多一个）：供同网络仲裁使用。 */
+    /**
+     * 本机声称控制的资源键（基础版只有一个标记位，故最多一个）：供同网络仲裁使用。
+     *
+     * <p><b>第 138 轮 M3</b>：目标量 = 0（未标记）<b>不认领</b> —— 否则「同一资源两台保持器」时，
+     * 未标记的那台可能因为坐标更靠前而让真正生效的那台永远让位，表现为功能静默失效。
+     * 认领口径与 {@link KeeperTarget#isMarked} 同源。</p>
+     */
     public List<ResourceKey> claimedResources() {
+        if (!KeeperTarget.isMarked(targetAmount)) {
+            return List.of();
+        }
         final ResourceKey key = networkResourceKey();
         return key == null ? List.of() : List.of(key);
     }

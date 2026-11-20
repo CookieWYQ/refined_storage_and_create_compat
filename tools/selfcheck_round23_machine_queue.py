@@ -189,6 +189,13 @@ check("锚点⑧: 上一轮那条「有意把缓存池排除在在制件之外�
 # ==================== 3. 等价模型：名额（需求二） ====================
 section("3) 等价模型：把池里的半成品算进在制件 ⇒ 不再无限开新件，且推不动的陈旧件绝不卡死")
 
+has(chamber, "final long allowed = remaining;",
+    "锚点⑦: 名额预算 = 订单剩余量 R（2026-11-08 起必得 / 概率配方同一个公式，与 p 无关）")
+check("锚点⑧: 旧口径「按期望轮次预开名额 ceil(R/p)」已从源码彻底移除（反例检测器）",
+      "Math.ceil(remaining" not in chamber)
+has(chamber, "capacity = allowed - inFlight;",
+    "锚点⑨: 名额 = allowed − 跨舱在制件数（失败一件 ⇒ inFlight 减 1 ⇒ 名额当 tick 回到 1 ⇒ 按需补发）")
+
 
 def in_flight(registered, stored, pooled_advanceable, count_pool=True):
     """复刻 inFlightUnitsForRecipe：① 登记表 ② 仓内 ③ 缓存池（只算「下一步有人能做」的那部分）。"""
@@ -199,18 +206,17 @@ def in_flight(registered, stored, pooled_advanceable, count_pool=True):
 
 
 def start_capacity(remaining, guaranteed, p, inflight):
-    """复刻 startCapacityForRecipe（必得配方严格 R − inFlight）。
+    """复刻 startCapacityForRecipe（2026-11-08 用户口径改定后，逐字对应）。
 
-    2026-10-06 更新（与源码同步）：判据从 `remaining <= 0` 改成 `remaining < 0` ——
+    必得 / 非必得**同一个公式**：名额 = R − inFlight，**与主产物概率 p 无关**。
+    2026-10-06 的修正保留：判据从 `remaining <= 0` 改成 `remaining < 0` ——
     `R < 0` 才是「判不出来」（保守下限 1），`R == 0` 是「订单已交付满」⇒ 一件都不许再开。
-    旧写法把这两种语义混在一起，会让「已满足」时又放 1 件（实测每单多开一件）。
+    2026-11-08：旧的 `ceil(R/p)` 期望值预开被用户驳回并删除；失败一件 ⇒ inFlight 减 1
+    ⇒ 名额回到 1 ⇒ 按需补发一件（`guaranteed` / `p` 仍收着，只为证明对它们不敏感）。
     """
     if remaining < 0:
         return 1 if inflight <= 0 else 0
     allowed = remaining
-    if not guaranteed and isinstance(p, float) and 0.0 < p < 1.0:
-        import math
-        allowed = int(math.ceil(remaining / p))
     return max(0, allowed - inflight)
 
 
@@ -252,6 +258,13 @@ check("推演⑤【2026-10-06 新增】订单已交付满（R=0）⇒ 名额 0�
       and start_capacity(0, False, 0.8, 0) == 0
       and start_capacity(-1, True, None, 0) == 1
       and start_capacity(-1, True, None, 1) == 0)
+check("推演⑥【2026-11-08 新增】名额与主产物概率无关：p ∈ {1.0, 0.8, 0.5, 0.1} 在 R=20、"
+      "在制 0/19/20 上结果逐字相同（旧口径在 p<1 时按 ceil(R/p) 放大，已被删除）",
+      all(start_capacity(20, p >= 1.0, p, i) == 20 - i
+          for p in (1.0, 0.8, 0.5, 0.1) for i in (0, 19, 20)))
+check("推演⑦【2026-11-08 新增】失败一件才补一件：R=20、I=20 ⇒ 名额 0；"
+      "模拟一件失败（I=19）⇒ 名额 1（按需补发，绝不提前按期望轮次预开）",
+      start_capacity(20, False, 0.8, 20) == 0 and start_capacity(20, False, 0.8, 19) == 1)
 
 # ==================== 4. 等价模型：排队（需求一） ====================
 section("4) 等价模型：共机的多条配方按「下单时刻」排队；拦截规则 + 反死锁逃生口")

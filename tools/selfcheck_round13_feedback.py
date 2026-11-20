@@ -481,8 +481,8 @@ for label, t, net, ch, mh, expect in CASES_AUTO:
 check("⑦a 「有缺口才请求、刚好够就不请求」在四条路径上都成立（不整批拉出、不重复请求）",
       all(autocraft_deficit(t, n, c, m) == e for _l, t, n, c, m, e in CASES_AUTO))
 
-# ============================================================ ⑧ 在制名额感知结果池概率（2026-10-06）
-section("⑧ 区分必得（100%）与概率（<100%）配方：在制名额 = 订单剩余 − 跨执行舱在制件（概率配方按 ceil(R/p) 放大）")
+# ============================================================ ⑧ 在制名额感知结果池概率（2026-10-06 / 2026-11-08 改口径）
+section("⑧ 区分必得（100%）与概率（<100%）配方：名额 = 订单剩余 R − 跨执行舱在制件（与 p 无关，失败一件才补发一件）")
 
 # 说明：① 的锚点⑥⑦ 断言的那条旧式（allowedConcurrentUnits() − inFlightUnitCount()）现在只作为
 # 「判不出这份起步原料属于哪条配方」时的回退口径保留（见 startCapacityFor / unitCapacityLeftFor），
@@ -495,10 +495,13 @@ has(chamber, "private long startCapacityForRecipe(final String recipeId) {",
     "锚点③: 「某条配方还能再开几件」只有一份实现（每 tick 每配方至多真算一次）")
 has(chamber, "final long remaining = remainingOrderUnitsFor(recipeId);",
     "锚点④: 订单剩余量按配方取（一个仓同时挂两条配方时，整仓最大值会把另一条带偏）")
-has(chamber, "allowed = (long) Math.ceil(remaining / (double) p);",
-    "锚点⑤: 非必得配方的放大倍数 = ceil(R / p)（推导：X=第 R 次成功的投料次数，E[X] = R/p）")
+has(chamber, "final long allowed = remaining;",
+    "锚点⑤: 名额预算 = 订单剩余量 R（2026-11-08 起必得 / 非必得同一公式，不再按期望轮次 ceil(R/p) 预开）")
+check("锚点⑤b: 旧口径「按期望轮次预开名额 ceil(R/p)」已从源码彻底移除（反例检测器）",
+      "Math.ceil(remaining" not in chamber
+      and "ceil(remaining / (double) p)" not in chamber)
 has(chamber, "capacity = allowed - inFlight;",
-    "锚点⑥: 名额 = 允许同时在制数 − 在制件数（必得配方时严格 = 订单剩余 − 已在制）")
+    "锚点⑥: 名额 = 允许同时在制数 − 在制件数（allowed = R ⇒ 必得 / 非必得都严格 = 订单剩余 − 已在制）")
 has(chamber, "private long inFlightUnitsForRecipe(final String recipeId) {",
     "锚点⑦: 在制件计数必须跨执行舱（件推到别的仓的机器上后，本仓工位是空的）")
 has(chamber, "chambersProbeCache = chambersOf(getNode().getNetworkOrNull());",
@@ -508,20 +511,19 @@ has(chamber, "if (info.isInput() && isStartIngredientCategory(info) && !unitCapa
 
 
 def start_capacity(remaining, guaranteed, p, in_flight):
-    """复刻 startCapacityForRecipe（2026-10-06 本轮修正后）。
+    """复刻 startCapacityForRecipe（2026-11-08 用户口径改定后，逐字对应）。
 
     remaining < 0（判不出来）→ 一件在制都没有时允许开一件，否则 0（既有保守口径）。
-    remaining == 0（订单已交付满）→ 0：一件都不许再开（**本轮修正**：旧写法把 0 也当成
-      「判不出来」，于是每单在空管线时又多开一件）。
-    必得（100%）→ 名额 = R − in_flight（严格，有多少订单就发多少件）。
-    非必得 → 名额 = ceil(R / p) − in_flight（p 判不出来时不放大，退回 R）。
+    remaining == 0（订单已交付满）→ 0：一件都不许再开（旧写法把 0 也当成「判不出来」，
+      于是每单在空管线时又多开一件）。
+    必得（100%）与非必得（<100%）**同一个公式**：名额 = R − in_flight，**与 p 无关**。
+      失败的件从在制里消失（in_flight 减 1）而 R 只在成品被认领时才减 ⇒ 名额当 tick 回到 1
+      ⇒ 按需补发一件。绝不按期望值 ceil(R/p) 预开（2026-11-08 用户驳回的旧设计）。
+      `guaranteed` / `p` 仍然收着，只为证明新口径对它们不敏感。
     """
     if remaining < 0:
         return 1 if in_flight <= 0 else 0
     allowed = remaining
-    if not guaranteed and isinstance(p, float) and 0.0 < p < 1.0:
-        import math
-        allowed = int(math.ceil(remaining / p))
     return max(0, allowed - in_flight)
 
 
@@ -536,10 +538,14 @@ CASES_CAP = [
     ("轨道：下单 1、一件都没开", 1, True, 1.0, 0, 1),
     ("轨道：下单 64、已开 1 件（不收紧）", 64, True, 1.0, 1, 63),
     # 精密构件 = 非必得（120 : 8 : 8 : 5 : 3 : 2 : 2 : 1 : 1 ⇒ p = 120/150 = 0.8）
-    ("精密构件：下单 1、p=0.8、一件都没开（动态多发）", 1, False, 0.8, 0, 2),
-    ("精密构件：下单 64、p=0.8（既有 64 ⇒ 只放宽，绝不收紧）", 64, False, 0.8, 0, 80),
-    ("精密构件：下单 64、p=0.8、已在制 80 件", 64, False, 0.8, 80, 0),
-    ("精密构件：p 判不出来（配方缺失）⇒ 不放大，退回既有口径", 64, False, -1.0, 0, 64),
+    ("精密构件：下单 1、p=0.8、一件都没开（不再按期望值预开 2 件）", 1, False, 0.8, 0, 1),
+    ("精密构件：下单 64、p=0.8、一件都没开（名额 = 64，不再放大到 80）", 64, False, 0.8, 0, 64),
+    ("精密构件：下单 64、p=0.8、已在制 80 件（在制已超订单 ⇒ 0）", 64, False, 0.8, 80, 0),
+    ("精密构件：p 判不出来（配方缺失）⇒ 与 p 无关，仍是 R − 在制", 64, False, -1.0, 0, 64),
+    # 按需补发：失败一件 ⇒ in_flight 减 1 ⇒ 名额回到 1
+    ("精密构件：R=20、I=20（20 件全在制）⇒ 0", 20, False, 0.8, 20, 0),
+    ("精密构件：R=20、I=20 时失败一件 ⇒ I=19 ⇒ 补发 1 件", 20, False, 0.8, 19, 1),
+    ("精密构件：R=20、I=19、p=0.5（口径与 p 无关）⇒ 1", 20, False, 0.5, 19, 1),
 ]
 for label, remaining, guaranteed, p, in_flight, expect in CASES_CAP:
     got = start_capacity(remaining, guaranteed, p, in_flight)
@@ -550,11 +556,13 @@ check("⑧a 必得（100%）配方：下单 1 条轨道、件已推到别的执�
       start_capacity(1, True, 1.0, 1) == 0 and start_capacity(1, True, 1.0, 0) == 1)
 check("⑧b 必得（100%）配方：有名额等价于「订单剩余 − 已在制」，下单 64 时仍可并行（不收紧）",
       start_capacity(64, True, 1.0, 1) == 63)
-check("⑧c 非必得（<100%）配方：下单 1 个精密构件（p=0.8）允许 2 件在制（按 E[X]=R/p 动态多发）",
-      start_capacity(1, False, 0.8, 0) == 2)
-check("⑧d 非必得（<100%）配方：下单 64 个精密构件允许 80 件在制（≥ 既有 64 ⇒ 绝不卡死）",
-      start_capacity(64, False, 0.8, 0) == 80 and start_capacity(64, False, 0.8, 0) >= 64)
-check("⑧e 概率 p 判不出来时<b>不放大</b>（退回既有口径 R）：判不出来绝不收紧、也绝不放宽",
+check("⑧c 非必得（<100%）配方：下单 1 个精密构件（p=0.8）只允许 1 件在制"
+      "（2026-11-08 起不再按 E[X]=R/p 预开 2 件）",
+      start_capacity(1, False, 0.8, 0) == 1)
+check("⑧d 非必得（<100%）配方：下单 64 个精密构件只允许 64 件在制（= R，不再放大到 80；"
+      "「先只按订单量开工」）",
+      start_capacity(64, False, 0.8, 0) == 64 and start_capacity(64, False, 0.8, 0) >= 64)
+check("⑧e 概率 p 判不出来时与可读时逐字相同（名额只由 R 与在制件决定，p 不参与判定）",
       start_capacity(64, False, -1.0, 0) == 64)
 check("⑧f 订单剩余量判不出来时沿用保守口径（无在制允许 1 件 / 已有在制 0 件）",
       start_capacity(-1, True, None, 0) == 1 and start_capacity(-1, True, None, 1) == 0)
@@ -562,6 +570,13 @@ check("⑧g【2026-10-06 新增】订单剩余量 = 0（已交付满）⇒ 名�
       "空管线时也绝不再放一件（旧写法把 0 并进「判不出来」分支 ⇒ 每单多开一件）",
       start_capacity(0, True, None, 0) == 0
       and start_capacity(0, False, 0.8, 0) == 0)
+check("⑧h【2026-11-08 新增】名额与主产物概率无关：p ∈ {1.0, 0.8, 0.5, 0.1} 在 R=20、"
+      "在制 0/19/20 上的结果逐字相同",
+      all(start_capacity(20, p >= 1.0, p, i) == 20 - i
+          for p in (1.0, 0.8, 0.5, 0.1) for i in (0, 19, 20)))
+check("⑧i【2026-11-08 新增】失败一件 ⇒ inFlight 减 1 ⇒ 名额当 tick 回到 1（按需补发，绝不提前预开）："
+      "R=20、I=20 ⇒ 0；模拟一件失败后 I=19 ⇒ 1",
+      start_capacity(20, False, 0.8, 20) == 0 and start_capacity(20, False, 0.8, 19) == 1)
 
 # ============================================================ 结果
 print()

@@ -189,6 +189,8 @@
   "config.jade.plugin_rs_create_compat.bus": "序列装配总线状态（Jade）",
   "config.jade.plugin_rs_create_compat.bus_data": "序列装配总线状态数据（Jade）",
   "config.jade.plugin_rs_create_compat.camouflage": "伪装方块提示（Jade）",
+  "config.jade.plugin_rs_create_compat.proxy": "容器代理器内容（Jade）",
+  "config.jade.plugin_rs_create_compat.proxy_data": "容器代理器内容数据（Jade）",
   "config.jade.plugin_rs_create_compat.receiver": "网络资源接收器内部缓存（Jade）",
   "config.jade.plugin_rs_create_compat.receiver_data": "网络资源接收器内部缓存数据（Jade）",
   "gui.rs_create_compat.advanced_quantity_keeper.autocraft_disabled_tooltip": "需在插件槽放入自动合成升级后才能开关",

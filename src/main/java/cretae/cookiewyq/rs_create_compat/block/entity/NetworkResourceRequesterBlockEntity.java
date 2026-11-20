@@ -22,6 +22,7 @@ import cretae.cookiewyq.rs_create_compat.network.NetworkResourceRequesterNetwork
 import cretae.cookiewyq.rs_create_compat.support.PendingSenderSends;
 import cretae.cookiewyq.rs_create_compat.support.RequesterSenderBackend;
 import cretae.cookiewyq.rs_create_compat.support.SenderShortage;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 import cretae.cookiewyq.rs_create_compat.support.ViewOnlyHandlers;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -767,10 +768,8 @@ public class NetworkResourceRequesterBlockEntity
             dropPendingPlan("pending_lost");
             return null;
         }
-        if (!level.isLoaded(lastResolvedTargetPos)) {
-            return null;
-        }
-        if (!(level.getBlockEntity(lastResolvedTargetPos) instanceof NetworkResourceReceiverBlockEntity receiver)
+        // 第 138 轮：安全读（只读已 FULL 区块）—— 不加载、不阻塞
+        if (!(SafeChunkRead.blockEntityNow(level, lastResolvedTargetPos) instanceof NetworkResourceReceiverBlockEntity receiver)
             || !receiver.isProperlyConfigured()
             || receiver.getNode().getNetworkOrNull() == null) {
             dropPendingPlan("pending_lost");

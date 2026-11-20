@@ -1,4 +1,5 @@
 package cretae.cookiewyq.rs_create_compat.network;
+import cretae.cookiewyq.rs_create_compat.support.SafeChunkRead;
 
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.block.entity.SequenceExecutionChamberBlockEntity;
@@ -42,10 +43,9 @@ public record SetChamberOutputModePacket(BlockPos pos, int mode) implements Cust
         }
         if (chamber == null) {
             final ServerLevel level = player.serverLevel();
-            if (!level.isLoaded(packet.pos())) {
-                return;
-            }
-            if (!(level.getBlockEntity(packet.pos()) instanceof SequenceExecutionChamberBlockEntity byPos)) {
+            // 第 138 轮：安全读（只读已 FULL 区块，不加载、不阻塞）
+            if (!(SafeChunkRead.blockEntityNow(level, packet.pos())
+                instanceof SequenceExecutionChamberBlockEntity byPos)) {
                 return;
             }
             if (player.distanceToSqr(packet.pos().getX() + 0.5,

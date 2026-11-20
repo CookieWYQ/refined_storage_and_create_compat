@@ -15,7 +15,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -309,11 +309,12 @@ public final class RsccCableCuts {
             return true;
         }
         final BlockPos other = pos.relative(dir);
-        if (!level.isLoaded(pos) || !level.isLoaded(other)) {
-            return false;
-        }
-        return RsccWireBlocks.isWire(level.getBlockState(pos))
-            && RsccWireBlocks.isWire(level.getBlockState(other));
+        // 第 138 轮：安全读（只读已 FULL 区块）
+        final BlockState selfState = SafeChunkRead.blockStateNow(level, pos);
+        final BlockState otherState = SafeChunkRead.blockStateNow(level, other);
+        return selfState != null && otherState != null
+            && RsccWireBlocks.isWire(selfState)
+            && RsccWireBlocks.isWire(otherState);
     }
 
     /**
@@ -543,10 +544,8 @@ public final class RsccCableCuts {
 
     @Nullable
     private static BlockEntity existingBlockEntity(final Level level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return null;
-        }
-        return level.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.CHECK);
+        // 第 138 轮：只读已 FULL 区块（不加载、不阻塞），已存在才返回
+        return SafeChunkRead.blockEntityNow(level, pos);
     }
 
     // ------------------------------------------------------------------

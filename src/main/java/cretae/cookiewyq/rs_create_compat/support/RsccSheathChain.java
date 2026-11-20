@@ -474,10 +474,11 @@ public final class RsccSheathChain {
         /** 该坐标的族别；不是「管线类可套壳方块」时返回 {@code null}。 */
         @Nullable
         static Family of(final Level level, final BlockPos pos) {
-            if (level == null || pos == null || !level.isLoaded(pos)) {
+            // 第 138 轮：安全读（只读已 FULL 区块）
+            final BlockState state = SafeChunkRead.blockStateNow(level, pos);
+            if (state == null) {
                 return null;
             }
-            final BlockState state = level.getBlockState(pos);
             if (!SeparationFrameGuard.isSheathable(level, pos, state)) {
                 return null;
             }

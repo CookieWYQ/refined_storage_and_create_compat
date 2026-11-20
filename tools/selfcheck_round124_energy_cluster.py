@@ -501,7 +501,7 @@ def members_are_sorted_lexicographically(src):
     """成员排序口径 = x → y → z，且 `collect` 真的排了序（确定性，与遍历顺序无关）。"""
     code = strip_comments(src)
     comparator = method_body(code, "private static final Comparator<BlockPos> LEXICOGRAPHIC")
-    collect = method_body(code, "private static List<BlockPos> collect(")
+    collect = method_body(code, "private static ScanResult collect(")
     if comparator is None or collect is None:
         return False
     return ("comparingInt(BlockPos::getX)" in comparator
@@ -729,7 +729,7 @@ def stored_and_capacity_skip_unloaded(src):
 def max_members_limit(src):
     """`MAX_MEMBERS = 64` 且 `collect` 用它截断。"""
     code = strip_comments(src)
-    collect = method_body(code, "private static List<BlockPos> collect(")
+    collect = method_body(code, "private static ScanResult collect(")
     if collect is None:
         return False
     return ("public static final int MAX_MEMBERS = 64;" in code
@@ -743,8 +743,8 @@ def invalidate_timings(src_cluster, src_block, src_be):
     be = strip_comments(src_be)
     if invalidate is None:
         return False
-    return ("invalidateAt(map, pos);" in invalidate
-            and "invalidateAt(map, pos.relative(direction));" in invalidate
+    return ("invalidateAt(cache, pos);" in invalidate
+            and "invalidateAt(cache, pos.relative(direction));" in invalidate
             and "EnergyCubeCluster.invalidateAround(level, pos);"
                 in (method_body(block, "protected void onPlace(") or "")
             and "EnergyCubeCluster.invalidateAround(level, pos);"
@@ -769,7 +769,7 @@ def client_never_resolves_cluster(src_cluster, src_be):
         if body is None or "level.isClientSide()" not in body:
             return False
     return ("if (!(level instanceof ServerLevel server))" in resolve
-            and "return new Snapshot(level, List.of(pos));" in resolve)
+            and "return new Snapshot(level, List.of(pos), false);" in resolve)
 
 
 def cube_ticker_null_on_client(src_block):

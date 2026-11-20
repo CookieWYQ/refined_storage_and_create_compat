@@ -54,7 +54,8 @@
 本脚本做三件事：
   ① 源码锚点：④ 分量的实现只有一份、与 ①②③ 互斥且逐位置去重；名额绝不允许比门控更宽；
   ② 反例表：用**日志原文的那几个数**对拍「旧口径 vs 新口径」，钉死两个多开时刻，
-     并证明其余时刻（正常开工 / 已交付满 / 非必得放大）逐字未变；
+     并证明其余时刻（正常开工 / 已交付满）逐字未变；非必得配方已在 2026-11-08 改成
+     「不预开、失败才补」（名额 = R − 在制，与 p 无关）；
   ③ 流水推演：把「成品有一段时间不可见」这件事显式建模，证明新口径下开件总量 ≤ 订单量。
 """
 import io
@@ -165,8 +166,12 @@ capacity_body = body(chamber, "private long startCapacityForRecipe(final String 
 check("锚点: -2 的分支写在 -1 分支之前（否则抖动会从保守下限漏回来）",
       capacity_body.index("if (remaining == NO_ORDER_READABLE) {")
       < capacity_body.index("if (remaining < 0L) {"))
-has(chamber, "allowed = (long) Math.ceil(remaining / (double) p);",
-    "锚点: 非必得配方的 ceil(R/p) 放大逐字未改（绝没有借这次修复收紧概率产线）")
+has(chamber, "final long allowed = remaining;",
+    "锚点: 名额预算 = 订单剩余量 R（2026-11-08 起必得 / 概率配方同一个公式，与 p 无关）")
+check("反例检测器: 旧口径「按期望轮次预开名额 ceil(R/p)」已从源码彻底移除",
+      "Math.ceil(remaining" not in chamber)
+has(chamber, "capacity = allowed - inFlight;",
+    "锚点: 名额 = R − 跨舱在制件数（失败一件 ⇒ inFlight 减 1 ⇒ 名额回 1 ⇒ 按需补发一件）")
 
 
 # ============================================================ ③ 等价模型 + 反例表
@@ -176,14 +181,17 @@ NO_ORDER = -2
 
 
 def capacity(remaining, guaranteed, p, inflight):
-    """复刻 startCapacityForRecipe（本轮 2026-10-06 第 27 轮修正后的源码，逐字对应）。"""
+    """复刻 startCapacityForRecipe（2026-11-08 用户口径改定后，逐字对应）。
+
+    必得 / 非必得**同一个公式**：名额 = R − inflight，**与 p 无关**（p 只进诊断）。
+    2026-10-06 第 27 轮修正保留：-2（读得到、但没有需求）⇒ 0；-1（判不出来）⇒ 保守放 1 件。
+    2026-11-08：旧的 `ceil(R/p)` 期望值预开已被用户驳回并删除；失败一件才补一件。
+    """
     if remaining == NO_ORDER:
         return 0
     if remaining < 0:
         return 1 if inflight <= 0 else 0
     allowed = remaining
-    if not guaranteed and isinstance(p, float) and 0.0 < p < 1.0:
-        allowed = int(math.ceil(remaining / p))
     return max(0, allowed - inflight)
 
 
@@ -230,9 +238,16 @@ check("反例⑤ 正常开工侧逐字未变：刚下单（D=0、无在制）时
       cap_old(10, 0, 0, 0, 0) == 10 and cap_new(10, 0, 0, 0, 0, 0) == 10)
 check("反例⑥ 已交付满（D=10）⇒ 旧新都是 0（上一轮那处修复没被推翻）",
       cap_old(10, 10, 0, 0, 0) == 0 and cap_new(10, 10, 0, 0, 0, 0) == 0)
-check("反例⑦ 非必得（p=0.8）放大逐字未变：订单 10、在制 0 ⇒ 13 个名额；在制 3 ⇒ 10 个名额",
-      capacity(10, False, 0.8, 0) == 13 and capacity(10, False, 0.8, 3) == 10
-      and capacity(64, False, 0.8, 0) == 80 and capacity(1, False, 0.8, 0) == 2)
+check("反例⑦【2026-11-08 改定】非必得（p=0.8）不再按期望轮次预开：订单 10、在制 0 ⇒ 10 个名额"
+      "（旧口径 13）；在制 3 ⇒ 7；订单 64 ⇒ 64（旧 80）；订单 1 ⇒ 1（旧 2）",
+      capacity(10, False, 0.8, 0) == 10 and capacity(10, False, 0.8, 3) == 7
+      and capacity(64, False, 0.8, 0) == 64 and capacity(1, False, 0.8, 0) == 1)
+check("反例⑧【2026-11-08 新增】名额与主产物概率无关：p ∈ {1.0, 0.8, 0.5, 0.1} 在 R=20、"
+      "在制 0/19/20 上的结果逐字相同",
+      all(capacity(20, p >= 1.0, p, i) == 20 - i
+          for p in (1.0, 0.8, 0.5, 0.1) for i in (0, 19, 20)))
+check("反例⑨【2026-11-08 新增】失败一件才补一件：R=20、I=20 ⇒ 0；模拟一件失败（I=19）⇒ 1",
+      capacity(20, False, 0.8, 20) == 0 and capacity(20, False, 0.8, 19) == 1)
 
 section("④) 反例表：根因 B —— 「没有需求」绝不放行、「判不出来」仍然保守放 1 件")
 

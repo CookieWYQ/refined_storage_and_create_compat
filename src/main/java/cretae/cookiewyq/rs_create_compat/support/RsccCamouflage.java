@@ -172,8 +172,8 @@ public final class RsccCamouflage {
         if (level == null || pos == null) {
             return null;
         }
-        if (level instanceof final Level realLevel && !realLevel.isLoaded(pos)) {
-            return null; // 未加载：绝不为了取一份数据去加载区块
+        if (level instanceof final Level realLevel && SafeChunkRead.chunkNow(realLevel, pos) == null) {
+            return null; // 未加载（或未到 FULL）：绝不为了取一份数据去加载区块 —— 第 138 轮安全读
         }
         final BlockEntity be = level.getBlockEntity(pos);
         return be == null ? null : be.getExistingDataOrNull(RsccCamouflageAttachment.CAMOUFLAGE.get());
@@ -704,10 +704,8 @@ public final class RsccCamouflage {
      * 先用「廉价方块族判定」挡掉非线缆 / 管道 / 传动杆的方块更新。</p>
      */
     public static void repushIfCamouflaged(final ServerLevel level, final BlockPos pos) {
-        if (!level.isLoaded(pos)) {
-            return; // 绝不为了补一次同步去加载区块（与 dataOf 同一条纪律）
-        }
-        final BlockEntity be = level.getBlockEntity(pos);
+        // 第 138 轮：安全读（只读已 FULL 区块）—— 绝不为了补一次同步去加载区块
+        final BlockEntity be = SafeChunkRead.blockEntityNow(level, pos);
         if (be == null || be.getExistingDataOrNull(RsccCamouflageAttachment.CAMOUFLAGE.get()) == null) {
             return;
         }
