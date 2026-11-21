@@ -15,7 +15,7 @@
 | 本模组 | `1.2.0` |
 | 模组 ID | `rs_create_compat` |
 
-> 说明：下文引用的验收数字来自最后一轮 beta（`1.2.0-beta.43`，2026-11-21）的落地记录。正式版 `1.2.0` 会用同一套门槛重新构建与验收：全量自检、专用服务端真启动、客户端真启动、四处部署 sha256 全等；jar 的 sha256 以发布附件为准，启动日志里的 `[rscc-build]` 行是判断「手里这份是哪个构建」的唯一凭据。
+> 说明：下文验收数字由两部分组成 —— 最后一轮 beta（`1.2.0-beta.43`）的完整落地记录，以及 `1.2.0` 正式构建**重跑**的全量自检 / 专用服务端真启动 / 客户端真启动结果（见「性能与稳定性」表）。正式版 jar 的 sha256 以发布附件为准；启动日志里的 `[rscc-build]` 行是判断「手里这份是哪个构建」的唯一凭据。
 
 ---
 
@@ -282,16 +282,16 @@
 
 ## 性能与稳定性
 
-**验证门槛（最后一轮 beta 的实测值）**
+**验证门槛（`1.2.0` 正式版 + 最后一轮 beta 的完整记录）**
 
 | 项 | 结果 |
 | --- | --- |
-| 全量自检 | **210 脚本 / 0 失败**（`build/round142_selfchecks_final.log`） |
-| 独立 javac（不信任 gradlew 结论） | `LEAD_COMPILE_OK sources=528` |
-| 构建 | `BUILD SUCCESSFUL in 5s`；`rs_create_compat-1.2.0-beta.43.jar` = **2,966,422 B**，sha256 `79708ad6…4ae1` |
-| 专用服务端真启动 | **PASS**：`Done (1.807s)! For help, type "help"`；`[rscc-build] version=1.2.0-beta.43 … sources=528`；`run/` 前后清单完全一致（只读自证） |
-| 客户端真启动 | **PASS**：`mods - versions {1.2.0-beta.43}` + **`Sound engine started`**（晚段标记）+ `Created: 2048x1024`；**0 个 crash-report**；无 `Mixin apply for mod rs_create_compat failed` |
-| 部署 | **四处 sha256 全等**（`build/libs` / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）；上一版三处就地 `.disabled`；两个远端目录都断言「恰好只有一个启用 jar」 |
+| 全量自检 | **210 脚本 / 0 失败**（1.2.0 源码树，`build/rel_work/selfchecks_120.log`；与 `1.2.0-beta.43` 同一份源码） |
+| 独立 javac（不信任 gradlew 结论） | `LEAD_COMPILE_OK sources=528`（beta.43 轮执行，其后源码未变） |
+| 构建（正式版） | `BUILD SUCCESSFUL in 9s`，工作树干净（`dirty=false`）；`rs_create_compat-1.2.0.jar` = **2,966,411 B**，sha256 `eb4c54e1…e39ee`；`build_info` = `revision=14009d2 modVersion=1.2.0 sources=528` |
+| 专用服务端真启动（正式版） | **PASS**：`Done (1.306s)! For help, type "help"`；`[rscc-build] version=1.2.0 revision=14009d2 … sources=528`；`run/` 前后清单完全一致（只读自证） |
+| 客户端真启动（正式版） | **PASS**：`mods - versions {1.2.0}` + **`Sound engine started`**（晚段标记）+ `Created: 2048x1024`；**0 个 crash-report**；无 `Mixin apply for mod rs_create_compat failed` |
+| 部署（beta.43） | **四处 sha256 全等**（`build/libs` / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）；上一版三处就地 `.disabled`；两个远端目录都断言「恰好只有一个启用 jar」。正式版以本页附件为准 |
 
 自检脚本从 beta.11 的 **151** 条涨到 beta.43 的 **210** 条，0 失败；每一轮新增脚本都带反例自证（例如 beta.43 的 45 断言含 6 条 JVM 调用栈探针 + 前缀改坏反例 + 5 组源码反例；beta.40 的 36 断言 / 6 组反例；beta.39 的 22 断言含 4 组旧写法反例）。
 
@@ -302,7 +302,7 @@
 - **区域实体查询**：高级仓原来对全部区域求**一个** AABB 并集（两块区域相隔 1000 格 ⇒ 查询盒跨度 1000+ 格）；现在按跨度阈值（2×`Area.MAX_SIDE` = 256）与体积阈值做 O(n) 贪心聚类，每簇一盒、逐簇 `getEntitiesOfClass` + 去重；区域全相邻时退化为 1 簇 1 盒，与旧行为逐字一致。
 - **装填器**：`updateChecklist` 从每 tick 20 包/秒降到只在蓝图变化与队列部署时；集群 BFS 从每 tick 十几次到 1 次。
 - **GUI**：15 张烘焙背景 / 19 支 Menu / 9 个自绘点 / 85 条锚点由 `selfcheck_gui_slot_alignment.py`（135 断言 / 7 反例）钉住；长文本 tooltip 规则扫描 52 个文件 / 237 处自绘文本（tooltip 54 / 自动豁免 79 / 冻结 101 / 未覆盖 0，17 条反例）。
-- **客户端启动探针本身也修了**：版本行正则原来写死 `beta.38`、渲染证据接受早期就出现的 `Backend library: LWJGL`（会在 mod 还没构造完时就把客户端杀掉）⇒ 正则改 `beta.\d+`，渲染证据只认晚段标记 `Sound engine started` / `Created: 1024x512`；本轮客户端真的走到标题界面才判 PASS。
+- **客户端启动探针本身也修了**：版本行正则原来写死 `beta.38`、渲染证据接受早期就出现的 `Backend library: LWJGL`（会在 mod 还没构造完时就把客户端杀掉）⇒ 正则改为 `1\.2\.0(?:-beta\.\d+)?`（发布 1.2.0 时又去掉一次写死 beta），渲染证据只认晚段标记 `Sound engine started` / `Created: …`（本轮实际日志 `Created: 2048x1024`）；本轮客户端真的走到标题界面才判 PASS。
 
 **稳定性上的一个事实**：210 条自检里 0 失败是「每条断言都能被源码事实与反例证伪」，不等于「所有场景都在真实存档里跑过」—— 见「已知限制」。
 

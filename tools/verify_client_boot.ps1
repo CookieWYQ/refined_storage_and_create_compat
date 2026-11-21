@@ -1,4 +1,4 @@
-# 客户端（CLIENT）真启动校验器 —— 与 tools/verify_dedicated_server.ps1 对称
+﻿# 客户端（CLIENT）真启动校验器 —— 与 tools/verify_dedicated_server.ps1 对称
 #
 # 【编码约定】本文件必须保存为 **UTF-8 带 BOM**：Windows PowerShell 5.1 在没有 BOM 时
 #   会按 GBK 解码 .ps1，中文注释被误解成引号后会直接解析失败。
