@@ -175,6 +175,12 @@ registration.addGuiContainerHandler(AdvancedCollectionCacheScreen.class,
 高级仓原有 48 格窗口的 JEI 拖入只更新**已有**条目、新 id 被忽略（`AdvancedCollectionCacheBlockEntity#setAreaMarkerConfig`
 只按下标改、不带 item id）。area-strip 在实现新包时若发现同一路径能一并修正，就修；不能就列进「发现但没动」。
 
+> **状态（第 140 轮，2026-11-21）**：已修。第 130 轮先修了**空格子**静默丢包（`addAreaMarkerEntry`）；
+> 第 140 轮补上另一半 —— 拖到**已有条目**的格子时，7 参覆写以前只做 update（旧 id 保留），
+> 现在 `id / fluid` 与旧条目不同就走 `AdvancedCollectionCacheBlockEntity#replaceAreaMarkerEntry`
+> 整条替换（去重跳过本下标、单条 / 整表预算与新增同口径），`id == null` 与基类同义清空。
+> 判据 = `tools/selfcheck_round140_advanced_jei_replace.py`（14 断言 / 4 组反例自证）。
+
 ## 5. 退役范围（不许一刀切删能力）
 
 - `AreaSelectorScreen` **文件保留**（主手「潜行+右键空气」路径仍用它，自带完整能力）；

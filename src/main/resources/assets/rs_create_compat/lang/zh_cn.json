@@ -1666,6 +1666,7 @@
   "gui.rs_create_compat.area_selector.filter.summary": "过滤：%s 条（行内只显示物品名，完整 ID 见下）",
   "gui.rs_create_compat.area_selector.err.reject.no_such_area": "该区域已不存在：列表已按服务端刷新",
   "gui.rs_create_compat.area_selector.err.reject.invalid": "区域几何不合法（越界 / 超单边 / 超体积）",
+  "gui.rs_create_compat.area_selector.err.reject.mark_overflow": "改几何被拒绝：新旧两块区域的过滤标记合并后会超过单区域上限（288 条），旧区域与全部标记均未改动；请先删掉一些标记再改",
   "gui.rs_create_compat.area_selector.region": "区域 %s",
   "gui.rs_create_compat.area_selector.status.loading": "正在读取服务端区域数据",
   "gui.rs_create_compat.area_selector.status.no_selector": "没装区域选定器：没有可用区域",

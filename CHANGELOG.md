@@ -6,7 +6,51 @@
 > 说明：`1.0.0` 是**首个正式版本**。仓库中可见的 `0.0.1-SNAPSHOT` 是开发期版本号，
 > 开发期的改动**未按版本切分**，因此本文件不臆造更早的版本号与日期，全部归入 `1.0.0`。
 
-## [Unreleased]
+## [1.2.0] - 2026-11-21
+
+> `1.2.0` 正式版与 `1.2.0-beta.43`（第 142 轮）是**同一份源码**，差异只有版本号：自 `1.2.0-beta.43` 之后没有新的代码改动。因此下面全部条目即为 `1.2.0` 的完整变更记录；玩家从最后一个测试版升级时**无需做任何事**。
+
+### 修复（1.2.0-beta.43，第 142 轮：保持器镜像双计「按最优方案」+ 流体默认目标 64000 mB）
+
+用户原话（2026-11-21 15:02，对第 141 轮两项拍板）：保持器 H2 剩余「按最优方案」、保持器 M2「改成 64000mb」；「选择」按钮「目前没有」（继续挂起）。落地记录 = `docs/ROUND142_LANDING.md`。
+
+- **H2 剩余：外部存储把保持器的对外能力当成网络存储源 ⇒ 存量虚高、多销毁**。保持器故意把「本机缓冲 + 网络同类资源」通过 `IItemHandler` / `IFluidHandler` 暴露给相邻方块（这是设计功能）；但 RS 2.0.9 的外部存储会把该能力注册成**网络自己的存储源**，导致两处重复计数：① 网络镜像 = 网络存量本身（每虚拟槽最多 +`STORAGE_SLOT_LIMIT`）；② 本机缓冲也被 `net.get` 计入，而销毁池子又是 `net.get + 缓冲余量` ⇒ 缓冲被算两遍。**按「最优方案」换实现**：新增 `support/KeeperCapabilityVisibility`（`StackWalker` 判据，只认 `com.refinedmods.refinedstorage` 前缀，24 帧上限），**整份能力只对第三方物流可见、对 RS 自己的存储聚合隐藏**（两边各 7 处：物品读 / 插 / 抽 + 流体读 / `fill` / `drain×2`，每处都是方法第一条判据）。对第三方（Create 漏斗 / 管道 / 原版漏斗）读 / 抽 / 送入完全不变；RS 直接走网络，可达路径一个不少。玩家若在保持器旁贴 RS 外部存储，那台外部存储不再把保持器当存储源（这正是双计来源，属预期行为）。
+- **M2：流体 / 气体默认目标从 64 mB 改为 64000 mB（64 桶）**。旧实现物品与流体共用 `Config.quantityKeeperDefaultTarget = 64`：对物品是 64 个、对流体却是 64 mB，拖入岩浆后按 64 mB 持续销毁。修法：`KeeperTarget` 新增 `itemDefaultTarget()` / `fluidDefaultTarget()`（= 物品默认值 × 1000，默认 64 ⇒ **64000 mB**，仍走唯一钳制入口）。**只动「未改过的默认值」**：目标还是物品默认值时第一次标流体 / 气体 ⇒ 换成 64000；改回物品标记且目标还是 64000 ⇒ 换回 64；玩家手动设过的值不动。高级版按槽独立套用。**旧存档不动**：读档路径不经过切换，旧档里已存的 64 mB 流体目标原样读回（重新标一次才吃新默认值）。
+- **顺手修探针（两处证据链缺陷）**：`tools/verify_client_boot.ps1` ① 写死的版本行正则还是 `versions {1.2.0-beta.38}`（第 139 轮之后一直只靠 `[rscc-*]` 后备判据命中）；② 渲染证据接受 `Backend library: LWJGL`，而它在早期窗口创建时就会出现（mod 还没构造完），实测会在 mod 列表刚打印时就把客户端杀掉。改法：正则改 `beta.\d+`；渲染证据只认晚段标记 `Sound engine started` / `Created: 1024x512`。本轮重跑客户端探针：客户端走到标题界面（`Sound engine started`）才判 PASS。
+- **验证**：新增 `tools/selfcheck_round142_keeper_capability_and_fluid_default.py`（**45 断言 / 0 失败**，含 6 条 JVM 调用栈探针、前缀改坏反例、5 组源码反例自证）；全量自检 **210 脚本 / 0 失败**（`build/round142_selfchecks_final.log`）；独立 javac `LEAD_COMPILE_OK sources=528`；构建 `BUILD SUCCESSFUL in 5s`，`rs_create_compat-1.2.0-beta.43.jar` = 2,966,422 B / sha256 `79708ad6…4ae1` / `build_info` = `1.2.0-beta.43 sources=528`；专服真启动 PASS（`Done (1.807s)!` + `[rscc-build] version=1.2.0-beta.43 … sources=528`，`run/` 只读自证 OK）、客户端真启动 PASS（`versions {1.2.0-beta.43}` + `Sound engine started`，0 crash-report）；四处部署（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，beta.42 三处 `.disabled`。
+- **未做（如实写明）**：没有实机存档复现（H2 结论来自 RS 2.0.9 源码调用链 + 双计模型 + 反例自证；M2 的「拖岩浆看默认 64000」也没开界面点过）；调用栈判据是启发式，RS 未来换包名 / 换调用路径会让闸门失效（JVM 探针只能证明「前缀命中 ⇒ 隐藏」机制）；「选择」按钮仍缺现场截图。
+
+### 修复（1.2.0-beta.42，第 141 轮：缓存仓无电不再搬运 + 保持器目标数量服务端上限）
+
+用户原话（2026-11-21 14:17）：「不是还剩下几个问题没修吗？把那几个问题中最重要的那几个给修了，然后呢这个模组差不多就已经开发完毕了。」落地记录 = `docs/ROUND141_LANDING.md`。
+
+- **先对账**：第 138/139/140 轮「未做清单」里 `ROUND117` M1（单元样板库体积限 / 阻塞标签名单上限）与 `ROUND120` F2（跨资源超容 / SIMULATE→EXECUTE 竞态）其实已分别在第 118 轮、第 117 轮、第 121 轮落地（`UnitLibraryLimits` / `CollectionBlockedLimits` / 执行仓上游缓冲），文档列表过期；真正剩下且不需要产品拍板的只有下面两条。
+- **L2：中间产物缓存仓无电仍执行存量迁移**。`IntermediateCacheBlockEntity#doWork` 旧实现直接跑 `RsccIntermediateFlow.flowOnce`，网络没电也把中间产物从网络搬进缓存盘（只网络内搬运，不复制不销毁，但违背「机器不上电不干活」的能量语义）。修法：节流之前加 `node == null || !node.isActive()` 闸门（未激活时冷却不推进，重新上电第一 tick 就能搬），`flowOnce` 复用同一个 `node`。
+- **M1：定量保持器目标数量无服务端上限**。旧 setter 只做 `Math.max(0, value)` ⇒ 改包 / 手输 `Integer.MAX_VALUE` 会原样落下，服务端按 21 亿的缺口向 RS 要自动合成。修法：`KeeperTarget.MAX_SET_TARGET = 1_000_000_000`（与 `Config.quantityKeeperDefaultTarget` 的 `defineInRange(..., 1, 1000000000)` 同口径）+ 唯一钳制入口 `clampSetTarget`，基础版 `setTargetAmount` 与高级版 `setTarget` 都走它；**读档不经过钳制**（旧档超限值原样读回，只拦增长）。
+- **验证**：新增 `tools/selfcheck_round141_remaining_closure.py`（26 断言 / 4 组反例自证 / 0 失败）；`selfcheck_quantity_keeper.py` 的 setter 判据同步为新口径（判据未放松）；全量自检 **209 脚本 / 0 失败**（`build/round141_selfchecks_final.log`）；专服真启动 PASS（`Done (1.913s)!` + `[rscc-build] version=1.2.0-beta.42 sources=527`，`run/` 只读自证 OK）、客户端真启动 PASS（`versions {1.2.0-beta.42}` + `LWJGL 3.3.3+5`，0 crash-report）；构建 `BUILD SUCCESSFUL in 59s`，`rs_create_compat-1.2.0-beta.42.jar` = 2,964,309 B / sha256 `c119a893…7124` / `build_info` = `1.2.0-beta.42 sources=527`；四处部署（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，beta.41 三处 `.disabled`，两个远端目录都只剩 beta.42 一个启用 jar。
+- **未做（如实写明）**：保持器 H2 剩余（外部存储把网络镜像再算一遍 ⇒ 存量虚高）与 M2（基础版默认目标 64 + 过量销毁默认开，流体按 mB）属产品口径，需拍板；「高级远程多功能终端偶尔消失的『选择』按钮」仍缺一份现场截图 / 界面名。无实机存档复现，结论来自源码调用链 + 行为模型 + 反例自证。
+
+### 修复（1.2.0-beta.41，第 140 轮：48 格窗口 JEI 拖入「新 id 被忽略」——已有条目整条替换）
+
+用户原话（2026-11-21 08:21）：「48 格窗口 JEI 拖入『新 id 被忽略』这个你修了吗」。如实回答：**第 130 轮只修了空格子那一半**（拖到空格子静默丢包），「拖到已有条目的格子」这一半一直没修（`ROUND125` §4.6 挂着）。落地记录 = `docs/ROUND140_LANDING.md`。
+
+- **根因**：高级版 7 参覆写 `AdvancedCollectionCacheMenu#applyMarkerConfig` 只调 `setAreaMarkerConfig`（只改数量 / 规则、**不接受 item id**）⇒ JEI 把另一个物品拖到**已经有条目**的格子上时，拖进来的 id 与数据组件被静默丢掉（格子看起来没变）。基类 `CollectionCacheBlockEntity#setMarkerConfig` 的口径是「同 id ⇒ 保留旧 nbt、只 update；异 id ⇒ **替换该下标**」，高级版只实现了前一半。
+- **修法**：新增 `AdvancedCollectionCacheBlockEntity#replaceAreaMarkerEntry`（只替换已有条目的格子；去重时跳过本下标自身；单条体积 + 整表预算与新增同口径；`next.set` 替换、条数不变）；菜单 7 参覆写在「id / fluid 与旧条目不同」时构 `MarkerEntry`（id + 组件补丁 + 数量 + 规则）走替换、失败走 `notifyMarkerResult`（`DUPLICATE` / `FULL` / `TOO_COMPLEX` 有 actionbar 文案）；`id == null` 与基类同义清空；同 id 仍只 update。客户端 JEI 通道不用改（`SetCollectionMarkerConfigPacket` 本来就带 id + 组件补丁，丢 id 的是服务端这条覆写）。
+- **验证**：新增 `tools/selfcheck_round140_advanced_jei_replace.py`（14 断言 / 4 组反例自证 / 0 失败），相关旧自检（`round114` / `round101` / `round112` / `round130`）重跑全绿；全量自检 **208 脚本 / 0 失败**；独立 javac `LEAD_COMPILE_OK sources=527`；构建 `BUILD SUCCESSFUL in 7m 17s`，jar 2,964,121 B / sha256 `794df8d6…e75fe`；专服真启动 PASS（`Done (1.777s)!`，`[rscc-build] version=1.2.0-beta.41 sources=527`）、客户端真启动 PASS（`versions {1.2.0-beta.41}` + `LWJGL 3.3.3+5`，0 crash-report）；四处部署（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，beta.40 三处 `.disabled`（详见 `docs/ROUND140_LANDING.md` §3–4）
+- **未做（如实写明）**：区域过滤器仍只支持**物品**标记 —— 7 参覆写的 `fluid` 分支仍按旧口径交回基类（写全局匹配区），本轮没有扩大这个边界；「拖入的 id 已存在于该区域别的下标」按 `addAreaMarkerEntry` 同口径返回 `DUPLICATE` + 提示（不制造两条同 id 标记）。无实机存档复现，结论来自源码调用链 + 基类 / 高级版口径对比。
+
+### 修复（1.2.0-beta.40，第 139 轮：带组件流体真能取出 + 「>288 条」不再静默丢配置）
+
+用户原话（2026-11-21 00:12）：「可以」——同意按第 138 轮建议的顺序开下一轮，先做「会真丢功能」的 L3、再做「会真丢数据」的 >288 截断。落地记录 = `docs/ROUND139_LANDING.md`。
+
+- **A：带组件流体「取不出来」（第 118 轮复核 L3）**。根因是三处不对称叠加：① `drain` 编码组件时<b>不带</b>注册表上下文、而 `fill` 带了 ⇒ 同一补丁可能编出不同 NBT；② `getFluidInTank` / `drainById` 返回的 `FluidStack` <b>把数据组件补丁丢了</b> ⇒ 外部管道拿裸流体回来 drain 时按「无组件」查本机的带组件条目必然落空（既取不出来，变体数据也被当普通流体送出）；③ 本机查不到时静默回退网络、且基础版只比流体 id ⇒ 请求别的变体也会把标记流体冒充成请求流体交还。
+  - 修法：两台保持器各加唯一入口 `registryHint()`（`level.registryAccess()`），`fill` / `drain` / 入网 / 仲裁 / 回流全部走它；新增 `toFluidStack(fluid, amount, nbt)` / `stackOf(id, nbt, amount)`，`getFluidInTank` / `drainById` / `drain(int)` 网络回退一律交还<b>带组件</b>的 `FluidStack`；基础版网络回退收紧为「请求的 id 且组件 NBT 与直接标记完全一致」。
+  - 只改「补丁的携带与编码上下文」，<b>不改</b>标记匹配口径（`matchesFluidMarker` 仍按流体 id），标记变更后遗留的其它变体照旧可取；旧存档条目不需要迁移。
+- **B：「>288 条」不再静默截断（第 114/115 轮复核 L1）**。REPLACE 改区域几何时会把旧几何的标记搬到新几何；两块地都接近上限 `MATCH_CAPACITY = 288` 时，旧实现让 `AreaMarks.put → sanitizeEntries` 截断，尾部标记永久消失；而 `AreaMarks.put` / `migrateByIndex` 自身截断时一个字都不打。
+  - 修法：合并逻辑抽成纯函数 `mergeAreaMarks(existing, carried)`（与旧实现逐字同语义）；超 288 条在 `AreaSelection.set`（唯一写入点）<b>之前</b> `reject(REJECT_MARK_OVERFLOW = 6)` + `return` —— 旧区域与全部标记一个字节都不动，玩家删掉一些再来；通过校验的合并结果暂存后一次写入。拒绝原因进 zh/en 语言键，主手路径走聊天提示、菜单路径走区域面板同一句文案。
+  - 数据层兜底：`AreaMarks.put` 与 `migrateByIndex` 在截断时打 WARN（保留前 N 条 / 丢 N 条），此后再丢配置必须有证据。
+- **验证**：独立 javac `LEAD_COMPILE_OK sources=527`；新增 `tools/selfcheck_round139_fluid_components_and_mark_cap.py`（36 断言 / 6 组反例自证）；既有 `selfcheck_round115` 第 ⑤ 组按「拒绝写入」新口径同步（判据未放松）；全量自检 **207 脚本 / 0 失败**；专服真启动 `Done (2.590s)!`、客户端真启动 `LWJGL 3.3.3+5` 均 PASS；jar 2,963,545 B / sha256 `c4eac5d7…dd36c` **四处回读全等**（build/libs / 本地实例 / SFTP `/mods` / `/client_files/mods`；详见 `docs/ROUND139_LANDING.md` §4）
+- **未做（如实写明）**：`CollectionCacheBlockEntity` 的流体能力已核对为「fill/drain 两侧同上下文、彼此自洽」，不属于本次三处不对称，本轮不动（避免改坏已落盘条目的键）；`AreaMarkEditPacket.ACTION_ADD` 满 288 条时仍是服务端静默兜底（客户端已先提示「已满」），不丢已有数据；其余第 138 轮清单项与「选择」按钮问题继续挂起。
 
 ### 修复（1.2.0-beta.39，第 138 轮：区块安全读全工程收口 + 充电器分片扫描 + 保持器 M3）
 

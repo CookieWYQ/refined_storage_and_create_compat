@@ -2466,3 +2466,236 @@ PASS 且未动：序列执行仓、单元样板管理舱（仅 1 格旧档抢救
    `ROUND120` F2 边界、48 格窗口 JEI 拖入问题，按用户「挑影响大的」口径留到后续。
 3. 「高级远程多功能终端偶尔消失的『选择』按钮」继续挂起（需要一张截图或界面名才能定位）。
 4. 无限范围充电的 FE/t 取舍见 §29.2-3；若不可接受，可把预算调到 512 或改「核心区每 tick + 外围轮转」。
+
+---
+
+## 30. 第 139 轮（1.2.0-beta.40）：带组件流体 drain/fill 对称 + >288 条不再静默截断
+
+主题：只清第 138 轮「未做清单」里用户点名的两条**会真丢功能 / 丢数据**的账
+（用户 2026-11-21 00:12「可以」）。
+
+### 30.1 A：带组件流体「取不出来」（第 118 轮复核 L3）
+
+三处不对称叠加（缺一不可）：
+
+1. `KeeperFluidHandler#drain(FluidStack)` 用 `MarkerEntry.encodeComponents(patch)`（**无**注册表上下文），
+   而 `fill` 用 `level.registryAccess()` ⇒ 同一补丁可能编出不同 NBT ⇒ 按键查本机条目落空；
+2. `getFluidInTank` / `drainById` 返回 `new FluidStack(fluid, amount)`（**丢组件补丁**）⇒ 管道拿裸流体
+   回来 drain 时按「无组件」查带组件条目必然落空 ⇒ 静默回退网络；即便取出，变体数据也丢了；
+3. 基础版网络回退只比流体 id ⇒ 请求别的变体也会把标记流体冒充成请求流体。
+
+修法：唯一入口 `registryHint()`（两台保持器各一份）；`fill` / `drain` / 入网 / 仲裁 / 回流全部走它；
+新增 `toFluidStack(fluid, amount, nbt)`（基础版）/ `stackOf(id, nbt, amount)`（高级版），
+`getFluidInTank` / `drainById` / `drain(int)` 网络回退全部交还**带组件**的 FluidStack
+（`FluidStack(Holder<Fluid>, int, DataComponentPatch)`）；基础版回退收紧为「id + 组件 NBT 与直接标记全等」。
+
+边界：不改 `matchesFluidMarker`（仍按 id），遗留变体照旧可取；旧存档条目不需要迁移
+（条目本来就是 NBT 键，本轮只让「请求侧」能算出同一个键）。
+`CollectionCacheBlockEntity` 的流体能力核对为「fill/drain 两侧同上下文、彼此自洽」⇒ 本轮不动
+（避免改坏已落盘条目的键）。
+
+### 30.2 B：「>288 条」静默截断（第 114/115 轮复核 L1）
+
+`AreaSelectorEditPacket` 的 REPLACE 合并旧几何标记 + 新几何已有标记，超 `MATCH_CAPACITY = 288` 时
+旧实现让 `AreaMarks.put → sanitizeEntries` 截断（尾部永久消失），且 `AreaMarks.put` /
+`migrateByIndex` 自身截断时**无任何日志**。
+
+修法：
+1. 合并抽成纯函数 `mergeAreaMarks(existing, carried)`（新几何在前、旧几何按 `(类别, id)` 去重追加，
+   与旧实现逐字同语义）；
+2. 超 288 ⇒ 在 `AreaSelection.set` **之前** `reject(REJECT_MARK_OVERFLOW = 6)` + `return`
+   （旧区域 / 旧标记 / 新几何原有标记零改动）；通过的合并结果暂存 `pendingAreaMarks` 后一次写入；
+3. 新码 `REJECT_MARK_OVERFLOW = 6` + `gui.rs_create_compat.area_selector.err.reject.mark_overflow`
+   （zh/en），主手路径走聊天、菜单路径走 `AreaStripPanel`；
+4. `AreaMarks.put` / `migrateByIndex` 截断时打 WARN（保留前 N 条 / 丢 N 条）。
+
+边界：正常入口（新界面 / 48 格窗口 / 标记包）本来就先查容量并提示「已满」，本轮改的是
+「合并 / 迁移 / 改包」三条能绕过前端的路径；选「拒绝改几何」而不是「尽量多搬」，因为任何
+「搬一部分」都必然丢配置。`AreaMarkEditPacket.ACTION_ADD` 满 288 时仍是服务端静默兜底
+（客户端已先提示），不丢已有数据。
+
+### 30.3 验证
+
+- 独立 javac：`LEAD_COMPILE_OK sources=527`；
+- 构建：`BUILD SUCCESSFUL in 6m 47s`，`rs_create_compat-1.2.0-beta.40.jar` = 2,963,545 B，
+  sha256 `c4eac5d7…dd36c`；`build_info` = `1.2.0-beta.40` / `sources=527`；
+- 专用服务端真启动：`PASS`（`Done (2.590s)!`，`[rscc-build] version=1.2.0-beta.40 … sources=527`，`run/` 只读自证 OK）；
+- 客户端真启动：`PASS`（`mods - versions {1.2.0-beta.40}` + `LWJGL 3.3.3+5`，`run/` 0 变化）；
+- 全量自检：**207 脚本 / 0 失败**；本轮新自检 36 断言 / 0 失败；
+- 部署：四处（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，
+  beta.39 三处 `.disabled`；另外本轮修掉 `/client_files/mods` 里 beta.37 仍启用（上轮改名未生效）的既有问题，
+  两个远端目录现在都只有 beta.40 一个启用 jar。
+
+### 30.4 未做 / 风险
+
+1. 没有实机存档复现：A 的结论来自 1.21.1 / NeoForge `FluidStack` 语义 + 源码路径；B 来自容量常量 +
+   调用链。若 beta.40 后仍遇到「带组件流体取不出」，需要该机器的 `FluidStorage` 条目 NBT 与流体来源。
+2. 「选择」按钮问题继续挂起（需要截图 / 界面名）。
+3. 第 138 轮清单其余项（保持器 L2 / H2 / M1 / M2、`ROUND117` M1、`ROUND120` F2、48 格窗口 JEI 拖入）
+   仍未做。（其中「48 格窗口 JEI 拖入」已在第 140 轮修掉，见 §31。）
+
+---
+
+## 31. 第 140 轮（1.2.0-beta.41）：48 格窗口 JEI 拖入「新 id 被忽略」
+
+触发：用户 2026-11-21 08:21 直接问「48 格窗口 JEI 拖入『新 id 被忽略』这个你修了吗」。
+如实回答：**第 130 轮只修了空格子那一半**（`addAreaMarkerEntry`）；「拖到已有条目的格子」
+这一半一直没修（`ROUND125` §4.6 挂着）。
+
+### 31.1 根因
+
+`ROUND125` §4.6 的两个症状其实是同一覆写的两半：
+
+1. 空格子：`applyMarkerConfig` → `setAreaMarkerConfig` 找不到条目就 `return false` ⇒ 静默丢包
+   —— 第 130 轮已修；
+2. 已有条目：同一个 7 参覆写只调 `setAreaMarkerConfig`（只改数量 / 规则、**不接受 item id**）⇒
+   JEI 拖进来的 id 与数据组件被丢掉，格子看起来没变。
+
+基类 `CollectionCacheBlockEntity#setMarkerConfig` 的口径是「同 id ⇒ 保留旧 nbt、只 update；
+异 id ⇒ 替换该下标」。高级版覆写只实现了前一半 ⇒ 偏离基类语义。
+
+### 31.2 修法
+
+- `AdvancedCollectionCacheBlockEntity#replaceAreaMarkerEntry(areaIndex, markerIndex, marker)`：
+  只允许替换**已有条目**的格子；去重时**跳过本下标**；单条 `MarkerBudget.isEntryTooBig` +
+  整表 `AreaMarks.isOverBudget(selectorStack(), area, next)` 与新增同口径；`next.set` 替换、条数不变。
+- `AdvancedCollectionCacheMenu` 7 参覆写：`id / fluid` 与旧条目不同 ⇒ 构 `MarkerEntry`
+  （id + 组件补丁 + 数量 + 规则）走替换，失败 `notifyMarkerResult`；`id == null` ⇒ 与基类同义清空；
+  同 id 仍走原来的 `setAreaMarkerConfig`。
+- 客户端 JEI 通道不用改：`SetCollectionMarkerConfigPacket` 本来就带 id + 组件补丁。
+
+### 31.3 验证
+
+- 新增自检 `tools/selfcheck_round140_advanced_jei_replace.py`：**14 断言 / 4 组反例自证 / 0 失败**；
+- 相关既有自检重跑：`round114` 99 项 / `round101` 47 项 / `round112` 100 项 / `round130` 77 项（23 反例）全绿；
+- 全量自检：**208 脚本 / 0 失败**；独立 javac：`LEAD_COMPILE_OK sources=527`；
+- 构建：`BUILD SUCCESSFUL in 7m 17s`，`rs_create_compat-1.2.0-beta.41.jar` = 2,964,121 B，
+  sha256 `794df8d6399aeee41b07f69c5a21d431f98dec6dc919b00a60af734ab69e75fe`，`build_info` = `1.2.0-beta.41` / `sources=527`；
+- 专用服务端真启动：`PASS`（`Done (1.777s)!`，`[rscc-build] version=1.2.0-beta.41 … sources=527`，`run/` 只读自证 OK）；
+- 客户端真启动：`PASS`（`mods - versions {1.2.0-beta.41}` + `LWJGL version 3.3.3+5`，0 crash-report）；
+- 部署：四处（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，
+  beta.40 在三处 `.disabled`，两个远端目录都只剩 beta.41 一个启用 jar。
+
+### 31.4 边界
+
+1. 无实机存档复现：结论来自源码调用链 + 基类 / 高级版口径对比。
+2. 区域过滤器仍只支持**物品**：`fluid` 分支仍交回基类（写全局匹配区），本轮的替换只走物品路径。
+3. 拖进来的 id 若已存在于该区域**别的下标** ⇒ `DUPLICATE` + 提示（不制造两条同 id 标记）。
+
+---
+
+## 32. 第 141 轮（1.2.0-beta.42）：缓存仓无电不再搬运 + 保持器目标服务端上限
+
+> 触发：用户 2026-11-21 14:17「不是还剩下几个问题没修吗？把那几个问题中最重要的那几个给修了，
+> 然后呢这个模组差不多就已经开发完毕了。」落地记录 = `docs/ROUND141_LANDING.md`（含对账表）。
+
+### 32.1 先对账（文档过期条目）
+
+第 138/139/140 轮「未做清单」里，`ROUND117` M1（单元样板库体积限 / 阻塞标签名单上限）与
+`ROUND120` F2（跨资源超容 / SIMULATE→EXECUTE 竞态）**早已落地**（分别在 `support/UnitLibraryLimits`
+第 118 轮、`support/CollectionBlockedLimits` 第 117 轮、执行仓上游缓冲第 121 轮），清单没同步。
+真正剩下且不需要产品拍板的只有 L2 与 M1；H2 剩余 / M2 是产品口径，「选择」按钮缺现场。
+
+### 32.2 L2：中间产物缓存仓无电仍执行存量迁移
+
+- 旧实现：`IntermediateCacheBlockEntity#doWork()` 在 `super.doWork()` 之后直接跑
+  `RsccIntermediateFlow.flowOnce(level, getNode().getNetworkOrNull())`，没有判网络节点是否激活。
+- 后果：断电 / 红石关断时仍把工位里的中间产物从网络搬进缓存盘（只网络内搬运，不复制、不销毁），
+  但违背「机器不上电不干活」的能量语义，玩家也无法靠断电停掉这台机器。
+- 修法：节流之前加 `node == null || !node.isActive()` 闸门；未激活时 `flowCooldown` 不推进
+  （重新上电第一 tick 就能搬，不需要再等 20 tick）；`flowOnce` 复用同一个 `node`。
+- 边界：读档 / 断电都不动缓存内容，只是「不上电不搬」。
+
+### 32.3 M1：定量保持器目标数量无服务端上限
+
+- 旧实现：`QuantityKeeperBlockEntity#setTargetAmount` 与 `AdvancedQuantityKeeperBlockEntity#setTarget`
+  只做 `Math.max(0, value)`。目标数量是**客户端输入**（数字框 / 改包），改包一次就能设成
+  `Integer.MAX_VALUE`，服务端会按 ≈21 亿的缺口向 RS 要自动合成。
+- 修法：`support/KeeperTarget` 新增 `MAX_SET_TARGET = 1_000_000_000`（与
+  `Config.quantityKeeperDefaultTarget` 的 `defineInRange(..., 1, 1000000000)` 同口径，不另造数字）
+  与唯一钳制入口 `clampSetTarget(int)`（`[0, MAX_SET_TARGET]`）；两个 setter 都改走它。
+- **只拦增长**：读档路径（`tag.getInt("TargetAmount")`）不经过钳制，旧档里超限的值原样读回，
+  不静默改小玩家的存档。正常玩法（几千～几百万）离上限三个数量级，不会误伤。
+
+### 32.4 自检 / 验收
+
+- 新增 `tools/selfcheck_round141_remaining_closure.py`：**26 断言 / 4 组反例自证 / 0 失败**
+  （L2 闸门位置三重断言：存在 / 在 `flowOnce` 前 / 在节流前；M1 常量与配置同口径、两个 setter 唯一入口、
+  读档不钳制、9 个取值的行为模型；反例：删闸门 / 改回 `Math.max` / 钳制只留上限 ⇒ 判据判负）。
+- `tools/selfcheck_quantity_keeper.py` 的 setter 判据同步为新口径（**判据未放松**：仍要求两个 setter
+  都夹 0 下限，且新增要求共用唯一入口）。
+- 全量自检：**209 脚本 / 0 失败**（`build/round141_selfchecks_final.log`）。
+- 构建：`BUILD SUCCESSFUL in 59s`（`--offline -x test`），`rs_create_compat-1.2.0-beta.42.jar`
+  = 2,964,309 B，sha256 `c119a893cfa522266b7763023f98044d889a275fbb1a70131192837d765a7124`，
+  `build_info` = `1.2.0-beta.42` / `sources=527` / `revision=1dd3924+dirty`。
+- 专用服务端真启动：`PASS`（`Done (1.913s)!`，`[rscc-build] version=1.2.0-beta.42 … sources=527`，`run/` 只读自证 OK，日志 442,181 B）；
+- 客户端真启动：`PASS`（`CLIENT_BOOT_VERDICT=PASS`，`versions {1.2.0-beta.42}` + `LWJGL version 3.3.3+5`，0 crash-report；`let_me_see_see` 的 LMSAgent 异常是第 137 轮已记录的三方问题）；
+- 部署：四处（build/libs / 本地实例 / SFTP `/mods` / SFTP `/client_files/mods`）sha256 全等，
+  beta.41 三处 `.disabled`；两个远端目录都断言「恰好只有 beta.42 一个启用 jar」（`DEPLOY_OK`）。
+
+### 32.5 仍未做（需拍板 / 需现场）
+
+1. 保持器 H2 剩余（外部存储把网络镜像再算一遍 ⇒ 存量虚高）——与「故意暴露网络镜像」是同一设计，
+   要拍板「只暴露本机缓冲 / 加开关 / 换实现」；
+2. 保持器 M2（基础版默认目标 64 + 过量销毁默认开；流体按 mB ⇒ 拖岩浆不改目标会按 64 mB 销毁）——默认值口径；
+3. 「高级远程多功能终端偶尔消失的『选择』按钮」——需要一张复现截图或界面名（第 136 轮已排除按钮被条件跳过）。
+
+## 33. 第 142 轮（1.2.0-beta.43）：保持器镜像双计「最优方案」+ 流体默认目标 64000 mB
+
+> 触发：用户 2026-11-21 15:02 对第 141 轮两项拍板：H2 剩余「按最优方案」、M2「改成 64000mb」；
+> 「选择」按钮「目前没有」。落地记录 = `docs/ROUND142_LANDING.md`。
+
+### 33.1 H2 剩余：为什么是「整份能力对 RS 隐藏」
+
+ROUND118 复核列过三个选项（只暴露本机缓冲 / 加开关 / 换实现）。本轮按「最优方案」= **换实现**：
+
+- 双计不止镜像一处：RS 2.0.9 的外部存储把相邻方块能力注册成**网络存储源** ⇒
+  `net.get` 里既有「镜像 = 网络存量本身」，又有**本机缓冲**；而 `KeeperOverflow.localDestroyAmount`
+  的池子是 `net.get + 缓冲余量` ⇒ 缓冲被算两遍。只藏镜像（选项一）只能消掉一半。
+- 对 RS 来说整份能力都冗余：读存量 / 取资源直接走网络即可；隐藏后可达路径一个不少。
+- 第三方物流（Create 漏斗 / 管道 / 原版漏斗）照旧读 / 抽 / 送 —— 设计功能保留。
+- 加开关会让同一方块两种配置下存量口径不同，默认档还要选边，不取。
+
+判据：`support/KeeperCapabilityVisibility`（纯 JDK，可单独 javac 真跑）——`StackWalker` 只看最上面
+24 帧，命中 `com.refinedmods.refinedstorage` 前缀即判「RS 自己的存储聚合」。整份能力隐藏：
+基础版 / 高级版各 **7 处**闸门（物品读 / 插 / 抽 + 流体读 / `fill` / `drain(resource)` / `drain(int)`），
+每处都是方法第一条判据；隐藏分支返回值安全（读 = 空 / 插入 = 原样退回 / 抽取 = 空 / `fill` = 0）。
+
+### 33.2 M2：流体默认目标 64000 mB
+
+- `KeeperTarget.itemDefaultTarget()`：读 `Config.quantityKeeperDefaultTarget`（配置未加载回退 64），
+  走唯一钳制入口 `clampSetTarget`。
+- `KeeperTarget.fluidDefaultTarget()`：`itemDefaultTarget() × 1000`（1 桶 = 1000 mB），默认 **64000 mB**；
+  配置改成 1000 时流体默认 1,000,000 mB，口径一致。
+- 切换：目标还等于物品默认值时首次标流体 / 气体 ⇒ 64000；从流体 / 气体改回物品且目标还等于 64000
+  ⇒ 64；玩家设过的值 / 目标 0 不动。高级版按槽独立判断。
+- **读档不经过切换**：旧档已存的 64 mB 原样读回，不静默改大。
+
+### 33.3 自检 / 验收
+
+- 新增 `tools/selfcheck_round142_keeper_capability_and_fluid_default.py`：**45 断言 / 0 失败**
+  （7+7 处闸门与顺序、隐藏分支安全值、JVM 探针 6 条、前缀改坏副本判负、5 组源码反例自证；
+  M2 行为模型 6 个配置取值 + 6 个切换用例 + 读档不动 + 双计销毁量模型）。
+- 顺手修 `tools/verify_client_boot.ps1` 的两处证据链缺陷：版本行正则写死 `beta.38` ⇒ `beta.\d+`；
+  渲染证据不再接受早期的 `Backend library: LWJGL`（会在 mod 构造前误判 PASS），只认晚段
+  `Sound engine started` / `Created: 1024x512`；本轮按新判据重跑客户端探针。
+- 全量自检：**210 脚本 / 0 失败**（`build/round142_selfchecks_final.log`）。
+- 独立 javac：`LEAD_COMPILE_OK sources=528`。
+- 构建：`BUILD SUCCESSFUL in 5s`，`rs_create_compat-1.2.0-beta.43.jar` = 2,966,422 B，
+  sha256 `79708ad6517736d4da9642f108cd088cae46284d0b467cac560d9c8365aa4ae1`，
+  `build_info` = `1.2.0-beta.43` / `sources=528` / `builtAt=2026-11-21T15:42:03+0800` / `revision=1dd3924+dirty`。
+- 专用服务端真启动：`PASS`（`Done (1.807s)!`，`[rscc-build] version=1.2.0-beta.43 … sources=528`，
+  `run/` 只读自证 OK，日志 442,186 B）。
+- 客户端真启动：`PASS`（`versions {1.2.0-beta.43}` + **`Sound engine started`**（标题界面晚段标记）+
+  `Created: 2048x1024`，0 crash-report；`let_me_see_see` 的 LMSAgent 异常与 Veil 着色器 ERROR 是三方问题）。
+- 部署：四处 sha256 全等，beta.42 三处 `.disabled`，两个远端目录都断言「恰好只有 beta.43 一个启用 jar」（`DEPLOY_OK`）。
+
+### 33.4 仍未做 / 边界
+
+1. 没有实机存档复现：H2 来自 RS 2.0.9 源码调用链 + 双计模型；M2 没开界面点过「拖岩浆看 64000」。
+2. 调用栈判据是启发式（RS 换包名 / 换调用路径会失效）；JVM 探针只证明「前缀命中 ⇒ 隐藏」机制。
+3. 隐藏是整份能力：RS 外部存储不再把保持器当存储源（预期行为）；第三方物流完全不变。
+4. 「高级远程多功能终端偶尔消失的『选择』按钮」仍挂起（用户本轮答复：目前没有现场）。
+5. MC百科提交状态检查按用户要求跳过内容一致性（工具 `_mcmod_work/check_status_only.mjs`），
+   本轮实测 50 条：已通过 47 / 审核中 1（模组资料，审核员附言「添加了 CFID 但是没有给地址..」）/
+   已退回 1（旧教程）/ 已撤回 1；第 141 轮准备的 8 条新资料尚未提交（脚本仍停在验证码）。

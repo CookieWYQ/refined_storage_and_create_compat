@@ -177,3 +177,6 @@ sftp_manager.py
 /kubejs.classfilter.txt
 /ftbultimine-common.mixins.json
 /ftb-ultimine-common-refmap.json
+
+# MSYS 在重定向到 CON 时留下的字符设备节点（开发机产物，不属于工程）
+/CON

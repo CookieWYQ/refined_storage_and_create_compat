@@ -13,6 +13,7 @@ import cretae.cookiewyq.rs_create_compat.Config;
 import cretae.cookiewyq.rs_create_compat.RS_Create_Compat;
 import cretae.cookiewyq.rs_create_compat.network.AdvancedQuantityKeeperNetworkNode;
 import cretae.cookiewyq.rs_create_compat.support.KeeperOverflow;
+import cretae.cookiewyq.rs_create_compat.support.KeeperCapabilityVisibility;
 import cretae.cookiewyq.rs_create_compat.support.KeeperSlotConfig;
 import cretae.cookiewyq.rs_create_compat.support.KeeperTarget;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
@@ -171,7 +172,7 @@ public class AdvancedQuantityKeeperBlockEntity
         this.mainNetworkNode.setBlockEntity(this);
         for (int i = 0; i < SLOT_COUNT; i++) {
             final int slot = i;
-            targets[i] = Config.quantityKeeperDefaultTarget;
+            targets[i] = KeeperTarget.itemDefaultTarget();
             autoCraft[i] = false; // 默认关闭：装升级只让按钮可用，须玩家手动开
             fluidMarkerNbts[i] = new CompoundTag();
             fluidForms[i] = FORM_ITEM;
@@ -288,6 +289,12 @@ public class AdvancedQuantityKeeperBlockEntity
             warnMarkerTooLarge("物品标记（槽 " + slot + "）", 0);
             return; // 拒绝：该槽旧标记原样保留（不落盘、不清流体标记）
         }
+        // 第 142 轮（ROUND118 复核 M2，与基础版同一口径）：从流体 / 气体标记改回物品标记时，
+        // 把「按桶折算」的默认值换回物品默认值；只动未改过的默认值，清空标记时目标不变。
+        if (!stack.isEmpty() && fluidMarkerIds[slot] != null
+                && targets[slot] == KeeperTarget.fluidDefaultTarget()) {
+            targets[slot] = KeeperTarget.itemDefaultTarget();
+        }
         inventory.setItem(slot, stack.isEmpty() ? ItemStack.EMPTY : stack.copyWithCount(1));
         fluidMarkerIds[slot] = null;
         fluidMarkerNbts[slot] = new CompoundTag();
@@ -337,6 +344,11 @@ public class AdvancedQuantityKeeperBlockEntity
         if (MarkerBudget.isTagTooBig(nbt)) {
             warnMarkerTooLarge("流体 / 气体标记（槽 " + slot + "）", nbt == null ? 0 : nbt.sizeInBytes());
             return;
+        }
+        // 第 142 轮（M2）：该槽目标还停在物品默认值时，第一次标流体 / 气体换成按桶折算的默认值
+        // （64 ⇒ 64000 mB）；玩家设过的值 / 旧存档读来的值不动。
+        if (fluidMarkerIds[slot] == null && targets[slot] == KeeperTarget.itemDefaultTarget()) {
+            targets[slot] = KeeperTarget.fluidDefaultTarget();
         }
         inventory.setItem(slot, ItemStack.EMPTY);
         fluidForms[slot] = form == FORM_GAS ? FORM_GAS : FORM_FLUID;
@@ -391,7 +403,7 @@ public class AdvancedQuantityKeeperBlockEntity
         if (slot < 0 || slot >= SLOT_COUNT) {
             return;
         }
-        targets[slot] = Math.max(0, value);
+        targets[slot] = KeeperTarget.clampSetTarget(value);
         setChanged();
     }
 
@@ -449,8 +461,8 @@ public class AdvancedQuantityKeeperBlockEntity
             if (fluid == null || fluid == Fluids.EMPTY) {
                 return null;
             }
-            final HolderLookup.Provider registries = level == null ? null : level.registryAccess();
-            return new FluidResource(fluid, MarkerEntry.decodeComponents(fluidMarkerNbts[slot], registries));
+            // 第 139 轮：与 fill / drain 同一个注册表上下文（唯一入口 registryHint）
+            return new FluidResource(fluid, MarkerEntry.decodeComponents(fluidMarkerNbts[slot], registryHint()));
         }
         final ItemStack marker = inventory.getItem(slot);
         if (marker.isEmpty()) {
@@ -625,9 +637,8 @@ public class AdvancedQuantityKeeperBlockEntity
                 if (fluid == null || fluid == Fluids.EMPTY) {
                     continue;
                 }
-                final HolderLookup.Provider registries = level == null ? null : level.registryAccess();
                 final FluidResource resource =
-                    new FluidResource(fluid, MarkerEntry.decodeComponents(entry.nbt(), registries));
+                    new FluidResource(fluid, MarkerEntry.decodeComponents(entry.nbt(), registryHint()));
                 final long amount = entry.amount();
                 final long gap = destroyAllowed ? Math.max(0L, (long) targets[slot] - net.get(resource)) : amount;
                 final long moved = gap <= 0L ? 0L
@@ -1069,8 +1080,7 @@ public class AdvancedQuantityKeeperBlockEntity
         if (net == null) {
             return 0L;
         }
-        final HolderLookup.Provider registries = level == null ? null : level.registryAccess();
-        final FluidResource resource = new FluidResource(fluid, MarkerEntry.decodeComponents(nbt, registries));
+        final FluidResource resource = new FluidResource(fluid, MarkerEntry.decodeComponents(nbt, registryHint()));
         return net.extract(resource, amount, simulate ? Action.SIMULATE : Action.EXECUTE, Actor.EMPTY);
     }
 
@@ -1112,6 +1122,12 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public ItemStack getStackInSlot(final int slot) {
+            // 第 142 轮（第 118 轮复核 H2 剩余）：RS 自己的存储聚合要看不见整份能力。
+            // 原因见 KeeperCapabilityVisibility 的类注释：RS 外部存储会把本能力注册成网络存储源，
+            // 于是「网络镜像」与本机缓冲都会在 net.get 里被重复计入 ⇒ 保持器按虚高值多销毁真实资源。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return ItemStack.EMPTY;
+            }
             if (slot >= 0 && slot < LOCAL) {
                 return itemStorages[slot / STORAGE_SLOTS].getStackInSlot(slot % STORAGE_SLOTS);
             }
@@ -1128,6 +1144,10 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public ItemStack insertItem(final int slot, final ItemStack stack, final boolean simulate) {
+            // 第 142 轮：对 RS 隐藏 = 不接收（原样退回，RS 会改投别的存储；绝不吞掉物品）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return stack;
+            }
             if (stack.isEmpty()) {
                 return ItemStack.EMPTY;
             }
@@ -1148,6 +1168,10 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public ItemStack extractItem(final int slot, final int amount, final boolean simulate) {
+            // 第 142 轮：对 RS 隐藏整份能力（本机缓冲 + 网络镜像都不再经外部存储绕进网络）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return ItemStack.EMPTY;
+            }
             if (amount <= 0) {
                 return ItemStack.EMPTY;
             }
@@ -1183,6 +1207,37 @@ public class AdvancedQuantityKeeperBlockEntity
     }
 
     /**
+     * 数据组件编解码统一用的注册表上下文（方块实体尚未拿到 level 时退回 {@code null}）。
+     * <p><b>第 139 轮（第 118 轮复核 L3）</b>：{@code fill} 与 {@code drain} 必须用<b>同一个</b>上下文，
+     * 否则带 Holder 的组件补丁在 NbtOps / RegistryOps 下可能编出不同 NBT —— 表现为
+     * 「刚存进去的带组件流体，按键却查不到 ⇒ 取不出来」。{@link #networkResourceKey(int)}、
+     * {@code tickStorage}、{@link #stackOf(ResourceLocation, CompoundTag, long)} 也全部走这里。</p>
+     */
+    @Nullable
+    private HolderLookup.Provider registryHint() {
+        return level == null ? null : level.registryAccess();
+    }
+
+    /**
+     * (流体 id, 组件补丁 NBT, 数量) → <b>带组件</b>的 {@link FluidStack}（第 139 轮）。
+     * <p>外部流体能力（{@code getFluidInTank} / {@code drain}）返回的必须是「具体变体」：
+     * 以前返回裸 {@link FluidStack}，组件补丁被丢掉，管道拿回来 drain 时按「无组件」查
+     * 本机的带组件条目必然落空 ⇒ 静默回退网络，本机缓冲里的带组件流体永远取不出来。</p>
+     */
+    private FluidStack stackOf(final ResourceLocation id, @Nullable final CompoundTag nbt, final long amount) {
+        if (id == null || amount <= 0L) {
+            return FluidStack.EMPTY;
+        }
+        final Fluid fluid = BuiltInRegistries.FLUID.get(id);
+        if (fluid == null || fluid == Fluids.EMPTY) {
+            return FluidStack.EMPTY;
+        }
+        return new FluidStack(BuiltInRegistries.FLUID.wrapAsHolder(fluid),
+            (int) Math.min(Integer.MAX_VALUE, amount),
+            MarkerEntry.decodeComponents(nbt, registryHint()));
+    }
+
+    /**
      * 聚合流体能力（每槽一个 tank）：
      * <ul>
      *     <li>{@code fill} 只接受与某槽标记相同的流体（不匹配返回 0，上游自行回压，绝不销毁）；</li>
@@ -1197,10 +1252,18 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public FluidStack getFluidInTank(final int tank) {
+            // 第 142 轮（H2 剩余）：RS 自己的存储聚合看不见本能力（见 KeeperCapabilityVisibility）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return FluidStack.EMPTY;
+            }
+            if (tank < 0 || tank >= SLOT_COUNT) {
+                return FluidStack.EMPTY;
+            }
             final List<MultiFluidCache.Entry> entries = fluidStorages[tank].entries();
             if (entries.isEmpty()) {
                 return FluidStack.EMPTY;
             }
+            // 第 139 轮：toStack 现在带组件补丁（以前丢掉 ⇒ 管道拿回来 drain 时按「无组件」查不到）
             return toStack(entries.get(0));
         }
 
@@ -1217,6 +1280,10 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public int fill(final FluidStack resource, final FluidAction action) {
+            // 第 142 轮：对 RS 隐藏 = 不接收（返回 0 让上游改道，绝不丢流体）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return 0;
+            }
             if (resource == null || resource.isEmpty()) {
                 return 0;
             }
@@ -1225,8 +1292,8 @@ public class AdvancedQuantityKeeperBlockEntity
             if (tank < 0) {
                 return 0; // 只接受已标记类型：不匹配返回 0（上游回压，不销毁）
             }
-            final CompoundTag nbt = MarkerEntry.encodeComponents(
-                resource.getComponentsPatch(), level == null ? null : level.registryAccess());
+            // 第 139 轮：与 drain 同一注册表上下文（唯一入口 registryHint）
+            final CompoundTag nbt = MarkerEntry.encodeComponents(resource.getComponentsPatch(), registryHint());
             final long accepted = action.simulate()
                 ? Math.min(fluidStorages[tank].getFreeSpace(), resource.getAmount())
                 : fluidStorages[tank].insert(id, nbt, resource.getAmount());
@@ -1238,11 +1305,16 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public FluidStack drain(final FluidStack resource, final FluidAction action) {
+            // 第 142 轮（H2 剩余）：对 RS 隐藏整份流体能力（本机流体 + 网络镜像都不经外部存储绕进网络）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return FluidStack.EMPTY;
+            }
             if (resource == null || resource.isEmpty()) {
                 return FluidStack.EMPTY;
             }
             final ResourceLocation id = BuiltInRegistries.FLUID.getKey(resource.getFluid());
-            final CompoundTag nbt = MarkerEntry.encodeComponents(resource.getComponentsPatch());
+            // 第 139 轮：与 fill 同一注册表上下文（以前漏传 ⇒ 带 Holder 的组件编码可能不一致）
+            final CompoundTag nbt = MarkerEntry.encodeComponents(resource.getComponentsPatch(), registryHint());
             final int tank = matchingFluidSlot(id);
             if (tank >= 0) {
                 final long local = Math.min(resource.getAmount(), fluidStorages[tank].getAmount(id, nbt));
@@ -1251,8 +1323,8 @@ public class AdvancedQuantityKeeperBlockEntity
                 }
                 final long fromNetwork = extractNetworkFluid(tank, id, nbt, resource.getAmount(), action.simulate());
                 if (fromNetwork > 0) {
-                    return new FluidStack(resource.getFluid(),
-                        (int) Math.min(Integer.MAX_VALUE, fromNetwork));
+                    // 第 139 轮：交还的必须是「带同一个组件补丁」的变体（以前把组件丢了）
+                    return stackOf(id, nbt, fromNetwork);
                 }
             }
             // 标记已变更的遗留流体：只有在任意槽里真的存在时才可 drain
@@ -1267,6 +1339,10 @@ public class AdvancedQuantityKeeperBlockEntity
 
         @Override
         public FluidStack drain(final int maxDrain, final FluidAction action) {
+            // 第 142 轮（H2 剩余）：对 RS 隐藏整份流体能力（同 drain(FluidStack)）。
+            if (KeeperCapabilityVisibility.hiddenFromCaller()) {
+                return FluidStack.EMPTY;
+            }
             if (maxDrain <= 0) {
                 return FluidStack.EMPTY;
             }
@@ -1293,15 +1369,11 @@ public class AdvancedQuantityKeeperBlockEntity
             if (!action.simulate() && extracted > 0) {
                 setChanged();
             }
-            return new FluidStack(fluid, (int) Math.min(Integer.MAX_VALUE, extracted));
+            return stackOf(id, nbt, extracted);
         }
 
         private FluidStack toStack(final MultiFluidCache.Entry entry) {
-            final Fluid fluid = BuiltInRegistries.FLUID.get(entry.id());
-            if (fluid == null || fluid == Fluids.EMPTY) {
-                return FluidStack.EMPTY;
-            }
-            return new FluidStack(fluid, (int) Math.min(Integer.MAX_VALUE, entry.amount()));
+            return stackOf(entry.id(), entry.nbt(), entry.amount());
         }
     }
 }

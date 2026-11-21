@@ -112,6 +112,15 @@ public class IntermediateCacheBlockEntity
         if (level == null || level.isClientSide()) {
             return;
         }
+        // 第 141 轮（ROUND118 复核 L2）：<b>无电 / 未激活不搬运</b>。
+        // 旧实现直接跑 flowOnce ⇒ 网络没电时仍把中间产物从网络搬进缓存盘。虽然只是网络内搬运
+        // （不复制、不销毁），但违背「机器不上电不干活」的能量语义，也让玩家无法靠断电停掉这台机器。
+        // 闸门刻意放在节流之前：未激活时 flowCooldown 不推进，重新上电后第一 tick 就能立刻搬
+        // （不需要再等满 20 tick 的冷却）。
+        final IntermediateCacheNetworkNode node = getNode();
+        if (node == null || !node.isActive()) {
+            return;
+        }
         if (--flowCooldown > 0) {
             return;
         }
@@ -129,7 +138,7 @@ public class IntermediateCacheBlockEntity
         //     反向回流通道不存在了；
         //   * 缓存盘抽出优先级为负 ⇒ 刚写进去的不会被同一次迁移抽出来。
         cretae.cookiewyq.rs_create_compat.support.RsccIntermediateFlow.flowOnce(
-            level, getNode().getNetworkOrNull());
+            level, node.getNetworkOrNull());
     }
 
     /** 本仓的网络节点（供能力注册与调试使用）。 */

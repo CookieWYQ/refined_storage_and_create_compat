@@ -89,7 +89,8 @@ jar `rs_create_compat-1.2.0-beta.26.jar`（**2,888,912 B**，sha256 `5c224516fe0
 - 退役范围：机器路径（`AdvancedCollectionCacheScreen` + `AreaStripPanel`）`new AreaMarkScreen`
   **0 次**；`AreaMarkScreen.java` 文件保留（主手世界路径仍可给单区域配标记）。
   `AreaSelectorScreen:821` 那处属于**主手路径**，不在退役范围（不要误报）。
-- <待填：服务端 handler 是否顺带修掉 §4.6 的「48 格窗口新 id 被忽略」>
+- 服务端 handler 是否顺带修掉 §4.6 的「48 格窗口新 id 被忽略」：**第 130 轮修了空格子那一半；
+  第 140 轮修完已有条目整条替换**（`docs/ROUND140_LANDING.md`）。
 
 ### 2.5 证据
 
@@ -154,7 +155,8 @@ jar `rs_create_compat-1.2.0-beta.26.jar`（**2,888,912 B**，sha256 `5c224516fe0
    方块被破坏三种关闭路径）。
 6. **`RS_Create_Compat` 注册行**：新包 payload 注册由 Lead 补，`gradlew compileJava` 前无法验证
    注册顺序 / 方向（C2S）是否正确。
-7. **§4.6 既有 bug**：48 格窗口 JEI 拖入「新 id 被忽略」是否顺带修掉 <待填：修了/列进待办>。
+7. **§4.6 既有 bug**：48 格窗口 JEI 拖入「新 id 被忽略」—— 第 130 轮修了**空格子**静默丢包；
+   已有条目的「异 id 只 update」第 140 轮修完（`replaceAreaMarkerEntry` + 菜单分支），见 `docs/ROUND140_LANDING.md`。
 
 ---
 

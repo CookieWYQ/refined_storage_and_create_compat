@@ -405,13 +405,15 @@ def b6_silent_drops_now_reject(packet_code):
             and "if (player.isSpectator()) {\n            return;" not in text)
 
 
-#: `rejectMessageKey` 里引用的语言键（本轮**不新增**语言键 ⇒ 必须都是既有的）。
+#: `rejectMessageKey` 里引用的语言键（第 124 轮**不新增**语言键 ⇒ 必须都是既有的；
+#: 第 139 轮加了 REJECT_MARK_OVERFLOW 的文案键，这里同步纳入对账）。
 REJECT_KEYS = [
     "gui.rs_create_compat.area_selector.err.dimension",
     "gui.rs_create_compat.area_selector.err.limit",
     "gui.rs_create_compat.area_selector.err.duplicate",
     "gui.rs_create_compat.area_selector.err.reject.invalid",
     "gui.rs_create_compat.area_selector.err.reject.no_such_area",
+    "gui.rs_create_compat.area_selector.err.reject.mark_overflow",
 ]
 
 

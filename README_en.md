@@ -8,7 +8,7 @@
 | NeoForge | 21.1.248 (range `[21,)`) |
 | Create | 6.0.10-280 (range `[6.0,)`) |
 | Refined Storage 2 | 2.0.9 (range `[2.0.0,3.0.0)`) |
-| Mod version | 1.2.0-beta.39 (development build; the latest stable release is `1.1.0`) |
+| Mod version | 1.2.0 (stable release) |
 | Mod ID | `rs_create_compat` |
 | Author | CallMeACookieWYQ |
 | License | All Rights Reserved |
@@ -404,6 +404,7 @@ For implementation details or deeper troubleshooting, the repository ships desig
 | Document | Content |
 | --- | --- |
 | `VERSIONING.md` | Versioning policy: the criteria for each of `major.minor.patch`, pre-release suffixes, the three GitHub Release states, the release process and discipline, where the version number lives, and compatibility promises |
+| `RELEASE_1.2.0.md` | Release notes for `1.2.0` (new capabilities, important fixes, performance, config options and commands, upgrade notes, known limitations) |
 | `RELEASE_1.1.0.md` | Release notes for `1.1.0` (severe fixes, new capabilities, performance, config options and commands, upgrade notes, known limitations) |
 | `RELEASE_1.0.0.md` | Release notes for `1.0.0` (first stable release) |
 | `TECHNICAL_HANDOFF.md` | Project overview, architecture, key files, known issues and fix history |

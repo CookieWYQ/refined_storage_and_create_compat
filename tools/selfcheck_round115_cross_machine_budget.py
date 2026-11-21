@@ -19,7 +19,8 @@
 
 顺带收尾两处第 114 轮遗留：
 * **L1** `AreaSelectorEditPacket` 的 REPLACE 标记合并：去重后超过 `MATCH_CAPACITY` 会被
-  `sanitizeEntries` 静默截断，现在补 WARN 并说明截断了什么。
+  `sanitizeEntries` 静默截断。第 115 轮先补 WARN，**第 139 轮起改为在任何写入之前
+  `reject(REJECT_MARK_OVERFLOW)`**（旧区域与全部标记原样保留，本脚本 ⑤ 已按新口径同步）。
 * **`MergeResult.pinned`**：第 114 轮它恒 `false`（死字段）。现在位次校验**下移到数据层**
   `AreaMarks#migrateByIndex` 自己判（纵深防御），`touched()` 也不再把它算成「动过」。
 
@@ -58,6 +59,9 @@ TERMINAL_MENU = os.path.join(JAVA, "menu", "SequencePatternTerminalMenu.java")
 SELECTOR_PACKET = os.path.join(JAVA, "network", "AreaSelectorEditPacket.java")
 AREA_MARKS = os.path.join(JAVA, "support", "AreaMarks.java")
 MARKER_ENTRY = os.path.join(JAVA, "support", "MarkerEntry.java")
+STRIP_PANEL = os.path.join(JAVA, "client", "screen", "AreaStripPanel.java")
+LANG_ZH = os.path.join(ROOT, "src", "main", "resources", "assets", "rs_create_compat", "lang", "zh_cn.json")
+LANG_EN = os.path.join(ROOT, "src", "main", "resources", "assets", "rs_create_compat", "lang", "en_us.json")
 
 REL = {
     MARKER_BUDGET: os.path.join(JAVA_REL, "support", "MarkerBudget.java"),
@@ -466,14 +470,22 @@ def check_round114_leftovers():
     sel = strip_comments(raw_sel)
     anchor("⑤", SELECTOR_PACKET, raw_sel,
            "if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {",
-           "REPLACE 合并超上限时不再静默截断")
-    check("⑤-1 REPLACE 合并后超 MATCH_CAPACITY 有 WARN（说明截断保留哪一部分）",
+           "REPLACE 合并超上限时不再静默截断（第 139 轮起改为拒绝写入）")
+    # 第 139 轮（ROUND114/115 L1 收口）：旧实现是「WARN + 让 AreaMarks.put 截断」，被截掉的标记永久消失。
+    # 现在改为在 AreaSelection.set 之前 reject(REJECT_MARK_OVERFLOW)：旧区域与全部标记一个字节都不动。
+    check("⑤-1 REPLACE 合并后超 MATCH_CAPACITY ⇒ 在**任何写入之前** reject(REJECT_MARK_OVERFLOW)",
           "if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {" in sel
-          and "已按上限截断" in sel
+          and "reject(rejectMenu, player, packet, REJECT_MARK_OVERFLOW);" in sel
+          and "REJECT_MARK_OVERFLOW = 6" in sel
           and sel.index("if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {")
-          < sel.index("AreaMarks.put(target, newArea, merged);"))
-    check("⑤-2 模型：合并后 300 条 ⇒ 触发告警阈值（> 288）；恰好 288 条 ⇒ 不告警",
+          < sel.index("AreaSelection.set(target, selection);"))
+    check("⑤-2 模型：合并后 300 条 ⇒ 触发拒绝阈值（> 288）；恰好 288 条 ⇒ 放行",
           (300 > MATCH_CAPACITY) is True and (MATCH_CAPACITY > MATCH_CAPACITY) is False)
+    check("⑤-2b 拒绝原因有界面文案键（zh / en 两份都在，且客户端面板也映射）",
+          "gui.rs_create_compat.area_selector.err.reject.mark_overflow" in sel
+          and "REJECT_MARK_OVERFLOW" in read(STRIP_PANEL)
+          and "area_selector.err.reject.mark_overflow" in read(LANG_ZH)
+          and "area_selector.err.reject.mark_overflow" in read(LANG_EN))
 
     raw_marks = read(AREA_MARKS)
     marks = strip_comments(raw_marks)
@@ -493,7 +505,7 @@ def check_round114_leftovers():
           and "|| pinned" not in record)
     broken_sel = sel.replace(
         "if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {", "if (false) {", 1)
-    counterexample("⑤-5 去掉 REPLACE 截断 WARN ⇒ ⑤-1 判据判负（静默丢配置）",
+    counterexample("⑤-5 去掉 REPLACE 容量闸门 ⇒ ⑤-1 判据判负（又变成静默丢配置）",
                    broken_sel != sel
                    and "if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {"
                        not in broken_sel)

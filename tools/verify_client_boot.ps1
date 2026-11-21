@@ -142,8 +142,10 @@ try {
         }
         # 客户端不打印 [rscc-build]（那一行是服务端启动指纹）；客户端用本模组自己的日志前缀
         # [rscc-*]（如 [rscc-ultimine] / [rscc-terminal-key]）或加载器给出的 mod 版本行作为「已加载」证据。
-        $hasBuildLine = ($text -match 'mods - versions \{1\.2\.0-beta\.38\}') -or ($text -match '\[rscc-(?!client-probe)')
-        $hasRender = ($text -match 'Sound engine started') -or ($text -match 'Backend library: LWJGL') -or ($text -match 'Created: 1024x512')
+        $hasBuildLine = ($text -match 'mods - versions \{1\.2\.0-beta\.\d+\}') -or ($text -match '\[rscc-(?!client-probe)')
+        # 渲染证据必须取「晚段」标记：`Backend library: LWJGL` 在早期窗口创建时就出现（mod 还没构造完），
+        # 用它当 PASS 会在 mod 列表刚打印时就把客户端杀掉（第 142 轮实测：旧判据的 PASS 早于本模组构造）。
+        $hasRender = ($text -match 'Sound engine started') -or ($text -match 'Created: 1024x512')
         if ($hasBuildLine -and $hasRender) { $passSeen = $true; break }
         if ($text -match 'Mixin apply for mod rs_create_compat failed') { $failSeen = $true; break }
         if ($text -match 'rs_create_compat\.mixins\.json.*(failed|InvalidInjection|InvalidMixinException)') { $failSeen = $true; break }

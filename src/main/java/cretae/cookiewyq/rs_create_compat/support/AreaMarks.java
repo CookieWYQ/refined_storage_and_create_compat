@@ -69,6 +69,9 @@ import java.util.Map;
  * </ul>
  */
 public final class AreaMarks {
+    /** 第 139 轮：截断 / 超限的告警通道（以前这里没有任何日志 ⇒ 静默丢配置）。 */
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+
     /** 自定义数据根键（CUSTOM_DATA 里的一级键）。 */
     private static final String TAG_ROOT = "RsccAreaMarks";
     private static final String TAG_MARKS = "Marks";
@@ -308,6 +311,16 @@ public final class AreaMarks {
         }
         final Area key = geometryKey(area);
         final List<MarkerEntry> clean = sanitizeEntries(entries);
+        // 第 139 轮（ROUND114/115 L1）：去空 + 截到 MATCH_CAPACITY 以前是<b>完全静默</b>的 ——
+        // 正常入口（新界面 / 48 格窗口 / 标记包）都先查过容量，但「改几何搬运合并 / 旧档迁移 / 改包」
+        // 仍可能把超过上限的列表送进来。此后再丢配置必须留证据（并说明保留的是哪一段）。
+        final int offered = countNonEmpty(entries);
+        if (offered > CollectionCacheBlockEntity.MATCH_CAPACITY) {
+            LOGGER.warn("[rs_create_compat] 区域选定器：区域 {} 写入 {} 条标记，超过单区域上限 {} 条 ⇒ "
+                    + "按顺序只保留前 {} 条，尾部 {} 条未落盘（调用方应先查容量；本条即「丢配置」的证据）",
+                key, offered, CollectionCacheBlockEntity.MATCH_CAPACITY, clean.size(),
+                offered - clean.size());
+        }
         update(stack, root -> {
             final ListTag marks = root.getList(TAG_MARKS, Tag.TAG_COMPOUND).copy();
             marks.removeIf(tag -> {
@@ -478,6 +491,15 @@ public final class AreaMarks {
                 it.remove(); // 空条目：没有数据可迁，消费掉（否则每次重试都白跑）
                 continue;
             }
+            // 第 139 轮（ROUND114/115 L1）：旧表某一区域超过单区域上限时，sanitizeEntries 会截断。
+            // 迁移是「一次性消费」（写完就 it.remove），所以这里必须明确告警，否则被截掉的条目静默蒸发。
+            final int offered = countNonEmpty(entry.getValue());
+            if (offered > CollectionCacheBlockEntity.MATCH_CAPACITY) {
+                LOGGER.warn("[rs_create_compat] 区域选定器：旧档迁移时区域序号 {} 有 {} 条标记，超过单区域上限"
+                        + " {} 条 ⇒ 只迁前 {} 条，尾部 {} 条未搬（旧表条目随后被消费，本条即证据）",
+                    index, offered, CollectionCacheBlockEntity.MATCH_CAPACITY, clean.size(),
+                    offered - clean.size());
+            }
             boolean oversized = false;
             for (final MarkerEntry candidate : clean) {
                 if (MarkerBudget.isEntryTooBig(candidate)) {
@@ -602,5 +624,19 @@ public final class AreaMarks {
             }
         }
         return List.copyOf(out);
+    }
+
+    /** 非空条目数（截断告警的计数口径：空条目本来就不是配置，不算「丢配置」）。 */
+    private static int countNonEmpty(@Nullable final List<MarkerEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (final MarkerEntry entry : entries) {
+            if (entry != null && !entry.isEmpty()) {
+                count++;
+            }
+        }
+        return count;
     }
 }

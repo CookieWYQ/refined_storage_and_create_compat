@@ -438,6 +438,26 @@ public class AdvancedCollectionCacheMenu extends CollectionCacheMenu {
             syncMarkers();
             return;
         }
+        if (id == null) {
+            // 与基类 setMarkerConfig 的 id==null 口径一致：清掉该下标的条目（不编造一条空标记）。
+            advanced.removeAreaMarker(editingAreaIndex, markerIndex);
+            syncMarkers();
+            return;
+        }
+        if (existing.fluid() != fluid || !id.equals(existing.id())) {
+            // 第 140 轮（第 125 轮复核 §4.6「48 格窗口 JEI 拖入 → 新 id 被忽略」）：
+            // 拖到**已有条目**的格子上时，基类语义是「换资源（替换该下标）」；本覆写以前只调
+            // setAreaMarkerConfig（只改数量 / 规则、保留旧 id）⇒ 拖进来的 id 与数据组件被静默丢掉。
+            // 现在整条替换；去重 / 单条体积 / 整表预算在 replaceAreaMarkerEntry 内部与新增同口径。
+            final cretae.cookiewyq.rs_create_compat.support.MarkerEntry marker =
+                new cretae.cookiewyq.rs_create_compat.support.MarkerEntry(false, id,
+                    nbt == null ? new net.minecraft.nbt.CompoundTag() : nbt,
+                    Math.max(1L, amount), matchNbt,
+                    tags == null ? java.util.List.of() : tags);
+            notifyMarkerResult(advanced.replaceAreaMarkerEntry(editingAreaIndex, markerIndex, marker));
+            syncMarkers();
+            return;
+        }
         advanced.setAreaMarkerConfig(editingAreaIndex, markerIndex, amount, matchNbt,
             tags != null ? tags : existing.tags());
         syncMarkers();

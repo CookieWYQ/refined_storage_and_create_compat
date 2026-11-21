@@ -3,6 +3,7 @@ package cretae.cookiewyq.rs_create_compat.support;
 import com.mojang.logging.LogUtils;
 import com.refinedmods.refinedstorage.api.network.autocrafting.AutocraftingNetworkComponent;
 import com.refinedmods.refinedstorage.api.resource.ResourceKey;
+import cretae.cookiewyq.rs_create_compat.Config;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -28,7 +29,67 @@ public final class KeeperTarget {
     /** 钳制诊断日志的节流（tick，约 10 秒）：网络存量在设定值附近抖动时也不刷屏。 */
     private static final int CLAMP_LOG_COOLDOWN_TICKS = 200;
 
+    /**
+     * 玩家设定值的<b>服务端上限</b>（第 141 轮，ROUND118 复核 M1：「C2S 目标数量无服务端上限」）。
+     *
+     * <p>取 {@code 1_000_000_000}，与 {@code Config.quantityKeeperDefaultTarget} 的
+     * {@code defineInRange(..., 1, 1000000000)} 上限同口径 —— 不另造一个数字，避免
+     * 「默认值上限 10 亿、手输上限 21 亿」两套说法。</p>
+     *
+     * <p>为什么需要这道闸：目标数量是<b>客户端输入</b>（数字框 / 改包），旧实现只做
+     * {@code Math.max(0, value)} ⇒ 改包一次就能把目标设成 {@code Integer.MAX_VALUE}，
+     * 服务端会拿着这个目标去要 RS 自动合成（缺口 ≈ 21 亿件）。正常玩法（几千到几百万）
+     * 离上限还有三个数量级，这一条只挡「手输 / 改包越界」。</p>
+     *
+     * <p><b>只拦「增长」</b>：读档不经过本钳制（旧档里已经超过上限的值原样读回，不静默改小
+     * 玩家的存档），只有「服务端收到新设定值」这一条路径会夹。</p>
+     */
+    public static final int MAX_SET_TARGET = 1_000_000_000;
+
+    /**
+     * 配置尚未加载（静态字段读 0）时的物品默认目标回退值，与
+     * {@code Config.QUANTITY_KEEPER_DEFAULT_TARGET} 的 {@code defineInRange(..., 64, ...)} 出厂默认一致。
+     */
+    public static final int FALLBACK_ITEM_DEFAULT_TARGET = 64;
+
+    /**
+     * 流体 / 气体默认目标的单位换算（第 142 轮，ROUND118 复核 M2）：1 个「物品默认量」按 1 桶计，
+     * 即 {@code 64 → 64_000 mB}（用户口径：「改成 64000mb」）。
+     *
+     * <p>为什么必须分开：目标值对物品是「个数」、对流体/气体是「mB」（{@code FluidResource#getAmount}
+     * 与 {@code config} 都是这个口径）。同一个默认值 64 套到流体上只有 64 mB ≈ 0.064 桶 ——
+     * 拖入岩浆后保持器会按 64 mB 持续销毁，玩家看到的几乎是「全部销毁」。</p>
+     */
+    public static final int FLUID_MILLIBUCKETS_PER_DEFAULT_UNIT = 1_000;
+
     private KeeperTarget() {
+    }
+
+    /**
+     * 物品默认目标：读配置的 {@code quantityKeeperDefaultTarget}，配置未加载（≤ 0）时回退到
+     * {@link #FALLBACK_ITEM_DEFAULT_TARGET}，再走唯一钳制入口（配置被改坏也不会越界）。
+     */
+    public static int itemDefaultTarget() {
+        final int configured = Config.quantityKeeperDefaultTarget;
+        return clampSetTarget(configured > 0 ? configured : FALLBACK_ITEM_DEFAULT_TARGET);
+    }
+
+    /**
+     * 流体 / 气体默认目标 = {@link #itemDefaultTarget()} × {@link #FLUID_MILLIBUCKETS_PER_DEFAULT_UNIT}
+     * （默认 64 ⇒ <b>64000 mB</b>），并同样经唯一钳制入口夹进 {@code [0, MAX_SET_TARGET]}。
+     */
+    public static int fluidDefaultTarget() {
+        final long scaled = (long) itemDefaultTarget() * FLUID_MILLIBUCKETS_PER_DEFAULT_UNIT;
+        return clampSetTarget((int) Math.min(MAX_SET_TARGET, scaled));
+    }
+
+    /**
+     * 把服务端收到的目标设定值夹进合法区间：{@code [0, MAX_SET_TARGET]}。
+     * <p>下限 0 = 未标记（见 {@link #isMarked}）；上限见 {@link #MAX_SET_TARGET}。
+     * 基础版 / 高级版两个 setter 必须都走这里（唯一实现，不许各写一遍 Math.max）。</p>
+     */
+    public static int clampSetTarget(final int value) {
+        return Math.max(0, Math.min(value, MAX_SET_TARGET));
     }
 
     /** 是否「已标记」：设定值 &gt; 0 才算标记（0 / 负数 = 未标记，零维持 / 零合成 / 零销毁 / 不计入缺料）。 */

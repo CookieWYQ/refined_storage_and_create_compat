@@ -143,9 +143,11 @@ def main():
             "权威判据二 / 三：机器类型 rank → 节点类名（全序，无「最后装的赢」）")
     require("if (mine.isEmpty() || network == null) {" in cluster,
             "未标记 / 无网络时不做仲裁（零开销、不会误伤）")
+    # 第 139 轮：组件编码上下文收敛到 registryHint()（原字面量是 level == null ? null : level.registryAccess()），
+    # 判据仍是「流体 / 气体走带组件的 FluidResource、物品走 ItemResource」——契约不变、锚点跟随新形状。
     require("List<ResourceKey> claimedResources();" in cluster
             and "ItemResource.ofItemStack(marker)" in basic_be
-            and "new FluidResource(fluid, MarkerEntry.decodeComponents(fluidMarkerNbts[slot], registries))" in adv_be,
+            and "new FluidResource(fluid, MarkerEntry.decodeComponents(fluidMarkerNbts[slot], registryHint()))" in adv_be,
             "资源键维度：物品走 ItemResource、流体 / 气体走 FluidResource（两者永不相等 ⇒ 可同时控制）")
     require("public ResourceKey networkResourceKey()" in basic_be
             and "public ResourceKey networkResourceKey(final int slot)" in adv_be,
@@ -199,9 +201,11 @@ def main():
     require("KeeperTarget.isMarked(targetAmount) && destroyOverflow" in basic_be
             and "KeeperTarget.isMarked(targets[slot])" in adv_be,
             "③④ 本机缓冲侧：未标记（0 / 负）时零销毁（只把缓冲原样回流进网络）")
-    require("this.targetAmount = Math.max(0, targetAmount);" in basic_be
-            and "targets[slot] = Math.max(0, value);" in adv_be,
-            "③ 设定值下限放宽到 0（0 = 未标记），服务端权威保存且与设定值区分")
+    require("this.targetAmount = KeeperTarget.clampSetTarget(targetAmount);" in basic_be
+            and "targets[slot] = KeeperTarget.clampSetTarget(value);" in adv_be
+            and "public static final int MAX_SET_TARGET = 1_000_000_000;" in read(TARGET)
+            and "public static int clampSetTarget(final int value)" in read(TARGET),
+            "③ 设定值下限放宽到 0（0 = 未标记）+ 服务端上限 1e9，两个 setter 共用唯一钳制入口")
 
     print("=" * 60)
     if problems:

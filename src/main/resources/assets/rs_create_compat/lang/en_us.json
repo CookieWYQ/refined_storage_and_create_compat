@@ -1666,6 +1666,7 @@
   "gui.rs_create_compat.area_selector.filter.summary": "Filter: %s entries (names only; full IDs below)",
   "gui.rs_create_compat.area_selector.err.reject.no_such_area": "That area no longer exists; the list has been refreshed",
   "gui.rs_create_compat.area_selector.err.reject.invalid": "Invalid area geometry (out of bounds / side too long / too large)",
+  "gui.rs_create_compat.area_selector.err.reject.mark_overflow": "Geometry change rejected: merging the old and new areas' filter marks would exceed the per-area limit (288). The area and all its marks were left untouched; remove some marks first",
   "gui.rs_create_compat.area_selector.region": "Area %s",
   "gui.rs_create_compat.area_selector.status.loading": "Reading area data from the server",
   "gui.rs_create_compat.area_selector.status.no_selector": "No Area Selector installed: no usable areas",

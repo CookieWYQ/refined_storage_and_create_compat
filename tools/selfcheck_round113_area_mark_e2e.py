@@ -1418,53 +1418,53 @@ def check_review_fixes():
     replace_block = method_body(edit, "case ACTION_REPLACE -> {")
 
     # ================= ⑦-A REPLACE 换几何时把旧几何的标记搬过去 =================
-    anchor("⑦", EDIT_PACKET, raw_edit, "List<MarkerEntry> carriedMarks = List.of();",
-           "switch 前声明 carriedMarks")
-    # 第 124 轮（124-B / 2-1）：REPLACE 改成「先取 previous（旧几何 + 旧名字）再 replace」，
-    # 既保证搬运读的是旧几何，也让「只改几何」不再顺手抹掉区域名字。锚点跟着换成新写法。
+    # 第 139 轮（ROUND114/115 L1）：REPLACE 改为「合并结果先算好、超 288 条在写入前拒绝」，
+    # 搬运变量从 carriedMarks 改为 pendingAreaMarks（唯一写入点仍是 AreaSelection.set 之后）。
+    anchor("⑦", EDIT_PACKET, raw_edit, "List<MarkerEntry> pendingAreaMarks = List.of();",
+           "switch 前声明 pendingAreaMarks（合并结果暂存）")
     anchor("⑦", EDIT_PACKET, raw_edit,
-           "carriedMarks = AreaMarks.get(target, previous,",
+           "final List<MarkerEntry> carried = AreaMarks.get(target, previous, registries);",
            "REPLACE：replace 之前读旧几何的标记")
-    anchor("⑦", EDIT_PACKET, raw_edit, "AreaMarks.put(target, newArea, carriedMarks);",
-           "新几何为空 ⇒ 直接搬过去")
+    anchor("⑦", EDIT_PACKET, raw_edit, "AreaMarks.put(target, newArea, pendingAreaMarks);",
+           "通过容量校验的合并结果一次写回")
     anchor("⑦", EDIT_PACKET, raw_edit, "kept.id().equals(entry.id())",
            "新几何已有标记 ⇒ 按 (id, fluid) 去重合并")
 
     def replace_carries_marks_and_name(code):
-        """⑦-2 的判据本体（第 124 轮扩展）：REPLACE 必须①在 replace 前读旧几何的标记，
+        """⑦-2 的判据本体（第 124 轮扩展 / 第 139 轮改锚）：REPLACE 必须①在 replace 前读旧几何的标记，
         ②不抹掉区域名字（名字唯一写入口是 ACTION_RENAME）。"""
         block = method_body(code, "case ACTION_REPLACE -> {")
         if block is None:
             return False
         return ("final Area previous = selection.areas().get(index);" in block
-                and "carriedMarks = AreaMarks.get(target, previous," in block
+                and "final List<MarkerEntry> carried = AreaMarks.get(target, previous, registries);" in block
                 and "area.name() == null ? area.withName(previous.name()) : area" in block
                 and "selection = selection.replace(index," in block
-                and block.index("carriedMarks = AreaMarks.get(")
+                and block.index("AreaMarks.get(target, previous,")
                 < block.index("selection = selection.replace(index,"))
 
-    check("⑦-1 carriedMarks 在 switch 之前声明（默认空表）",
+    check("⑦-1 pendingAreaMarks 在 switch 之前声明（默认空表，唯一写入点只有一处）",
           handle is not None
-          and "List<MarkerEntry> carriedMarks = List.of();" in handle
-          and handle.index("List<MarkerEntry> carriedMarks = List.of();")
+          and "List<MarkerEntry> pendingAreaMarks = List.of();" in handle
+          and handle.index("List<MarkerEntry> pendingAreaMarks = List.of();")
           < handle.index("switch (packet.action())"))
     check("⑦-2 REPLACE 在 selection.replace( 之前读「旧几何」的标记，且不抹掉区域名字"
           "（几何是键 ⇒ 换框不能清空过滤；名字只能由 RENAME 改）",
           replace_block is not None
           and replace_carries_marks_and_name(edit))
-    check("⑦-3 写回物品后把标记搬到新几何（新几何空 ⇒ 直接 put，且在 AreaSelection.set 之后）",
+    check("⑦-3 写回物品后把（通过容量校验的）合并结果搬到新几何，且在 AreaSelection.set 之后",
           handle is not None
-          and "if (!carriedMarks.isEmpty()) {" in handle
-          and "AreaMarks.put(target, newArea, carriedMarks);" in handle
+          and "if (!pendingAreaMarks.isEmpty()) {" in handle
+          and "AreaMarks.put(target, newArea, pendingAreaMarks);" in handle
           and handle.index("AreaSelection.set(target, selection);")
-          < handle.index("if (!carriedMarks.isEmpty()) {"))
-    check("⑦-4 新几何已有标记 ⇒ 按 (id, fluid) 去重合并、绝不覆盖已有条目",
-          handle is not None
-          and "kept.id().equals(entry.id())" in handle
-          and "kept.fluid() == entry.fluid()" in handle
-          and "AreaMarks.put(target, newArea, merged);" in handle)
+          < handle.index("if (!pendingAreaMarks.isEmpty()) {"))
+    check("⑦-4 新几何已有标记 ⇒ 按 (id, fluid) 去重合并、绝不覆盖已有条目（纯函数 mergeAreaMarks）",
+          "private static List<MarkerEntry> mergeAreaMarks(" in edit
+          and "kept.id().equals(entry.id())" in method_body(edit, "private static List<MarkerEntry> mergeAreaMarks(")
+          and "kept.fluid() == entry.fluid()" in method_body(edit, "private static List<MarkerEntry> mergeAreaMarks(")
+          and "pendingAreaMarks = merged;" in handle)
     broken_carry = (edit or "").replace(
-        "carriedMarks = AreaMarks.get(target, previous,", "")
+        "final List<MarkerEntry> carried = AreaMarks.get(target, previous, registries);", "")
     counterexample("⑦-5 删掉 REPLACE 前的搬运 ⇒ 判据判负（改一下框就把这个区域的过滤清空）",
                    broken_carry != edit
                    and not replace_carries_marks_and_name(broken_carry))

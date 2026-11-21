@@ -683,6 +683,59 @@ public class AdvancedCollectionCacheBlockEntity extends CollectionCacheBlockEnti
         return MarkerAddResult.OK;
     }
 
+    /**
+     * 机器侧菜单：把某区域第 {@code markerIndex} 条过滤条目<b>整条替换</b>成另一条（第 140 轮）。
+     *
+     * <h2>为什么需要它（第 125 轮复核 §4.6 的最后一块）</h2>
+     * <p>「48 格窗口 JEI 拖入『新 id 被忽略』」：把物品从 JEI 拖到 48 格里<b>已经有条目</b>的格子时，
+     * 菜单只把新堆叠的「数量 / 规则」套到旧条目上，<b>拖进来的 id 与数据组件被丢掉</b> ——
+     * 格子看起来没变（还是原来那个物品），玩家以为拖不进去。基础版
+     * {@code CollectionCacheBlockEntity#setMarkerConfig} 的语义是「同 id 才 update，否则
+     * <b>替换该下标</b>」；高级版覆写只做 update，偏离了基类口径。这里补上替换原语。</p>
+     * <p>去重口径与 {@link #addAreaMarkerEntry} 一致：同一物品（同 id）只允许一条 —— 但
+     * <b>本下标自身的旧条目不算重复</b>（替换本来就要覆盖它）。容量不变（替换不增加条数），
+     * 体积预算按「替换后的整张表」算。</p>
+     */
+    public MarkerAddResult replaceAreaMarkerEntry(final int areaIndex, final int markerIndex,
+                                                  @Nullable final MarkerEntry marker) {
+        if (marker == null || marker.isEmpty()) {
+            return MarkerAddResult.INVALID;
+        }
+        final Area area = areaAtUsableIndex(areaIndex);
+        if (area == null) {
+            return MarkerAddResult.INVALID;
+        }
+        final List<MarkerEntry> entries = marksFor(area);
+        if (markerIndex < 0 || markerIndex >= entries.size()
+            || entries.get(markerIndex) == null || entries.get(markerIndex).isEmpty()) {
+            return MarkerAddResult.INVALID; // 空格子走 addAreaMarkerEntry，不在这里「替换空气」
+        }
+        for (int i = 0; i < entries.size(); i++) {
+            if (i == markerIndex) {
+                continue;
+            }
+            final MarkerEntry entry = entries.get(i);
+            if (entry != null && !entry.isEmpty() && !entry.fluid() && !marker.fluid()
+                && marker.id() != null && marker.id().equals(entry.id())) {
+                return MarkerAddResult.DUPLICATE;
+            }
+        }
+        if (cretae.cookiewyq.rs_create_compat.support.MarkerBudget.isEntryTooBig(marker)) {
+            return MarkerAddResult.TOO_COMPLEX;
+        }
+        final List<MarkerEntry> next = new ArrayList<>(entries);
+        next.set(markerIndex, marker);
+        if (AreaMarks.isOverBudget(selectorStack(), area, next)) {
+            return MarkerAddResult.TOO_COMPLEX;
+        }
+        withAreaFilter(areaIndex, list -> {
+            if (markerIndex < list.size()) {
+                list.set(markerIndex, marker);
+            }
+        });
+        return MarkerAddResult.OK;
+    }
+
     /** 清除某区域的第 {@code markerIndex} 条过滤条目。 */
     public boolean removeAreaMarker(final int areaIndex, final int markerIndex) {
         final Area area = areaAtUsableIndex(areaIndex);

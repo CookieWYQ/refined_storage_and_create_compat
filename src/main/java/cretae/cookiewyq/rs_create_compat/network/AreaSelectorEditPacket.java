@@ -8,6 +8,7 @@ import cretae.cookiewyq.rs_create_compat.support.AreaMarks;
 import cretae.cookiewyq.rs_create_compat.support.AreaSelection;
 import cretae.cookiewyq.rs_create_compat.support.AreaSelectorTargets;
 import cretae.cookiewyq.rs_create_compat.support.MarkerEntry;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -97,7 +98,7 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
      * 区域列表界面据此给一句明确的话，并<b>按服务端最新列表自动刷新</b>。</p>
      *
      * <p>码值只增不改（网络契约的一部分）：0 无 / 1 区域不存在 / 2 维度不符 / 3 已达上限 /
-     * 4 几何重复 / 5 几何非法（越界 / 超单边 / 超体积）。</p>
+     * 4 几何重复 / 5 几何非法（越界 / 超单边 / 超体积）/ 6 改几何后标记合并会超过单区域上限。</p>
      */
     public static final int REJECT_NONE = 0;
     public static final int REJECT_NO_SUCH_AREA = 1;
@@ -105,6 +106,13 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
     public static final int REJECT_LIMIT = 3;
     public static final int REJECT_DUPLICATE = 4;
     public static final int REJECT_INVALID_AREA = 5;
+    /**
+     * 第 139 轮（ROUND114/115 L1）：REPLACE 会把旧几何的标记搬到新几何，两块地的标记合并后可能超过
+     * 单区域上限 {@link CollectionCacheBlockEntity#MATCH_CAPACITY}。旧实现是交给
+     * {@code AreaMarks.put → sanitizeEntries} <b>截断</b>（只留一条 WARN），被截掉的配置永久消失；
+     * 现在改为<b>拒绝这次改几何</b>：旧区域 / 旧标记一个字节都不动，玩家删掉一些标记再来。
+     */
+    public static final int REJECT_MARK_OVERFLOW = 6;
 
     /** 四字段便捷构造（几何类动作；名字留空）。既有调用点逐字兼容。 */
     public AreaSelectorEditPacket(final int containerId, final int action, final int index, final Area area) {
@@ -170,7 +178,9 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
         final int index = packet.index();
         // 第 113 轮：REPLACE 换的是<b>几何</b>，而每区域过滤标记以几何为键（{@code AreaMarks}）——
         // 不把旧几何的标记搬过去，就等于「改一下框就把这个区域的过滤清空」（beta.13 键=序号时不会丢）。
-        List<MarkerEntry> carriedMarks = List.of();
+        // 第 139 轮（ROUND114/115 L1）：合并结果在 switch 里<b>先算好</b>，超过单区域上限就在任何写入
+        // 之前拒绝（旧实现交给 AreaMarks.put 静默截断 ⇒ 被截掉的标记永久消失）。
+        List<MarkerEntry> pendingAreaMarks = List.of();
         switch (packet.action()) {
             case ACTION_ADD -> {
                 if (selection.areaCount() >= AreaSelection.maxAreas()) {
@@ -206,8 +216,23 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
                     return;
                 }
                 final Area previous = selection.areas().get(index);
-                carriedMarks = AreaMarks.get(target, previous,
-                    player.level().registryAccess());
+                final HolderLookup.Provider registries = player.level().registryAccess();
+                final List<MarkerEntry> carried = AreaMarks.get(target, previous, registries);
+                // 旧几何的标记搬到新几何时，新几何上可能<b>本来就有标记</b>（这块地以前配过）。
+                // 两块地都接近 288 条时相加必然超限：旧实现让 put 截断（尾部条目静默消失），
+                // 现在直接拒绝这次改几何 —— 旧区域 / 旧标记一个字节都不动，玩家删掉一些再来。
+                final List<MarkerEntry> merged = mergeAreaMarks(
+                    AreaMarks.get(target, area, registries), carried);
+                if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {
+                    LOGGER.warn("[rs_create_compat] 区域选定器：REPLACE 把旧几何的 {} 条标记搬到新几何，"
+                            + "与那块地上已有的标记合并后共 {} 条，超过单区域上限 {} 条 ⇒ 本次改几何被拒绝"
+                            + "（旧区域与全部标记原样保留；玩家需先删掉一些标记。玩家 {}）",
+                        carried.size(), merged.size(), CollectionCacheBlockEntity.MATCH_CAPACITY,
+                        player.getName().getString());
+                    reject(rejectMenu, player, packet, REJECT_MARK_OVERFLOW);
+                    return;
+                }
+                pendingAreaMarks = merged;
                 // 第 124 轮（用户 2-1）：REPLACE **只换几何，不许顺手把名字抹掉**。
                 // 客户端 flushApply 发来的是 readAreaFromFields 拼出来的无名 Area（只有六个坐标），
                 // 旧代码直接 replace ⇒ 「改一下坐标 / 尺寸，这个区域的名字就没了」；而客户端乐观副本
@@ -260,50 +285,60 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
         AreaSelection.set(target, selection);
         // 第 113 轮：REPLACE 换几何 ⇒ 旧几何的过滤标记搬到新几何（否则改一下框过滤就没了）。
         // 新几何上可能已经有标记（这块地以前被删过又改回来）⇒ 按 (类别, id) 去重后合并，绝不覆盖。
-        if (!carriedMarks.isEmpty()) {
+        // 第 139 轮：合并结果已在 REPLACE 分支里算好并做过容量校验 —— 超限时上面已经
+        // reject + return（这次改几何根本没落盘），这里只写「确定能装下」的那一份。
+        if (!pendingAreaMarks.isEmpty()) {
             final Area newArea = packet.area();
             if (newArea != null) {
-                final List<MarkerEntry> existing = AreaMarks.get(target, newArea,
-                    player.level().registryAccess());
-                if (existing.isEmpty()) {
-                    AreaMarks.put(target, newArea, carriedMarks);
-                } else {
-                    final List<MarkerEntry> merged = new java.util.ArrayList<>(existing);
-                    for (final MarkerEntry entry : carriedMarks) {
-                        if (entry == null || entry.isEmpty()) {
-                            continue;
-                        }
-                        boolean seen = false;
-                        for (final MarkerEntry kept : merged) {
-                            if (kept != null && !kept.isEmpty() && kept.id().equals(entry.id())
-                                && kept.fluid() == entry.fluid()) {
-                                seen = true;
-                                break;
-                            }
-                        }
-                        if (!seen) {
-                            merged.add(entry);
-                        }
-                    }
-                    if (merged.size() > CollectionCacheBlockEntity.MATCH_CAPACITY) {
-                        // 第 115 轮（第 114 轮复核 L1）：两块地的标记按 (类别, id) 去重后仍超过单区域上限时，
-                        // AreaMarks.put → sanitizeEntries 会静默截到 MATCH_CAPACITY 条。
-                        // 正常玩法极难触发（要单区域 >288 条、且新几何上也有标记），但「静默丢配置」不能只靠运气：
-                        // 这里明确告警并说明保留的是哪一部分（existing 在前、保留下来的尾部 carried 会丢）。
-                        LOGGER.warn("[rs_create_compat] 区域选定器：REPLACE 把旧几何的 {} 条标记搬到新几何，"
-                                + "与那块地上已有的 {} 条合并后共 {} 条，超过单区域上限 {} 条 ⇒ 已按上限截断"
-                                + "（保留新几何原有标记在前），被截掉的需手动重新添加（玩家 {}）",
-                            carriedMarks.size(), existing.size(), merged.size(),
-                            CollectionCacheBlockEntity.MATCH_CAPACITY, player.getName().getString());
-                    }
-                    AreaMarks.put(target, newArea, merged);
-                }
+                AreaMarks.put(target, newArea, pendingAreaMarks);
             }
         }
         // 第 112 轮：每区域过滤标记存在物品上（AreaMarks，键 = 区域几何）。
         // 删除区域 / 改绑之后把不再存在的几何剪掉；改名 / 重排 / 选中 / REPLACE（已先搬运）都不丢。
         AreaMarks.prune(target, selection);
         sync(player, packet.containerId());
+    }
+
+    /**
+     * 把「新几何上已有的标记」与「旧几何搬过来的标记」按 (类别, id) 去重合并（existing 在前）。
+     *
+     * <p><b>为什么单独拿出来</b>：第 139 轮（ROUND114/115 L1）要求<b>先算出合并结果、再决定要不要写</b> ——
+     * 旧实现是「先 AreaSelection.set 换几何、再把合并结果交给 AreaMarks.put 让它截断」，于是
+     * 超限时尾部标记被静默丢掉。现在合并是纯函数，超限可以在任何写入之前拒绝。</p>
+     * <p>语义与旧实现<b>逐字一致</b>：新几何没有标记 ⇒ 旧标记原样搬（不去重、不改顺序）；
+     * 有新标记 ⇒ 新标记在前，旧标记按 (类别, id) 去重后追加，绝不覆盖已有的。</p>
+     */
+    private static List<MarkerEntry> mergeAreaMarks(@Nullable final List<MarkerEntry> existing,
+                                                    @Nullable final List<MarkerEntry> carried) {
+        if (existing == null || existing.isEmpty()) {
+            return carried == null ? List.of() : carried;
+        }
+        final List<MarkerEntry> merged = new java.util.ArrayList<>(existing.size() + 4);
+        for (final MarkerEntry entry : existing) {
+            if (entry != null && !entry.isEmpty()) {
+                merged.add(entry);
+            }
+        }
+        if (carried == null) {
+            return merged;
+        }
+        for (final MarkerEntry entry : carried) {
+            if (entry == null || entry.isEmpty()) {
+                continue;
+            }
+            boolean seen = false;
+            for (final MarkerEntry kept : merged) {
+                if (kept != null && !kept.isEmpty() && kept.id().equals(entry.id())
+                    && kept.fluid() == entry.fluid()) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                merged.add(entry);
+            }
+        }
+        return merged;
     }
 
     /**
@@ -361,6 +396,7 @@ public record AreaSelectorEditPacket(int containerId, int action, int index, Are
             case REJECT_LIMIT -> "gui.rs_create_compat.area_selector.err.limit";
             case REJECT_DUPLICATE -> "gui.rs_create_compat.area_selector.err.duplicate";
             case REJECT_INVALID_AREA -> "gui.rs_create_compat.area_selector.err.reject.invalid";
+            case REJECT_MARK_OVERFLOW -> "gui.rs_create_compat.area_selector.err.reject.mark_overflow";
             default -> "gui.rs_create_compat.area_selector.err.reject.no_such_area";
         };
     }

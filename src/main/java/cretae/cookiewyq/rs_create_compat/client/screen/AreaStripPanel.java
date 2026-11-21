@@ -545,6 +545,8 @@ public final class AreaStripPanel {
                 "gui.rs_create_compat.area_selector.err.duplicate";
             case AreaSelectorEditPacket.REJECT_INVALID_AREA ->
                 "gui.rs_create_compat.area_selector.err.reject.invalid";
+            case AreaSelectorEditPacket.REJECT_MARK_OVERFLOW ->
+                "gui.rs_create_compat.area_selector.err.reject.mark_overflow";
             default -> null;
         };
         if (key != null) {
