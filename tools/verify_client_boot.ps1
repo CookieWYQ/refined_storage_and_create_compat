@@ -1,4 +1,4 @@
-﻿# 客户端（CLIENT）真启动校验器 —— 与 tools/verify_dedicated_server.ps1 对称
+# 客户端（CLIENT）真启动校验器 —— 与 tools/verify_dedicated_server.ps1 对称
 #
 # 【编码约定】本文件必须保存为 **UTF-8 带 BOM**：Windows PowerShell 5.1 在没有 BOM 时
 #   会按 GBK 解码 .ps1，中文注释被误解成引号后会直接解析失败。
@@ -142,7 +142,9 @@ try {
         }
         # 客户端不打印 [rscc-build]（那一行是服务端启动指纹）；客户端用本模组自己的日志前缀
         # [rscc-*]（如 [rscc-ultimine] / [rscc-terminal-key]）或加载器给出的 mod 版本行作为「已加载」证据。
-        $hasBuildLine = ($text -match 'mods - versions \{1\.2\.0-beta\.\d+\}') -or ($text -match '\[rscc-(?!client-probe)')
+        # 版本号正则**不能写死 beta**：1.2.0 正式版的行是 `mods - versions {1.2.0}`，
+        # 写死 `-beta.\d+` 会让正式版探针只能靠 `[rscc-*]` 后备判据命中（2026-11-21 发布 1.2.0 时修）。
+        $hasBuildLine = ($text -match 'mods - versions \{1\.2\.0(?:-beta\.\d+)?\}') -or ($text -match '\[rscc-(?!client-probe)')
         # 渲染证据必须取「晚段」标记：`Backend library: LWJGL` 在早期窗口创建时就出现（mod 还没构造完），
         # 用它当 PASS 会在 mod 列表刚打印时就把客户端杀掉（第 142 轮实测：旧判据的 PASS 早于本模组构造）。
         $hasRender = ($text -match 'Sound engine started') -or ($text -match 'Created: 1024x512')

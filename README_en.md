@@ -29,7 +29,7 @@ This mod is the translation layer between the two:
 - **Probability and scrap are taken seriously.** Recipes whose main product is not guaranteed are handled properly: the Precision Mechanism result pool has weights `120 / 8 / 8 / 5 / 3 / 2 / 2`, so the UI shows 81% for the product and each scrap shows its own percentage, and feeding advances in batches according to those chances. Scrap also has its own category and can be collected separately.
 - **Stalls are reported.** Missing materials, offline executors, downstream back-pressure and long periods without progress are all detected by a watchdog that suspends the task and shows a banner with "Resume" and "Change machine" buttons in the Autocrafting Monitor.
 
-Besides sequenced assembly, the mod ships support machines: Schematic Cannon Loaders, a Collection Cache, Resource Quantity Keepers, a Range Charger, Universal Storage Disks, Separation/Camouflage Frames, and an Advanced Remote Multifunctional Terminal that can switch between several terminal screens.
+Besides sequenced assembly, the mod ships support machines: Schematic Cannon Loaders, Collection Caches (including the Advanced version), the Area Selector, Resource Quantity Keepers, a Range Charger, an FE Energy Cube, a Decomposition Generator, a Container Proxy, a Network Resource Receiver / Requester, Universal Storage Disks, Separation/Camouflage Frames, an Electric Jetpack, and an Advanced Remote Terminal that can switch between eight terminal screens.
 
 ---
 
@@ -143,12 +143,47 @@ Boundaries: only the same cable cluster (seams cut by the wrench and seams froze
 ### Quick dismantling (sneak + wrench right-click)
 Refined Storage's own blocks and cables can be broken quickly with Shift + right-click while holding a wrench; this mod now behaves the same way.
 
-- It covers **all 14 blocks this mod registers** (11 machines plus 3 frame blocks); the criterion is the registry namespace, so blocks added later are covered automatically.
+- It covers **all 20 blocks this mod registers** (17 machines plus 3 frame blocks); the criterion is the registry namespace, so blocks added later are covered automatically.
 - The mechanism matches Refined Storage: the wrench test uses the tool tag, a non-sneaking right-click still reaches the original interaction (screens still open), a missing build permission reuses Refined Storage's own message, and the sound is identical.
 - The removal order is "spawn the drops first, then remove the block", so the content settlement this mod performs on removal (governed by `/rs_create_compat blockcontent`) and the machine-cluster content handover are never skipped.
 
 ### Range Charger and Curios
-The Range Charger charges items carried by the player, covering the **main inventory, hotbar, armour, offhand and the Curios slots**. Curios slots do not recurse into containers inside containers (backpacks and similar are not searched), and they are not scanned every tick — the interval is controlled by `rangeChargerCuriosScanInterval` (default 5 ticks). Items that are already full are skipped, and one scan never charges the same item twice.
+The Range Charger charges items carried by the player, covering the **main inventory, hotbar, armour, offhand and the Curios slots**. Curios slots do not recurse into containers inside containers (backpacks and similar are not searched), and they are not scanned every tick — the interval is controlled by `rangeChargerCuriosScanInterval` (default 5 ticks). Items that are already full are skipped, and one scan never charges the same item twice. The filter screen has four tabs — drops / carried items / players / world blocks; the block tab lists chargeable blocks seen in range, and search supports pinyin when Just Enough Characters is installed.
+
+### Area Selector and the area strip (new in 1.2.0)
+- Hold the Area Selector and right-click a block twice (corner A, then corner B) to commit one area; `Ctrl` + scroll pushes or pulls the box being drawn (`Shift` x5). Sneak-right-click a block cancels the current box; right-click air (no sneak needed) opens the area list, where you can rename, edit the six coordinates and delete (3-second confirmation). Areas live in the item's components and bind to the dimension on first use.
+- In the Advanced Collection Cache's dedicated slot, the cache only absorbs drops / XP orbs / world fluids inside the selected areas; the GUI honestly shows "active / empty area / wrong dimension". An always-on **area strip** sits on the machine GUI's right edge: click a row to select, the world outline stays visible, and the current area carries three markers. The marks screen has the existing marks on the left grid and your inventory mirror on the right, with JEI drag-in. Per-area filter marks travel with the selector item, so you no longer have to insert it into the machine to configure them.
+
+### Advanced Collection Cache (new in 1.2.0)
+- 512 cache slots (32768 total), 1,024,000 mB of fluid / gas cache; throughput matches the basic version.
+- Absorption uses **only the areas drawn with an Area Selector** (replacing the basic version's three-axis radii): no selector / empty area / wrong dimension means nothing is absorbed at all, never a silent fallback to the radius.
+
+### Container Proxy (new in 1.2.0)
+- Exposes the "thing with its own inventory" in its slot (shulker box / backpack / RS disk / bundle) as an adjacent container. Each of the six faces can be a contents face / proxy-object face / disabled; contents faces split into main and backup, the main face is fully read-write while the backup face is input-only (so two external storages never count the same inventory twice), and the proxy-object face is unique too.
+- It is deliberately **not** an RS network node. Every write path obeys "never silently drop it": a replacement is a replacement, and whatever does not fit is ejected into the world.
+
+### Network Resource Receiver / Requester (new in 1.2.0)
+- The **Receiver** is a named drop-off plus a cache (1728 items / 2000 mB of fluid) whose name must be unique within one network; it exposes a writable view to adjacent containers. Its GUI is a **paged resource list** (12 entries per page): left click takes a stack, `Shift` takes everything; fluids cost 1000 mB per bucket and need an empty bucket.
+- The **Requester** delivers an order into a receiver by name: a redstone rising edge or the "Send now" button starts one request, the whole order is queued as a plan and delivered at "batches per tick" over several ticks, and **the total always equals the order amount**. Its GUI is a grid plus an order list (search, delete, amount stepping). When unpowered or disconnected it stops delivering and keeps the unfinished plan and rollback buffer intact.
+
+### FE Energy Cube (new in 1.2.0)
+- 50M FE per block by default; adjacent cubes share one capacity pool while each block only accounts for its own charge (breaking one takes only its own charge). It acts as the RS network pool's **last battery** and actively pushes FE into its six neighbours every tick (10,000 FE/t by default, never into another cube).
+- The item form shows its charge and accepts charging; a stacked cube refuses charge/discharge, so split the stack first.
+
+### Electric Jetpack (new in 1.2.0)
+- 50M FE, no durability, **no armor value**; wear it in the chest slot or put it in a Curios `back` / `chest` slot. Jump to take off, double-tap jump, hold `Shift` to descend, costing 8 FE/t by default; if it cannot pay for one tick, flight ends immediately and you fall.
+- The low-power threshold is expressed as remaining flight minutes (`electricJetpackLowPowerMinutes`, default 30 minutes = 288,000 FE), and the HUD shows exact charge plus remaining minutes.
+
+### Decomposition Generator (new in 1.2.0)
+- 16 input slots + 4 by-product slots + 6 upgrade slots (speed / stack upgrades only); only plants in the datapack's decomposable table are accepted (logs / wood are explicitly excluded). It works like a furnace: one progress bar, one burst of FE per finished item, and power is output-only.
+- Four balance tiers: T1 small 10 ticks / 25 FE, T2 medium 20 ticks / 50 FE, T3 large 40 ticks / 100 FE, T4 compressed block 180 ticks / 450 FE; JEI has a "Decomposition Power" category with arrow navigation.
+
+### Energy Usage (new in 1.2.0, 7th terminal mode)
+- Lists every energy-consuming block in the terminal's bound network: current FE/t and nominal value, blocks of the same type merged into one row that expands to per-block coordinates + dimension, sorted by total draw, refreshed every second; click one block to highlight it with an orange outline (click again to cancel). After closing the GUI the highlight lingers for `energyAuditHighlightLingerTicks` (default 1200 ticks = 60 s).
+- Only the bound network is shown; cross-dimensional peers are two separate networks and out of scope.
+
+### Send (new in 1.2.0, 8th terminal mode)
+- The terminal opens the same "grid + order list" screen as the Network Resource Requester, with the order and target stored on the terminal item, resources taken from the network the terminal is bound to, and delivery going through the same logic.
 
 ### Autocrafting Monitor
 - Stalled tasks are suspended, and the banner names the reason: missing materials, offline executor, output blocked, or no progress for a long time.
@@ -170,7 +205,7 @@ The Range Charger charges items carried by the player, covering the **main inven
 | `K` | Hide / restore filler blocks (Camouflage Frame display, requires goggles) |
 
 ### Advanced Remote Multifunctional Terminal
-Switches between five screens: Crafting Grid, Pattern Terminal, Autocrafter Manager, Autocrafting Monitor and Sequence Pattern Terminal. Available as normal, fully charged and creative variants; right-click a wireless transmitter or a network node to bind it.
+Switches between eight screens: Crafting Grid, Pattern Terminal, Autocrafter Manager, Autocrafting Monitor, Sequence Pattern Terminal, Unit Pattern Manager, Energy Usage (7th mode, new in 1.2.0) and Send (8th mode, new in 1.2.0). Available as normal, fully charged and creative variants; right-click a wireless transmitter or a network node to bind it. When the bound network has no power, every mode tab is greyed out.
 
 ---
 
@@ -189,14 +224,16 @@ Every command is **permission-free** — any player can run it. The root command
 | `/rs_create_compat devlogs` | `on` / `off` / none | **Master switch for developer logs**, off by default. When off, all warnings and errors, the startup fingerprint, session anchors, `diag` exports, the direct consequences of player actions and throttled low-frequency explanatory INFO lines are still printed. Takes effect immediately, no restart needed. Without an argument it reports the current state and usage |
 | `/rs_create_compat assemblydebug` | `on` / `off` | An **equivalent alias** of `devlogs` (the old spelling keeps working) |
 | `/rs_create_compat debug assembly` | `on` / `off` | An **equivalent alias** of `devlogs` |
-| `/rs_create_compat diag` | none | Exports the current state to `run/rscc_diag/<timestamp>/snapshot.json` and overwrites `run/rscc_diag/latest/snapshot.json`. Read-only and idempotent |
-| `/rs_create_compat diag run` | none | Forces the diagnostic log on first, then exports the snapshot (leaving `[rscc-diag]` section markers in the log). Observes only: it places no orders and changes no task state |
+| `/rs_create_compat diag` | none | Exports the current state to `run/rscc_diag/<timestamp>/snapshot.json` and overwrites `run/rscc_diag/latest/snapshot.json`. Read-only and idempotent, with a 10-second cooldown |
+| `/rs_create_compat diag run` | none | Temporarily turns the diagnostic log on only for this export (and restores it afterwards), then exports the snapshot (leaving `[rscc-diag]` section markers in the log). Observes only: it places no orders and changes no task state |
 
 For `blockcontent` / `supply` / `shortagemode` / `refill` / `reuse` / `devlogs` / `assemblydebug`, entering only the intermediate level reports the current setting plus usage hints.
 
 ---
 
 ## 7. Blocks and items
+
+The mod currently registers **20 blocks** (17 machines + 3 frame blocks) and **37 items** (20 of them block items, 17 standalone items).
 
 ### Sequenced assembly
 
@@ -218,8 +255,14 @@ For `blockcontent` / `supply` / `shortagemode` / `refill` / `reuse` / `devlogs` 
 | Schematic Cannon Loader | `schematic_loader` | Place against a Create Schematicannon to feed it automatically; several loaders share the supply |
 | Advanced Schematic Cannon Loader | `advanced_schematic_loader` | Built-in blueprint queue: prints in order and recycles blank blueprints |
 | Collection Cache | `collection_cache` | Absorbs nearby drops, fluids and gases; the match area is filtered by ghost markers and can be inverted, matched by tags, set to "collect all", or configured to void matched resources instead of returning them. Supports per-face logistic input toggles and a three-axis collection range. With the experience toggle on and Create Enchantment Industry installed, experience orbs are converted straight into liquid experience in the cache's fluid buffer (1 point = 1 mB, nuggets 3 points each); without it they fall back to nuggets |
-| Resource Quantity Keeper | `quantity_keeper` | Marks a resource and holds a target amount: autocrafts when low, can void the excess |
-| Advanced Resource Quantity Keeper | `advanced_quantity_keeper` | Four keepers in one, each of the four slots setting an item / fluid / gas target |
+| Advanced Collection Cache | `advanced_collection_cache` | 512 cache slots, 1,024,000 mB of fluid / gas; absorption uses only the Area Selector's areas instead of the three-axis radii |
+| Container Proxy | `inventory_proxy` | Exposes the inventory-bearing item in its slot (shulker box / backpack / RS disk / bundle) as an adjacent container; each face is a contents face / proxy-object face / disabled |
+| Network Resource Receiver | `network_resource_receiver` | A named drop-off plus a cache (1728 items / 2000 mB of fluid), name unique within one network; paged take-out GUI |
+| Network Resource Requester | `network_resource_requester` | Delivers an order into a receiver by name; a redstone rising edge or "Send now" starts it and the total equals the order amount |
+| FE Energy Cube | `fe_energy_cube` | A 50M FE buffer per block; adjacent cubes share one capacity pool while each keeps its own charge; the network's last battery, and it pushes FE into neighbours |
+| Decomposition Generator | `decomposition_generator` | 16 inputs + 4 by-products + 6 upgrade slots; only accepts plants from the datapack table, power output only; JEI "Decomposition Power" category |
+| Resource Quantity Keeper | `quantity_keeper` | Marks a resource and holds a target amount: autocrafts when low, can void the excess; item target defaults to 64 while fluid / gas target defaults to 64,000 mB (targets already stored in old saves stay as they are) |
+| Advanced Resource Quantity Keeper | `advanced_quantity_keeper` | Four keepers in one, each of the four slots setting an item / fluid / gas target (fluid / gas default 64,000 mB per slot) |
 | Range Charger | `range_charger` | Powered by the RS network or FE; charges blocks and dropped items in range, and charges items carried by the player including Curios slots |
 | Separation Frame / Infinite Separation Frame | `separation_frame` / `infinite_separation_frame` | Right-click a cable, fluid pipe, RS input bus, RS output bus or RS external storage bus to freeze its connections as they are; sneak-right-click to remove. The normal version is consumed and refunded, the infinite version is neither |
 | Camouflage Frame | `camouflage_frame` | Right-click to wrap a cable, pipe, RS input bus, RS output bus or RS external storage bus with a shell; right-click with the same block to rotate it; sneak-right-click to take it off |
@@ -228,11 +271,13 @@ For `blockcontent` / `supply` / `shortagemode` / `refill` / `reuse` / `devlogs` 
 
 | Name | Registry name | Purpose |
 | --- | --- | --- |
-| Advanced Remote Multifunctional Terminal | `advanced_remote_terminal` | Switches between five terminal screens; can be stored in a Curios slot and opened with `G` |
+| Advanced Remote Multifunctional Terminal | `advanced_remote_terminal` | Switches between eight terminal screens; can be stored in a Curios slot and opened with `G` |
 | Advanced Remote Multifunctional Terminal (charged) | `advanced_remote_terminal_charged` | Same, created fully charged |
 | Creative Advanced Remote Multifunctional Terminal | `creative_advanced_remote_terminal` | Same, ignores energy |
 | Universal Storage Disk | `universal_storage_disk_1k` … `universal_storage_disk_64m` | Nine tiers: 1K / 4K / 16K / 64K / 256K / 1M / 4M / 16M / 64M; stores items, fluids and gases together |
 | Infinite Universal Storage Disk | `universal_storage_disk_creative` | Creative-only, unlimited capacity |
+| Area Selector | `area_selector` | Draws areas by hand: two right-clicks commit one, `Ctrl` + scroll pushes / pulls; in the Advanced Collection Cache it limits absorption to the areas |
+| Electric Jetpack | `electric_jetpack` | 50M FE, creative-style flight at 8 FE/t; chest slot or Curios back / chest slot, no armor value |
 
 The mod also adds a full advancement tree, for example "Sample Mastery", "The Whole Picture", "Clean Cut" and "Disk Overflowing".
 
@@ -255,7 +300,9 @@ The config file groups its options by purpose; only the ones that change gamepla
 | `tagFilterEnabled` | `true` | Allows input/output buses to filter by tag using an item carrying the `tag_filter` data component |
 | `assemblySuspendOverflowReclaim` | `false` | After a task stays suspended longer than `assemblySuspendLimitTicks` (12000 ticks = 10 minutes): `false` = keep it suspended; `true` = mark it failed and reclaim safely through RS's own cancel path, returning extracted intermediates to the network without destroying anything |
 | `assemblyOfflinePersistTicks` / `assemblyNoProgressTimeoutTicks` | `40` / `600` | Thresholds for "offline" and "no progress" detection |
-| `advancedRemoteTerminalEnable*` | all `true` | Per-screen switches for the Advanced Remote Multifunctional Terminal (grid / pattern terminal / manager / monitor / sequence terminal) |
+| `advancedRemoteTerminalEnable*` | all `true` | Per-screen switches for the **first five** terminal modes (grid / pattern terminal / manager / monitor / sequence terminal); Unit Pattern Manager, Energy Usage and Send have no separate switch |
+
+> **Upgrading from 1.1.0 to 1.2.0**: no world rebuild, no re-placing machines and no pattern regeneration is required. The 64 mB fluid targets in old keeper saves and the old index-keyed per-area filter marks are migrated or preserved by their own rules; a 256-slot Decomposition Generator used during the 1.2.0 betas is migrated on load to 16 inputs + 4 by-products (old progress is discarded, items are preserved). See the upgrade notes in `RELEASE_1.2.0.md` for the full list.
 
 ---
 
@@ -276,7 +323,17 @@ The config file groups its options by purpose; only the ones that change gamepla
 13. **Clipboard cluster paste is bounded.** Only the same cable cluster, only the same kind of bus, at most 64 buses, never across dimensions; anything outside that is skipped rather than partially written.
 14. **Jade tooltips truncate.** Each group lists at most three representative items and truncates the rest to "…" without a count — deliberately, so the tooltip fits. Open the bus screen to see everything.
 15. **Curios charging is throttled.** The default 5-tick scan means "put it in and it is instantly full" does not happen; the delay stays under one second, and lowering `rangeChargerCuriosScanInterval` (minimum 1) makes it faster.
-16. **Most fixes in 1.1.0 rest on source cross-verification and model derivation, which is not the same as in-game verification.** The self-check scripts state "no in-game verification" for bus allocation, the reservation model, the structure cache and the cable search. Every assertion can be falsified by a source fact or a model counter-example, and the models are structurally identical to the implementation, but that is still not the same as having run in a real world — verify with a small batch of orders before upgrading a large production line.
+16. **Most fixes in 1.1.0 and a good share of those in 1.2.0 rest on source cross-verification and model derivation, which is not the same as in-game verification.** The self-check scripts state "no in-game verification" for bus allocation, the reservation model, the structure cache, the cable search, the keeper double-count and the area marks. Every assertion can be falsified by a source fact or a model counter-example, and the models are structurally identical to the implementation, but that is still not the same as having run in a real world — verify with a small batch of orders before upgrading a large production line.
+17. **The keeper's outward capability is hidden from RS's own storage aggregation.** Attaching an RS external storage next to a keeper means that external storage **no longer treats the keeper as a storage source** (it used to double-count the network mirror and the local buffer, inflating stock and even recursing into a crash); Create funnels / pipes / vanilla hoppers still read and write the keeper exactly as before.
+18. **The fluid / gas default target only applies to new markers.** The keeper's fluid / gas default target is now 64,000 mB instead of 64 mB, but **a 64 mB target already stored in an old save is not changed automatically**; set the marker again to pick up the new default. Targets are capped at 1,000,000,000 on the server (only growth is clamped; over-limit values in old saves are read back as-is).
+19. **An unpowered Intermediate Cache Warehouse stops moving stock.** When it has no network or is inactive it no longer migrates stock and the cooldown does not advance; the first tick after power returns it carries on, and nothing in an old save is lost.
+20. **More than 288 area marks are rejected at write time instead of being silently truncated.** When areas are merged / replaced, a result over the cap makes the whole write be rejected with the old areas and every mark left byte-for-byte untouched; delete a few marks and try again.
+21. **JEI drag-and-drop onto the 48-slot match window.** Dropping onto an empty cell adds a new entry; dropping onto a **cell that already holds an entry** replaces that whole entry when the id differs (deduplication and the single / whole-table size budgets apply), while the same id only updates its amount / rule.
+22. **The Receiver's "no direction" has a cost.** If you deliberately point an RS external storage at a receiver, the terminal may show that cache's amounts but can never take them out (the view is read-only and `extract` always returns empty); amounts are never doubled and delivery cannot loop.
+23. **The Sophisticated Backpacks hotkey only works from the player's inventory.** This is that mod's structural limit: a backpack placed inside a Container Proxy cannot be opened with its hotkey, and the proxy slot item's tooltip says so permanently.
+24. **The Electric Jetpack has no player model when worn**, only the inventory icon and the HUD; the "in range" check only scans 4 chunks (64 blocks) of loaded chunks around the player.
+25. **Energy Usage only lists the terminal's bound network.** An RS network only holds same-dimension blocks; the main number is `isActive() ? nominal draw : 0` and idle rows are greyed out.
+26. **The Advanced Collection Cache's area filters still only accept item marks.** The visibility problem of dragging a fluid onto the advanced version's 48-slot window is not widened in this release; the fluid branch still writes the global match area under the old rule.
 
 ---
 
